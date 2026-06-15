@@ -3,9 +3,13 @@
 //! `DatabaseConnection`.
 
 pub mod address_book;
+pub mod audit;
 pub mod group;
 pub mod login_log;
+pub mod oauth;
 pub mod peer;
+pub mod server_cmd;
+pub mod share_record;
 pub mod tag;
 pub mod user;
 

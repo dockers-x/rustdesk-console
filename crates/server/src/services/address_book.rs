@@ -326,3 +326,350 @@ pub async fn shared_peer(
         .one(db)
         .await
 }
+
+// ---- admin address book CRUD ----
+
+pub struct AddressBookListResult {
+    pub list: Vec<address_book::Model>,
+    pub page: i64,
+    pub page_size: i64,
+    pub total: i64,
+}
+
+#[derive(Default)]
+pub struct AbFilters {
+    pub id: Option<String>,
+    pub user_id: Option<i32>,
+    pub username: Option<String>,
+    pub hostname: Option<String>,
+    pub collection_id: Option<i32>,
+}
+
+pub async fn admin_list(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    f: AbFilters,
+) -> Result<AddressBookListResult, DbErr> {
+    let (page, page_size) = crate::services::paginate(page, page_size);
+    let mut q = address_book::Entity::find();
+    if let Some(v) = f.id.filter(|s| !s.is_empty()) {
+        q = q.filter(address_book::Column::Id.contains(&v));
+    }
+    if let Some(v) = f.user_id.filter(|v| *v > 0) {
+        q = q.filter(address_book::Column::UserId.eq(v));
+    }
+    if let Some(v) = f.username.filter(|s| !s.is_empty()) {
+        q = q.filter(address_book::Column::Username.contains(&v));
+    }
+    if let Some(v) = f.hostname.filter(|s| !s.is_empty()) {
+        q = q.filter(address_book::Column::Hostname.contains(&v));
+    }
+    if let Some(v) = f.collection_id.filter(|v| *v >= 0) {
+        q = q.filter(address_book::Column::CollectionId.eq(v));
+    }
+    let total = q.clone().count(db).await? as i64;
+    let list = q
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok(AddressBookListResult {
+        list,
+        page: page as i64,
+        page_size: page_size as i64,
+        total,
+    })
+}
+
+pub async fn info_by_row_id(
+    db: &DatabaseConnection,
+    row_id: i32,
+) -> Result<Option<address_book::Model>, DbErr> {
+    address_book::Entity::find_by_id(row_id).one(db).await
+}
+
+fn to_active(m: address_book::Model) -> address_book::ActiveModel {
+    address_book::ActiveModel {
+        id: Set(m.id),
+        username: Set(m.username),
+        password: Set(m.password),
+        hostname: Set(m.hostname),
+        alias: Set(m.alias),
+        platform: Set(m.platform),
+        tags: Set(m.tags),
+        hash: Set(m.hash),
+        user_id: Set(m.user_id),
+        force_always_relay: Set(m.force_always_relay),
+        rdp_port: Set(m.rdp_port),
+        rdp_username: Set(m.rdp_username),
+        online: Set(m.online),
+        login_name: Set(m.login_name),
+        same_server: Set(m.same_server),
+        collection_id: Set(m.collection_id),
+        ..Default::default()
+    }
+}
+
+pub async fn create(
+    db: &DatabaseConnection,
+    m: address_book::Model,
+) -> Result<address_book::Model, DbErr> {
+    let mut am = to_active(m);
+    am.created_at = Set(now());
+    am.updated_at = Set(now());
+    am.insert(db).await
+}
+
+/// Update all editable columns by row_id (≈ `UpdateAll`, omits created_at).
+pub async fn update_all(db: &DatabaseConnection, m: address_book::Model) -> Result<(), DbErr> {
+    let row_id = m.row_id;
+    let mut am = to_active(m);
+    am.row_id = Set(row_id);
+    am.updated_at = Set(now());
+    am.update(db).await?;
+    Ok(())
+}
+
+pub async fn check_collection_owner(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+) -> Result<bool, DbErr> {
+    Ok(collection_info_by_id(db, collection_id)
+        .await?
+        .map(|c| c.user_id == user_id)
+        .unwrap_or(false))
+}
+
+/// Build an address book entry from a peer (≈ `FromPeer`).
+pub fn from_peer(p: &::entity::peer::Model) -> address_book::Model {
+    address_book::Model {
+        row_id: 0,
+        id: p.id.clone(),
+        username: p.username.clone(),
+        password: String::new(),
+        hostname: p.hostname.clone(),
+        alias: String::new(),
+        platform: platform_from_os(&p.os),
+        tags: serde_json::Value::Array(vec![]),
+        hash: String::new(),
+        user_id: p.user_id,
+        force_always_relay: false,
+        rdp_port: String::new(),
+        rdp_username: String::new(),
+        online: false,
+        login_name: String::new(),
+        same_server: false,
+        collection_id: 0,
+        created_at: None,
+        updated_at: None,
+    }
+}
+
+/// Set `tags` for many address books owned by the given rows (≈ `BatchUpdateTags`).
+pub async fn batch_update_tags(
+    db: &DatabaseConnection,
+    user_id: i32,
+    row_ids: &[i32],
+    tags: &serde_json::Value,
+) -> Result<i64, DbErr> {
+    let abs = address_book::Entity::find()
+        .filter(address_book::Column::RowId.is_in(row_ids.to_vec()))
+        .filter(address_book::Column::UserId.eq(user_id))
+        .all(db)
+        .await?;
+    let n = abs.len() as i64;
+    for ab in abs {
+        let mut am: address_book::ActiveModel = ab.into();
+        am.tags = Set(tags.clone());
+        am.updated_at = Set(now());
+        am.update(db).await?;
+    }
+    Ok(n)
+}
+
+// ---- collections (admin) ----
+
+pub struct CollectionListResult {
+    pub list: Vec<address_book_collection::Model>,
+    pub page: i64,
+    pub page_size: i64,
+    pub total: i64,
+}
+
+pub async fn collection_list(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    user_id: Option<i32>,
+) -> Result<CollectionListResult, DbErr> {
+    let (page, page_size) = crate::services::paginate(page, page_size);
+    let mut q = address_book_collection::Entity::find();
+    if let Some(uid) = user_id.filter(|v| *v > 0) {
+        q = q.filter(address_book_collection::Column::UserId.eq(uid));
+    }
+    let total = q.clone().count(db).await? as i64;
+    let list = q
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok(CollectionListResult {
+        list,
+        page: page as i64,
+        page_size: page_size as i64,
+        total,
+    })
+}
+
+pub async fn create_collection(
+    db: &DatabaseConnection,
+    user_id: i32,
+    name: &str,
+) -> Result<address_book_collection::Model, DbErr> {
+    let am = address_book_collection::ActiveModel {
+        user_id: Set(user_id),
+        name: Set(name.to_string()),
+        created_at: Set(now()),
+        updated_at: Set(now()),
+        ..Default::default()
+    };
+    am.insert(db).await
+}
+
+pub async fn update_collection(
+    db: &DatabaseConnection,
+    id: i32,
+    user_id: i32,
+    name: &str,
+) -> Result<(), DbErr> {
+    let am = address_book_collection::ActiveModel {
+        id: Set(id),
+        user_id: Set(user_id),
+        name: Set(name.to_string()),
+        updated_at: Set(now()),
+        ..Default::default()
+    };
+    am.update(db).await?;
+    Ok(())
+}
+
+/// Delete a collection and its rules + address books (≈ `DeleteCollection`).
+pub async fn delete_collection(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    address_book_collection_rule::Entity::delete_many()
+        .filter(address_book_collection_rule::Column::CollectionId.eq(id))
+        .exec(db)
+        .await?;
+    address_book::Entity::delete_many()
+        .filter(address_book::Column::CollectionId.eq(id))
+        .exec(db)
+        .await?;
+    address_book_collection::Entity::delete_by_id(id)
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+// ---- collection rules (admin) ----
+
+pub struct RuleListResult {
+    pub list: Vec<address_book_collection_rule::Model>,
+    pub page: i64,
+    pub page_size: i64,
+    pub total: i64,
+}
+
+pub async fn rule_list(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    user_id: Option<i32>,
+    collection_id: Option<i32>,
+) -> Result<RuleListResult, DbErr> {
+    let (page, page_size) = crate::services::paginate(page, page_size);
+    let mut q = address_book_collection_rule::Entity::find();
+    if let Some(uid) = user_id.filter(|v| *v > 0) {
+        q = q.filter(address_book_collection_rule::Column::UserId.eq(uid));
+    }
+    if let Some(cid) = collection_id.filter(|v| *v > 0) {
+        q = q.filter(address_book_collection_rule::Column::CollectionId.eq(cid));
+    }
+    let total = q.clone().count(db).await? as i64;
+    let list = q
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok(RuleListResult {
+        list,
+        page: page as i64,
+        page_size: page_size as i64,
+        total,
+    })
+}
+
+pub async fn rule_info_by_id(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<address_book_collection_rule::Model>, DbErr> {
+    address_book_collection_rule::Entity::find_by_id(id)
+        .one(db)
+        .await
+}
+
+pub async fn rule_info_by_type_to_cid(
+    db: &DatabaseConnection,
+    rule_type: i32,
+    to_id: i32,
+    collection_id: i32,
+) -> Result<Option<address_book_collection_rule::Model>, DbErr> {
+    address_book_collection_rule::Entity::find()
+        .filter(address_book_collection_rule::Column::Type.eq(rule_type))
+        .filter(address_book_collection_rule::Column::ToId.eq(to_id))
+        .filter(address_book_collection_rule::Column::CollectionId.eq(collection_id))
+        .one(db)
+        .await
+}
+
+pub async fn create_rule(
+    db: &DatabaseConnection,
+    m: &address_book_collection_rule::Model,
+) -> Result<address_book_collection_rule::Model, DbErr> {
+    let am = address_book_collection_rule::ActiveModel {
+        user_id: Set(m.user_id),
+        collection_id: Set(m.collection_id),
+        rule: Set(m.rule),
+        r#type: Set(m.r#type),
+        to_id: Set(m.to_id),
+        created_at: Set(now()),
+        updated_at: Set(now()),
+        ..Default::default()
+    };
+    am.insert(db).await
+}
+
+pub async fn update_rule(
+    db: &DatabaseConnection,
+    m: &address_book_collection_rule::Model,
+) -> Result<(), DbErr> {
+    let am = address_book_collection_rule::ActiveModel {
+        id: Set(m.id),
+        user_id: Set(m.user_id),
+        collection_id: Set(m.collection_id),
+        rule: Set(m.rule),
+        r#type: Set(m.r#type),
+        to_id: Set(m.to_id),
+        updated_at: Set(now()),
+        ..Default::default()
+    };
+    am.update(db).await?;
+    Ok(())
+}
+
+pub async fn delete_rule(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    address_book_collection_rule::Entity::delete_by_id(id)
+        .exec(db)
+        .await?;
+    Ok(())
+}

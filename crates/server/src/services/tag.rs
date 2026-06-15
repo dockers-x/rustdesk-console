@@ -59,8 +59,24 @@ pub async fn list(
     page: u64,
     page_size: u64,
 ) -> Result<TagListResult, DbErr> {
+    list_filtered(db, page, page_size, None, None).await
+}
+
+pub async fn list_filtered(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    user_id: Option<i32>,
+    collection_id: Option<i32>,
+) -> Result<TagListResult, DbErr> {
     let (page, page_size) = paginate(page, page_size);
-    let q = tag::Entity::find();
+    let mut q = tag::Entity::find();
+    if let Some(uid) = user_id.filter(|v| *v > 0) {
+        q = q.filter(tag::Column::UserId.eq(uid));
+    }
+    if let Some(cid) = collection_id.filter(|v| *v >= 0) {
+        q = q.filter(tag::Column::CollectionId.eq(cid));
+    }
     let total = q.clone().count(db).await? as i64;
     let list = q
         .offset((page - 1) * page_size)

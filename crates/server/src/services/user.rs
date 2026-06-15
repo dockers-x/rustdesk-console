@@ -379,3 +379,83 @@ pub async fn flush_token_by_uuid(db: &DatabaseConnection, uuid: &str) -> Result<
         .await?;
     Ok(())
 }
+
+// --- user tokens (admin) ---
+
+pub struct UserTokenListResult {
+    pub list: Vec<user_token::Model>,
+    pub page: i64,
+    pub page_size: i64,
+    pub total: i64,
+}
+
+pub async fn token_list(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    user_id: Option<i32>,
+) -> Result<UserTokenListResult, DbErr> {
+    let (page, page_size) = paginate(page, page_size);
+    let mut q = user_token::Entity::find();
+    if let Some(uid) = user_id.filter(|v| *v > 0) {
+        q = q.filter(user_token::Column::UserId.eq(uid));
+    }
+    let total = q.clone().count(db).await? as i64;
+    let list = q
+        .order_by_desc(user_token::Column::Id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok(UserTokenListResult {
+        list,
+        page: page as i64,
+        page_size: page_size as i64,
+        total,
+    })
+}
+
+pub async fn token_info_by_id(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<user_token::Model>, DbErr> {
+    user_token::Entity::find_by_id(id).one(db).await
+}
+
+pub async fn delete_token(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    user_token::Entity::delete_by_id(id).exec(db).await?;
+    Ok(())
+}
+
+pub async fn batch_delete_user_token(db: &DatabaseConnection, ids: &[i32]) -> Result<(), DbErr> {
+    user_token::Entity::delete_many()
+        .filter(user_token::Column::Id.is_in(ids.to_vec()))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// Register a user (≈ `UserService.Register`); returns None on failure.
+pub async fn register(
+    db: &DatabaseConnection,
+    username: &str,
+    email: &str,
+    password: &str,
+    status: i32,
+) -> Option<user::Model> {
+    let model = user::Model {
+        id: 0,
+        username: username.to_string(),
+        email: email.to_string(),
+        password: password.to_string(),
+        nickname: String::new(),
+        avatar: String::new(),
+        group_id: 1,
+        is_admin: Some(false),
+        status,
+        remark: String::new(),
+        created_at: None,
+        updated_at: None,
+    };
+    create(db, model).await.ok()
+}

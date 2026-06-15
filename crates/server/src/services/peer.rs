@@ -178,3 +178,91 @@ pub async fn batch_delete(db: &DatabaseConnection, ids: &[i32]) -> Result<(), Db
     }
     Ok(())
 }
+
+/// Filters for the admin/my peer list (≈ `admin.PeerQuery`).
+#[derive(Default)]
+pub struct PeerFilters {
+    pub user_id: Option<i32>,
+    pub time_ago: i64,
+    pub id: Option<String>,
+    pub hostname: Option<String>,
+    pub username: Option<String>,
+    pub ip: Option<String>,
+    pub alias: Option<String>,
+}
+
+pub async fn list_filtered(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    f: PeerFilters,
+) -> Result<PeerListResult, DbErr> {
+    let (page, page_size) = paginate(page, page_size);
+    let mut q = peer::Entity::find();
+    if let Some(uid) = f.user_id {
+        q = q.filter(peer::Column::UserId.eq(uid));
+    }
+    if f.time_ago > 0 {
+        let lt = chrono::Utc::now().timestamp() - f.time_ago;
+        q = q.filter(peer::Column::LastOnlineTime.lt(lt));
+    } else if f.time_ago < 0 {
+        let gt = chrono::Utc::now().timestamp() + f.time_ago;
+        q = q.filter(peer::Column::LastOnlineTime.gt(gt));
+    }
+    if let Some(v) = f.id.filter(|s| !s.is_empty()) {
+        q = q.filter(peer::Column::Id.contains(&v));
+    }
+    if let Some(v) = f.hostname.filter(|s| !s.is_empty()) {
+        q = q.filter(peer::Column::Hostname.contains(&v));
+    }
+    if let Some(v) = f.username.filter(|s| !s.is_empty()) {
+        q = q.filter(peer::Column::Username.contains(&v));
+    }
+    if let Some(v) = f.ip.filter(|s| !s.is_empty()) {
+        q = q.filter(peer::Column::LastOnlineIp.contains(&v));
+    }
+    if let Some(v) = f.alias.filter(|s| !s.is_empty()) {
+        q = q.filter(peer::Column::Alias.contains(&v));
+    }
+    let total = q.clone().count(db).await? as i64;
+    let list = q
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok(PeerListResult {
+        list,
+        page: page as i64,
+        page_size: page_size as i64,
+        total,
+    })
+}
+
+/// Fetch peers by row ids (used by batch-create-from-peers).
+pub async fn list_by_row_ids(
+    db: &DatabaseConnection,
+    row_ids: &[i32],
+) -> Result<Vec<peer::Model>, DbErr> {
+    if row_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    peer::Entity::find()
+        .filter(peer::Column::RowId.is_in(row_ids.to_vec()))
+        .all(db)
+        .await
+}
+
+/// Public "simple data" for given ids — only id + version (≈ `SimpleData`).
+pub async fn simple_data(
+    db: &DatabaseConnection,
+    ids: &[String],
+) -> Result<Vec<serde_json::Value>, DbErr> {
+    let peers = peer::Entity::find()
+        .filter(peer::Column::Id.is_in(ids.to_vec()))
+        .all(db)
+        .await?;
+    Ok(peers
+        .into_iter()
+        .map(|p| serde_json::json!({ "id": p.id, "version": p.version }))
+        .collect())
+}
