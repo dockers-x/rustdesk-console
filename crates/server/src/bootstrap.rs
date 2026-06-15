@@ -198,6 +198,7 @@ pub async fn build_state(config: Config) -> anyhow::Result<AppState> {
         jwt: Arc::new(jwt),
         limiter: Arc::new(limiter),
         i18n: Arc::new(i18n),
+        oauth_cache: Arc::new(crate::support::oauth_cache::OauthCache::new()),
         start_time: Arc::new(start_time),
         version: Arc::new(version),
     })

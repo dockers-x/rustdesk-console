@@ -2,6 +2,7 @@ pub mod admin;
 pub mod api;
 pub mod middleware;
 pub mod my;
+pub mod oauth;
 pub mod payloads;
 pub mod response;
 pub mod router;

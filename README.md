@@ -28,19 +28,23 @@ executable.
 
 ## Project status
 
-This is delivered in phases. **Phase 1 (current)** is a working, tested core:
+The backend is now **feature-complete** against the original Go server's API surface:
 
 | Area | Status |
 | --- | --- |
 | RustDesk PC-client API (login, heartbeat, sysinfo, address book, groups, peers, web client, audit) | ✅ implemented |
-| Admin auth (login, captcha, logout, config) | ✅ implemented |
-| Admin CRUD: user, group, device group, tag, peer; login-log read | ✅ implemented |
+| Admin auth (login, captcha, logout, config) + register | ✅ implemented |
+| Admin CRUD: user, group, device group, tag, peer, oauth, address book (+collections/rules), login-log, audit, share records, user tokens | ✅ implemented |
+| Server-command dispatch (cmd CRUD + live `sendCmd` over TCP) | ✅ implemented |
+| `my/*` self-service API (address book, collections, rules, tags, peers, share records, login logs) | ✅ implemented |
+| OAuth/OIDC login (GitHub, Google, OIDC, LinuxDO) + web SSO + bind/unbind | ✅ implemented¹ |
+| LDAP login (search + group check + sync) | ✅ implemented¹ |
 | Single-binary frontend embedding, Docker, multi-arch CI | ✅ implemented |
-| OAuth / OIDC / LDAP login, web SSO | ⏳ later phase |
-| Remaining admin CRUD (oauth, audit, share records, user tokens, address-book collections, server cmd, `my/*`) | ⏳ scaffolded — return a clear `NotImplemented` code until ported |
 
-Endpoints that are not yet ported return `{"code":501,"message":"NotImplemented: <path>"}` and log a
-warning, so nothing silently looks "done" when it isn't.
+¹ The OAuth/OIDC/LDAP **external** flows require real identity providers / a directory
+server to exercise. The full handshake (state cache, web SSO, callback, bind, polling) is
+verified end-to-end; the external token-exchange and LDAP bind paths are implemented over
+rustls but need a live provider to validate.
 
 ## Quick start
 

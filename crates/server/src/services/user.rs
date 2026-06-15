@@ -24,13 +24,22 @@ pub async fn info_by_username(
         .await
 }
 
-/// Verify username/password (with legacy MD5 upgrade). LDAP is deferred to a
-/// later phase. Returns the user only on success.
+/// Verify username/password. If LDAP is enabled it is tried first, falling back
+/// to the local database (with legacy MD5 upgrade). Returns the user on success.
 pub async fn info_by_username_password(
     db: &DatabaseConnection,
+    cfg: &Config,
     username: &str,
     password: &str,
 ) -> Result<Option<user::Model>, DbErr> {
+    if cfg.ldap.enable {
+        match crate::services::ldap::authenticate(cfg, db, username, password).await {
+            Ok(u) => return Ok(Some(u)),
+            Err(e) => {
+                tracing::warn!("LDAP authentication failed: {e}; falling back to local database");
+            }
+        }
+    }
     let Some(u) = info_by_username(db, username).await? else {
         return Ok(None);
     };

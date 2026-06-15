@@ -5,6 +5,7 @@
 pub mod address_book;
 pub mod audit;
 pub mod group;
+pub mod ldap;
 pub mod login_log;
 pub mod oauth;
 pub mod peer;

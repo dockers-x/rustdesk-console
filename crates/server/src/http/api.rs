@@ -100,6 +100,7 @@ pub async fn login(
     }
     let user = match services::user::info_by_username_password(
         &state.db,
+        &state.config,
         &form.username,
         &form.password,
     )
@@ -148,8 +149,9 @@ pub async fn login(
 }
 
 pub async fn login_options(State(state): State<AppState>) -> Response {
-    // Phase 1: OAuth providers are not yet wired; only web SSO may be offered.
-    let mut ops: Vec<String> = vec![];
+    let mut ops: Vec<String> = services::oauth::get_oauth_providers(&state.db)
+        .await
+        .unwrap_or_default();
     if state.config.app.web_sso {
         ops.push("webauth".to_string());
     }

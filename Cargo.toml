@@ -53,6 +53,11 @@ captcha = "0.0.9"
 base64 = "0.22"
 toml = "0.8"
 async-trait = "0.1"
+# OAuth/OIDC login (manual flow over rustls) + LDAP — external integrations.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
+urlencoding = "2"
 
 [profile.release]
 opt-level = "z"

@@ -65,7 +65,7 @@ pub async fn login(
         return resp::fail(101, state.tr(&lang, "CaptchaError"));
     }
 
-    let user = match services::user::info_by_username_password(&state.db, &f.username, &f.password)
+    let user = match services::user::info_by_username_password(&state.db, &state.config, &f.username, &f.password)
         .await
     {
         Ok(Some(u)) => u,
@@ -127,13 +127,15 @@ pub async fn login_options(State(state): State<AppState>, ClientIp(ip): ClientIp
     if banned {
         return resp::fail(101, state.tr(&lang, "LoginBanned"));
     }
-    let ops: Vec<String> = vec![]; // OAuth providers wired in a later phase
+    let ops: Vec<String> = services::oauth::get_oauth_providers(&state.db)
+        .await
+        .unwrap_or_default();
     resp::success(json!({
         "ops": ops,
         "register": state.config.app.register,
         "need_captcha": need_captcha,
         "disable_pwd": state.config.app.disable_pwd_login,
-        "auto_oidc": false,
+        "auto_oidc": state.config.app.disable_pwd_login && ops.len() == 1,
     }))
 }
 

@@ -5,7 +5,7 @@ use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::http::{admin, api, my, static_files};
+use crate::http::{admin, api, my, oauth, static_files};
 use crate::state::AppState;
 
 pub fn build(state: AppState) -> Router {
@@ -35,6 +35,15 @@ pub fn build(state: AppState) -> Router {
         .route("/api/device-group/accessible", get(api::device_group_accessible))
         .route("/api/audit/conn", post(api::audit_conn))
         .route("/api/audit/file", post(api::audit_file))
+        // oauth / oidc login
+        .route("/api/oidc/auth", post(oauth::oidc_auth))
+        .route("/api/oidc/auth-query", get(oauth::oidc_auth_query))
+        .route("/api/oidc/callback", get(oauth::oauth_callback))
+        .route("/api/oidc/login", get(oauth::oauth_callback))
+        .route("/api/oidc/msg", get(oauth::message))
+        .route("/api/oauth/callback", get(oauth::oauth_callback))
+        .route("/api/oauth/login", get(oauth::oauth_callback))
+        .route("/api/oauth/msg", get(oauth::message))
         // address book (legacy)
         .route("/api/ab", get(api::ab_get).post(api::ab_update))
         // address book (personal)
@@ -82,8 +91,8 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/captcha", get(admin::captcha))
         .route("/api/admin/logout", post(admin::logout))
         .route("/api/admin/login-options", get(admin::login_options))
-        .route("/api/admin/oidc/auth", post(admin::not_implemented))
-        .route("/api/admin/oidc/auth-query", get(admin::not_implemented))
+        .route("/api/admin/oidc/auth", post(oauth::admin_oidc_auth))
+        .route("/api/admin/oidc/auth-query", get(oauth::admin_oidc_auth_query))
         .route("/api/admin/user/register", post(admin::user_register))
         // config
         .route("/api/admin/config/admin", get(admin::config_admin))
@@ -137,6 +146,10 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/oauth/update", post(admin::oauth_update))
         .route("/api/admin/oauth/delete", post(admin::oauth_delete))
         .route("/api/admin/oauth/unbind", post(admin::oauth_unbind))
+        .route("/api/admin/oauth/confirm", post(oauth::admin_confirm))
+        .route("/api/admin/oauth/bind", post(oauth::admin_to_bind))
+        .route("/api/admin/oauth/bindConfirm", post(oauth::admin_bind_confirm))
+        .route("/api/admin/oauth/info", get(oauth::admin_info))
         // audit
         .route("/api/admin/audit_conn/list", get(admin::audit_conn_list))
         .route("/api/admin/audit_conn/delete", post(admin::audit_conn_delete))
