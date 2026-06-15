@@ -1,0 +1,313 @@
+import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@cloudflare/kumo/components/button";
+import { Input } from "@cloudflare/kumo/components/input";
+import { Table } from "@cloudflare/kumo/components/table";
+import { Dialog } from "@cloudflare/kumo/components/dialog";
+import { Switch } from "@cloudflare/kumo/components/switch";
+import { apiGet, apiPost } from "../lib/api";
+import type { FieldDef, ResourceConfig } from "./types";
+
+interface ListResult {
+  list: Record<string, unknown>[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+const PAGE_SIZE = 10;
+
+function initialForm(cfg: ResourceConfig, row?: Record<string, unknown>) {
+  const f: Record<string, unknown> = {};
+  for (const field of cfg.fields) {
+    if (row) {
+      f[field.name] = row[field.name] ?? field.defaultValue ?? "";
+    } else {
+      f[field.name] = field.defaultValue ?? (field.type === "switch" ? false : "");
+    }
+  }
+  return f;
+}
+
+export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const idField = cfg.idField ?? "id";
+
+  const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+
+  const queryKey = useMemo(
+    () => [cfg.name, page, filters],
+    [cfg.name, page, filters],
+  );
+  const { data, isLoading } = useQuery({
+    queryKey,
+    queryFn: () =>
+      apiGet<ListResult>(`${cfg.api}/list`, {
+        page,
+        page_size: PAGE_SIZE,
+        ...Object.fromEntries(
+          Object.entries(filters).filter(([, v]) => v !== ""),
+        ),
+      }),
+  });
+
+  const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<unknown>(null);
+  const [form, setForm] = useState<Record<string, unknown>>({});
+  const editing = editingId !== null;
+
+  const openCreate = () => {
+    setEditingId(null);
+    setForm(initialForm(cfg));
+    setOpen(true);
+  };
+  const openEdit = (row: Record<string, unknown>) => {
+    setEditingId(row[idField]);
+    setForm({ ...initialForm(cfg, row), [idField]: row[idField] });
+    setOpen(true);
+  };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const url = editing ? `${cfg.api}/update` : `${cfg.api}/create`;
+      const payload = editing ? { ...form, [idField]: editingId } : form;
+      await apiPost(url, payload);
+    },
+    onSuccess: () => {
+      setOpen(false);
+      void qc.invalidateQueries({ queryKey: [cfg.name] });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: unknown) =>
+      apiPost(`${cfg.api}/delete`, { [idField]: id }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: [cfg.name] }),
+  });
+
+  const rows = data?.list ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const showActions = cfg.canEdit !== false || cfg.canDelete !== false;
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">{t(cfg.titleKey)}</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          {(cfg.filters ?? []).map((flt) => (
+            <Input
+              key={flt.name}
+              placeholder={t(flt.label)}
+              value={filters[flt.name] ?? ""}
+              onChange={(e) => {
+                setFilters((s) => ({ ...s, [flt.name]: e.target.value }));
+                setPage(1);
+              }}
+            />
+          ))}
+          {cfg.canCreate !== false && (
+            <Button onClick={openCreate}>{t("create")}</Button>
+          )}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-color-border">
+        <Table>
+          <Table.Header>
+            <Table.Row>
+              {cfg.columns.map((c) => (
+                <Table.Head key={c.key}>{t(c.label)}</Table.Head>
+              ))}
+              {showActions && <Table.Head>{t("actions")}</Table.Head>}
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {rows.map((row, i) => (
+              <Table.Row key={String(row[idField] ?? i)}>
+                {cfg.columns.map((c) => (
+                  <Table.Cell key={c.key}>
+                    {c.render ? c.render(row, t) : asText(row[c.key])}
+                  </Table.Cell>
+                ))}
+                {showActions && (
+                  <Table.Cell>
+                    <div className="flex gap-1">
+                      {cfg.canEdit !== false && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => openEdit(row)}
+                        >
+                          {t("edit")}
+                        </Button>
+                      )}
+                      {cfg.canDelete !== false && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            if (confirm(t("confirmDelete")))
+                              remove.mutate(row[idField]);
+                          }}
+                        >
+                          {t("delete")}
+                        </Button>
+                      )}
+                    </div>
+                  </Table.Cell>
+                )}
+              </Table.Row>
+            ))}
+          </Table.Body>
+        </Table>
+        {isLoading && (
+          <div className="p-4 text-sm text-color-muted">…</div>
+        )}
+        {!isLoading && rows.length === 0 && (
+          <div className="p-4 text-sm text-color-muted">No data</div>
+        )}
+      </div>
+
+      <div className="mt-4 flex items-center justify-end gap-3 text-sm">
+        <span>
+          {page} / {totalPages} · {total}
+        </span>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={page <= 1}
+          onClick={() => setPage((p) => p - 1)}
+        >
+          ‹
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={page >= totalPages}
+          onClick={() => setPage((p) => p + 1)}
+        >
+          ›
+        </Button>
+      </div>
+
+      {(cfg.canCreate !== false || cfg.canEdit !== false) && (
+        <Dialog.Root open={open} onOpenChange={setOpen}>
+          <Dialog>
+            <Dialog.Title>
+              {editing ? t("edit") : t("create")} · {t(cfg.titleKey)}
+            </Dialog.Title>
+            <div className="mt-4 space-y-3">
+              {cfg.fields
+                .filter((f) => !(editing && f.createOnly))
+                .map((field) => (
+                  <FieldInput
+                    key={field.name}
+                    field={field}
+                    editing={editing}
+                    value={form[field.name]}
+                    onChange={(v) => setForm((s) => ({ ...s, [field.name]: v }))}
+                  />
+                ))}
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setOpen(false)}>
+                {t("cancel")}
+              </Button>
+              <Button onClick={() => save.mutate()} disabled={save.isPending}>
+                {t("save")}
+              </Button>
+            </div>
+          </Dialog>
+        </Dialog.Root>
+      )}
+    </div>
+  );
+}
+
+function asText(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+function FieldInput({
+  field,
+  editing,
+  value,
+  onChange,
+}: {
+  field: FieldDef;
+  editing: boolean;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  const { t } = useTranslation();
+  const locked = editing && field.lockOnEdit;
+
+  if (field.type === "switch") {
+    const on = field.switchOn ?? true;
+    const off = field.switchOff ?? false;
+    const checked = value === on || value === true;
+    return (
+      <div className="flex items-center justify-between">
+        <span className="text-sm">{t(field.label)}</span>
+        <Switch
+          checked={checked}
+          onCheckedChange={(v: boolean) => onChange(v ? on : off)}
+        />
+      </div>
+    );
+  }
+
+  if (field.type === "select") {
+    return (
+      <label className="block">
+        <span className="mb-1 block text-sm">{t(field.label)}</span>
+        <select
+          className="h-9 w-full rounded-lg border border-color-border bg-kumo-elevated px-3 text-sm"
+          value={String(value ?? "")}
+          disabled={locked}
+          onChange={(e) => {
+            const raw = e.target.value;
+            const opt = field.options?.find((o) => String(o.value) === raw);
+            onChange(opt ? opt.value : raw);
+          }}
+        >
+          {(field.options ?? []).map((o) => (
+            <option key={String(o.value)} value={String(o.value)}>
+              {t(o.label)}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  const inputType =
+    field.type === "password"
+      ? "password"
+      : field.type === "number"
+        ? "number"
+        : "text";
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm">{t(field.label)}</span>
+      <Input
+        type={inputType}
+        value={value === null || value === undefined ? "" : String(value)}
+        disabled={locked}
+        onChange={(e) =>
+          onChange(
+            field.type === "number"
+              ? Number(e.target.value) || 0
+              : e.target.value,
+          )
+        }
+      />
+    </label>
+  );
+}

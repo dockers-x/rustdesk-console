@@ -2,13 +2,15 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { isLoggedIn } from "./lib/auth";
 import { AppShell } from "./components/AppShell";
 import { LoginPage } from "./pages/LoginPage";
-import { UsersPage } from "./pages/UsersPage";
-import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { ResourcePage } from "./resource/ResourcePage";
+import { RESOURCES } from "./resource/registry";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!isLoggedIn()) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
+
+const HOME = `/${RESOURCES[0].name}`;
 
 export default function App() {
   return (
@@ -22,11 +24,14 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route path="/" element={<Navigate to="/users" replace />} />
-          <Route path="/users" element={<UsersPage />} />
-          <Route path="/devices" element={<PlaceholderPage titleKey="devices" />} />
-          <Route path="/groups" element={<PlaceholderPage titleKey="groups" />} />
-          <Route path="/tags" element={<PlaceholderPage titleKey="tags" />} />
+          <Route path="/" element={<Navigate to={HOME} replace />} />
+          {RESOURCES.map((r) => (
+            <Route
+              key={r.name}
+              path={`/${r.name}`}
+              element={<ResourcePage cfg={r} />}
+            />
+          ))}
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

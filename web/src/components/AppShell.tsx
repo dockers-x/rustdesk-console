@@ -4,14 +4,10 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { List, Moon, Sun, SignOut } from "@phosphor-icons/react";
 import { clearToken } from "../lib/auth";
+import { RESOURCES } from "../resource/registry";
 import i18n from "../i18n";
 
-const NAV = [
-  { to: "/users", key: "users" },
-  { to: "/devices", key: "devices" },
-  { to: "/groups", key: "groups" },
-  { to: "/tags", key: "tags" },
-] as const;
+const NAV = RESOURCES.map((r) => ({ to: `/${r.name}`, key: r.titleKey }));
 
 function applyTheme(dark: boolean) {
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
@@ -53,7 +49,7 @@ export function AppShell() {
           <span className="text-lg">🖥️</span>
           {!collapsed && <span className="truncate">{t("appTitle")}</span>}
         </div>
-        <nav className="flex-1 px-2 py-2">
+        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-2">
           {NAV.map((item) => (
             <NavLink
               key={item.to}
