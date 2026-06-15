@@ -103,12 +103,30 @@ Supported `gorm.type` values: `sqlite` (default, file `./data/rustdeskapi.db`), 
 crates/
   entity/   SeaORM entities (17 models), ported 1:1 from the Go model/ structs
   server/   axum app, config, bootstrap (connect + migrate + seed), services, HTTP layer, CLI
-resources/  Flutter web client + i18n + templates (embedded); admin/ is filled at build time
+web/        React + Cloudflare kumo admin UI (Vite + TS); build output embeds into the binary
+resources/  Flutter web client + i18n + templates (embedded); admin/ is filled from web/ at build time
 conf/       default config.yaml
 ```
 
 Request flow: `router` → extractor-based auth middleware (`RustClientUser` / `BackendUser` /
 `AdminUser`) → controller → service → SeaORM entity.
+
+## Web UI
+
+A new admin UI is being built in `web/` with **React 19 + [Cloudflare kumo](https://github.com/cloudflare/kumo)**
+(Base UI + Tailwind v4), TanStack Query, and react-i18next. Its production build is emitted to
+`resources/admin/` and embedded into the binary, served at `/_admin/`.
+
+```bash
+cd web
+npm install
+npm run dev      # dev server, proxies /api -> http://127.0.0.1:21114
+npm run build    # outputs to ../resources/admin (then rebuild the Rust binary to embed)
+```
+
+Current screens: sign-in (with captcha) and user management (list / create / edit / delete,
+search, pagination, light-dark, EN/中文). Remaining management screens are being added on the
+same data-fetching + table/dialog pattern; the backend endpoints for all of them already exist.
 
 ## Tech stack
 

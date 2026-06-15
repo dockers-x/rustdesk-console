@@ -1,17 +1,16 @@
 # syntax=docker/dockerfile:1
 
 # ---------------------------------------------------------------------------
-# Stage 1: build the admin web UI (lejianwen/rustdesk-api-web) so it can be
-# embedded into the binary. The output `dist/` becomes resources/admin.
+# Stage 1: build the React + kumo admin web UI (web/) so it can be embedded
+# into the binary. Output lands in resources/admin.
 # ---------------------------------------------------------------------------
-FROM node:20-alpine AS webui
-ARG WEBCLIENT_SOURCE=https://github.com/lejianwen/rustdesk-api-web
-RUN apk add --no-cache git
-WORKDIR /web
-RUN git clone --depth=1 "${WEBCLIENT_SOURCE}" . \
-    && (corepack enable || true) \
-    && (yarn install --frozen-lockfile || yarn install || npm ci || npm install) \
-    && (yarn build || npm run build)
+FROM node:20-bookworm-slim AS webui
+WORKDIR /app
+COPY web ./web
+RUN cd web \
+    && npm install --no-audit --no-fund \
+    && npx vite build
+# vite outDir is ../resources/admin -> /app/resources/admin
 
 # ---------------------------------------------------------------------------
 # Stage 2: build the Rust binary with all assets embedded (rust-embed).
@@ -19,9 +18,7 @@ RUN git clone --depth=1 "${WEBCLIENT_SOURCE}" . \
 FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY . .
-# Drop in the freshly-built admin UI so it is embedded at compile time.
-RUN rm -rf resources/admin && mkdir -p resources/admin
-COPY --from=webui /web/dist/ ./resources/admin/
+COPY --from=webui /app/resources/admin ./resources/admin
 RUN cargo build --release -p rustdesk-api-server
 
 # ---------------------------------------------------------------------------

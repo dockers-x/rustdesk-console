@@ -5,33 +5,25 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      webclient_source:
-        description: "Admin web UI repository"
-        default: "https://github.com/lejianwen/rustdesk-api-web"
-
-env:
-  WEBCLIENT_SOURCE: ${{ github.event.inputs.webclient_source || 'https://github.com/lejianwen/rustdesk-api-web' }}
 
 jobs:
   # Build the admin SPA once and share it with every target build.
   webui:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Build admin web UI
         run: |
-          git clone --depth=1 "${WEBCLIENT_SOURCE}" web
           cd web
-          corepack enable || true
-          (yarn install --frozen-lockfile || yarn install || npm ci || npm install)
-          (yarn build || npm run build)
+          npm install --no-audit --no-fund
+          npx vite build
       - uses: actions/upload-artifact@v4
         with:
           name: admin-dist
-          path: web/dist
+          path: resources/admin
 
   binaries:
     needs: webui
@@ -98,5 +90,3 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-          build-args: |
-            WEBCLIENT_SOURCE=${{ env.WEBCLIENT_SOURCE }}

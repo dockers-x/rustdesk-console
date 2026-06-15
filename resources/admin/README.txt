@@ -1,2 +1,3 @@
-Admin SPA build output goes here.
-Built from https://github.com/lejianwen/rustdesk-api-web during Docker/CI build and embedded into the binary.
+Admin SPA build output goes here (embedded into the binary by rust-embed).
+Build it from ../web:  cd web && npm install && npx vite build
+CI and the Dockerfile do this automatically.

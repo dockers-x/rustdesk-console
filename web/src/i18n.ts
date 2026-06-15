@@ -1,0 +1,78 @@
+import i18n from "i18next";
+import { initReactI18next } from "react-i18next";
+
+const en = {
+  appTitle: "RustDesk Console",
+  login: "Sign in",
+  username: "Username",
+  password: "Password",
+  captcha: "Captcha",
+  logout: "Sign out",
+  users: "Users",
+  devices: "Devices",
+  groups: "Groups",
+  tags: "Tags",
+  create: "Create",
+  edit: "Edit",
+  delete: "Delete",
+  save: "Save",
+  cancel: "Cancel",
+  confirmDelete: "Delete this item?",
+  email: "Email",
+  nickname: "Nickname",
+  groupId: "Group ID",
+  status: "Status",
+  isAdmin: "Admin",
+  enabled: "Enabled",
+  disabled: "Disabled",
+  search: "Search",
+  actions: "Actions",
+  newUser: "New user",
+  editUser: "Edit user",
+  loginFailed: "Sign in failed",
+  theme: "Theme",
+};
+
+const zhCN: typeof en = {
+  appTitle: "RustDesk 控制台",
+  login: "登录",
+  username: "用户名",
+  password: "密码",
+  captcha: "验证码",
+  logout: "退出登录",
+  users: "用户",
+  devices: "设备",
+  groups: "群组",
+  tags: "标签",
+  create: "新建",
+  edit: "编辑",
+  delete: "删除",
+  save: "保存",
+  cancel: "取消",
+  confirmDelete: "确定删除该项？",
+  email: "邮箱",
+  nickname: "昵称",
+  groupId: "群组 ID",
+  status: "状态",
+  isAdmin: "管理员",
+  enabled: "启用",
+  disabled: "禁用",
+  search: "搜索",
+  actions: "操作",
+  newUser: "新建用户",
+  editUser: "编辑用户",
+  loginFailed: "登录失败",
+  theme: "主题",
+};
+
+void i18n.use(initReactI18next).init({
+  resources: {
+    en: { translation: en },
+    "zh-CN": { translation: zhCN },
+  },
+  lng: localStorage.getItem("lang") || "zh-CN",
+  fallbackLng: "en",
+  interpolation: { escapeValue: false },
+});
+
+export default i18n;
