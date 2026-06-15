@@ -1,0 +1,20 @@
+services:
+  rustdesk-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rustdesk-console:latest
+    container_name: rustdesk-api
+    restart: unless-stopped
+    ports:
+      - "21114:21114"
+    volumes:
+      - ./data:/app/data
+      - ./conf:/app/conf
+    environment:
+      # Overrides use RUSTDESK_API_<PATH> (hyphens -> underscores), e.g.:
+      # RUSTDESK_API_RUSTDESK_ID_SERVER: "192.168.1.66:21116"
+      # RUSTDESK_API_RUSTDESK_RELAY_SERVER: "192.168.1.66:21117"
+      # RUSTDESK_API_RUSTDESK_API_SERVER: "http://127.0.0.1:21114"
+      # RUSTDESK_API_GORM_TYPE: "sqlite"
+      TZ: Asia/Shanghai

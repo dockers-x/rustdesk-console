@@ -1,0 +1,84 @@
+lang: "zh-CN"
+app:
+  web-client: 1  # 1:启用 0:禁用
+  register: false #是否开启注册
+  register-status: 1 # 注册用户默认状态 1:启用 2:禁用
+  captcha-threshold: 3 #   <0:disabled, 0 always, >0:enabled
+  ban-threshold: 0 # 0:disabled, >0:enabled
+  show-swagger: 0 # 1:启用 0:禁用
+  token-expire: 168h
+  web-sso: true #web auth sso
+  disable-pwd-login: false #禁用密码登录
+
+admin:
+  title: "RustDesk API Admin"
+  hello-file: "./conf/admin/hello.html"  #优先使用file
+  hello: ""
+  # ID Server and Relay Server ports https://github.com/lejianwen/rustdesk-api/issues/257
+  id-server-port: 21116  # ID Server port (for server cmd)
+  relay-server-port: 21117 # ID Server port (for server cmd)
+gin:
+  api-addr: "0.0.0.0:21114"
+  mode: "release" #release,debug,test
+  resources-path: 'resources'  #对外静态文件目录
+  trust-proxy: ""
+gorm:
+  type: "sqlite"
+  max-idle-conns: 10
+  max-open-conns: 100
+mysql:
+  username: ""
+  password: ""
+  addr: ""
+  dbname: ""
+  tls: "false" # true / false / skip-verify / custom
+
+postgresql:
+  host: "127.0.0.1"
+  port: "5432"
+  user: ""
+  password: ""
+  dbname: "postgres"
+  sslmode: "disable" # disable, require, verify-ca, verify-full
+  time-zone: "Asia/Shanghai" # Time zone for PostgreSQL connection
+
+rustdesk:
+  id-server: "192.168.1.66:21116"
+  relay-server: "192.168.1.66:21117"
+  api-server: "http://127.0.0.1:21114"
+  key: ""
+  key-file: "/data/id_ed25519.pub"
+  personal: 1
+  webclient-magic-queryonline: 0
+  ws-host: ""  #eg: wss://192.168.1.3:4443
+logger:
+  path: "./runtime/log.txt"
+  level: "info" #trace,debug,info,warn,error,fatal
+  report-caller: true
+proxy:
+  enable: false
+  host: "http://127.0.0.1:1080"
+jwt:
+  key: ""
+  expire-duration: 168h
+ldap:
+  enable: false
+  url: "ldap://ldap.example.com:389"
+  tls-ca-file: ""
+  tls-verify: false
+  base-dn: "dc=example,dc=com"
+  bind-dn: "cn=admin,dc=example,dc=com"
+  bind-password: "password"
+
+  user:
+    base-dn: "ou=users,dc=example,dc=com"
+    enable-attr: ""       #The attribute name of the user for enabling, in AD it is "userAccountControl", empty means no enable attribute, all users are enabled
+    enable-attr-value: "" # The value of the enable attribute when the user is enabled. If you are using AD, just set random value, it will be ignored.
+    filter: "(cn=*)"
+    username: "uid"       # The attribute name of the user for usernamem if you are using AD, it should be "sAMAccountName"
+    email: "mail"
+    first-name: "givenName"
+    last-name: "sn"
+    sync: false         # If true, the user will be synchronized to the database when the user logs in. If false, the user will be synchronized to the database when the user be created.
+    admin-group: "cn=admin,dc=example,dc=com" # The group name of the admin group, if the user is in this group, the user will be an admin.
+    allow-group: "cn=users,dc=example,dc=com" # The group name of the users group, if the user is in this group, the user will be an login. 

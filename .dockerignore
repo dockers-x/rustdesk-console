@@ -1,0 +1,8 @@
+/target
+/data
+/runtime
+**/*.rs.bk
+.git
+.github
+*.md
+docs

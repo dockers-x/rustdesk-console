@@ -1,0 +1,328 @@
+//! Address book service — ports `service/addressBook.go` (Phase 1 subset:
+//! personal address books, tags, collections, share rules, sharing).
+
+use std::collections::HashMap;
+
+use sea_orm::*;
+use serde_json::Value;
+
+use ::entity::{address_book, address_book_collection, address_book_collection_rule, share_record};
+
+use crate::services::now;
+
+pub fn platform_from_os(os: &str) -> String {
+    let l = os.to_lowercase();
+    if l.contains("android") {
+        "Android".into()
+    } else if l.contains("windows") {
+        "Windows".into()
+    } else if l.contains("linux") {
+        "Linux".into()
+    } else if l.contains("mac") {
+        "Mac OS".into()
+    } else {
+        String::new()
+    }
+}
+
+pub async fn list_by_user_and_collection(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+) -> Result<Vec<address_book::Model>, DbErr> {
+    address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::CollectionId.eq(collection_id))
+        .all(db)
+        .await
+}
+
+pub async fn info_by_user_id_and_id(
+    db: &DatabaseConnection,
+    user_id: i32,
+    id: &str,
+) -> Result<Option<address_book::Model>, DbErr> {
+    address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::Id.eq(id))
+        .one(db)
+        .await
+}
+
+pub async fn info_by_user_id_and_id_and_cid(
+    db: &DatabaseConnection,
+    user_id: i32,
+    id: &str,
+    collection_id: i32,
+) -> Result<Option<address_book::Model>, DbErr> {
+    address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::Id.eq(id))
+        .filter(address_book::Column::CollectionId.eq(collection_id))
+        .one(db)
+        .await
+}
+
+pub async fn add(
+    db: &DatabaseConnection,
+    am: address_book::ActiveModel,
+) -> Result<address_book::Model, DbErr> {
+    let mut am = am;
+    am.created_at = Set(now());
+    am.updated_at = Set(now());
+    am.insert(db).await
+}
+
+pub async fn delete(db: &DatabaseConnection, row_id: i32) -> Result<(), DbErr> {
+    address_book::Entity::delete_by_id(row_id).exec(db).await?;
+    Ok(())
+}
+
+/// Apply allowed-field updates to an address book peer (≈ `UpdateByMap`).
+pub async fn update_fields(
+    db: &DatabaseConnection,
+    model: &address_book::Model,
+    fields: &Value,
+) -> Result<(), DbErr> {
+    let mut am: address_book::ActiveModel = model.clone().into();
+    if let Some(obj) = fields.as_object() {
+        if let Some(v) = obj.get("password").and_then(|v| v.as_str()) {
+            am.password = Set(v.to_string());
+        }
+        if let Some(v) = obj.get("hash").and_then(|v| v.as_str()) {
+            am.hash = Set(v.to_string());
+        }
+        if let Some(v) = obj.get("alias").and_then(|v| v.as_str()) {
+            am.alias = Set(v.to_string());
+        }
+        if let Some(v) = obj.get("tags") {
+            am.tags = Set(v.clone());
+        }
+    }
+    am.updated_at = Set(now());
+    am.update(db).await?;
+    Ok(())
+}
+
+/// Reconcile a user's whole personal address book against `peers` (≈ `UpdateAddressBook`).
+pub async fn update_address_book(
+    db: &DatabaseConnection,
+    peers: Vec<address_book::Model>,
+    user_id: i32,
+) -> Result<(), DbErr> {
+    let existing = address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .all(db)
+        .await?;
+    let existing_by_id: HashMap<String, address_book::Model> =
+        existing.into_iter().map(|m| (m.id.clone(), m)).collect();
+    let incoming_ids: std::collections::HashSet<String> =
+        peers.iter().map(|p| p.id.clone()).collect();
+
+    for mut p in peers {
+        p.user_id = user_id;
+        match existing_by_id.get(&p.id) {
+            None => {
+                if p.platform.is_empty() || p.username.is_empty() || p.hostname.is_empty() {
+                    if let Some(peer) = crate::services::peer::find_by_id(db, &p.id).await? {
+                        p.platform = platform_from_os(&peer.os);
+                        p.username = peer.username;
+                        p.hostname = peer.hostname;
+                    }
+                }
+                let am = address_book::ActiveModel {
+                    id: Set(p.id),
+                    username: Set(p.username),
+                    password: Set(p.password),
+                    hostname: Set(p.hostname),
+                    alias: Set(p.alias),
+                    platform: Set(p.platform),
+                    tags: Set(p.tags),
+                    hash: Set(p.hash),
+                    user_id: Set(user_id),
+                    force_always_relay: Set(p.force_always_relay),
+                    rdp_port: Set(p.rdp_port),
+                    rdp_username: Set(p.rdp_username),
+                    online: Set(p.online),
+                    login_name: Set(p.login_name),
+                    same_server: Set(p.same_server),
+                    collection_id: Set(p.collection_id),
+                    created_at: Set(now()),
+                    updated_at: Set(now()),
+                    ..Default::default()
+                };
+                am.insert(db).await?;
+            }
+            Some(existing) => {
+                let am = address_book::ActiveModel {
+                    row_id: Set(existing.row_id),
+                    username: Set(p.username),
+                    password: Set(p.password),
+                    hostname: Set(p.hostname),
+                    alias: Set(p.alias),
+                    platform: Set(p.platform),
+                    tags: Set(p.tags),
+                    hash: Set(p.hash),
+                    force_always_relay: Set(p.force_always_relay),
+                    rdp_port: Set(p.rdp_port),
+                    rdp_username: Set(p.rdp_username),
+                    online: Set(p.online),
+                    login_name: Set(p.login_name),
+                    same_server: Set(p.same_server),
+                    updated_at: Set(now()),
+                    ..Default::default()
+                };
+                am.update(db).await?;
+            }
+        }
+    }
+    // delete those not present anymore
+    for (id, model) in existing_by_id {
+        if !incoming_ids.contains(&id) {
+            address_book::Entity::delete_by_id(model.row_id)
+                .exec(db)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+// --- collections ---
+
+pub async fn collection_info_by_id(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<address_book_collection::Model>, DbErr> {
+    address_book_collection::Entity::find_by_id(id).one(db).await
+}
+
+pub async fn collection_list_by_user_id(
+    db: &DatabaseConnection,
+    user_id: i32,
+) -> Result<Vec<address_book_collection::Model>, DbErr> {
+    address_book_collection::Entity::find()
+        .filter(address_book_collection::Column::UserId.eq(user_id))
+        .all(db)
+        .await
+}
+
+pub async fn collection_list_by_ids(
+    db: &DatabaseConnection,
+    ids: &[i32],
+) -> Result<Vec<address_book_collection::Model>, DbErr> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    address_book_collection::Entity::find()
+        .filter(address_book_collection::Column::Id.is_in(ids.to_vec()))
+        .all(db)
+        .await
+}
+
+// --- share rules / privileges ---
+
+pub async fn collection_read_rules(
+    db: &DatabaseConnection,
+    user_id: i32,
+    group_id: i32,
+) -> Result<Vec<address_book_collection_rule::Model>, DbErr> {
+    use address_book_collection_rule as r;
+    let mut res = r::Entity::find()
+        .filter(r::Column::Type.eq(r::RULE_TYPE_PERSONAL))
+        .filter(r::Column::ToId.eq(user_id))
+        .filter(r::Column::Rule.gt(0))
+        .all(db)
+        .await?;
+    let group = r::Entity::find()
+        .filter(r::Column::Type.eq(r::RULE_TYPE_GROUP))
+        .filter(r::Column::ToId.eq(group_id))
+        .filter(r::Column::Rule.gt(0))
+        .all(db)
+        .await?;
+    res.extend(group);
+    Ok(res)
+}
+
+/// Maximum rule level a user has on (owner uid, collection cid).
+pub async fn user_max_rule(
+    db: &DatabaseConnection,
+    cur_user_id: i32,
+    cur_group_id: i32,
+    uid: i32,
+    cid: i32,
+) -> Result<i32, DbErr> {
+    use address_book_collection_rule as r;
+    if cur_user_id == uid {
+        return Ok(r::RULE_FULL_CONTROL);
+    }
+    let mut max = 0;
+    if let Some(p) = r::Entity::find()
+        .filter(r::Column::Type.eq(r::RULE_TYPE_PERSONAL))
+        .filter(r::Column::CollectionId.eq(cid))
+        .filter(r::Column::ToId.eq(cur_user_id))
+        .one(db)
+        .await?
+    {
+        max = p.rule;
+        if max == r::RULE_FULL_CONTROL {
+            return Ok(max);
+        }
+    }
+    if let Some(g) = r::Entity::find()
+        .filter(r::Column::Type.eq(r::RULE_TYPE_GROUP))
+        .filter(r::Column::CollectionId.eq(cid))
+        .filter(r::Column::ToId.eq(cur_group_id))
+        .one(db)
+        .await?
+    {
+        if g.rule > max {
+            max = g.rule;
+        }
+    }
+    Ok(max)
+}
+
+pub async fn can_read(
+    db: &DatabaseConnection,
+    cur_user_id: i32,
+    cur_group_id: i32,
+    uid: i32,
+    cid: i32,
+) -> Result<bool, DbErr> {
+    Ok(user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
+        >= address_book_collection_rule::RULE_READ)
+}
+
+pub async fn can_write(
+    db: &DatabaseConnection,
+    cur_user_id: i32,
+    cur_group_id: i32,
+    uid: i32,
+    cid: i32,
+) -> Result<bool, DbErr> {
+    Ok(user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
+        >= address_book_collection_rule::RULE_READ_WRITE)
+}
+
+pub async fn can_full_control(
+    db: &DatabaseConnection,
+    cur_user_id: i32,
+    cur_group_id: i32,
+    uid: i32,
+    cid: i32,
+) -> Result<bool, DbErr> {
+    Ok(user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
+        >= address_book_collection_rule::RULE_FULL_CONTROL)
+}
+
+// --- sharing ---
+
+pub async fn shared_peer(
+    db: &DatabaseConnection,
+    share_token: &str,
+) -> Result<Option<share_record::Model>, DbErr> {
+    share_record::Entity::find()
+        .filter(share_record::Column::ShareToken.eq(share_token))
+        .one(db)
+        .await
+}

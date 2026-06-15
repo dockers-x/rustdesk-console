@@ -1,0 +1,40 @@
+[package]
+name = "rustdesk-api-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+default-run = "rustdesk-api-server"
+
+[[bin]]
+name = "rustdesk-api-server"
+path = "src/main.rs"
+
+[dependencies]
+entity = { path = "../entity" }
+
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+sea-orm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+config = { workspace = true }
+jsonwebtoken = { workspace = true }
+bcrypt = { workspace = true }
+md-5 = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rand = { workspace = true }
+uuid = { workspace = true }
+clap = { workspace = true }
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
+captcha = { workspace = true }
+base64 = { workspace = true }
+toml = { workspace = true }
+async-trait = { workspace = true }

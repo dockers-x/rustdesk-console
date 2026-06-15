@@ -1,0 +1,25 @@
+//! Service layer — ports of the Go `service/*.go` files. Each module holds the
+//! data-access + business logic for one domain, operating on a SeaORM
+//! `DatabaseConnection`.
+
+pub mod address_book;
+pub mod group;
+pub mod login_log;
+pub mod peer;
+pub mod tag;
+pub mod user;
+
+use chrono::Utc;
+use sea_orm::prelude::DateTime;
+
+/// Current time as the entities' optional timestamp (≈ GORM auto timestamps).
+pub fn now() -> Option<DateTime> {
+    Some(Utc::now().naive_utc())
+}
+
+/// Clamp page/page_size the way `service.Paginate` does (default 1 / 10).
+pub fn paginate(page: u64, page_size: u64) -> (u64, u64) {
+    let page = if page == 0 { 1 } else { page };
+    let page_size = if page_size == 0 { 10 } else { page_size };
+    (page, page_size)
+}
