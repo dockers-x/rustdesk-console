@@ -25,6 +25,8 @@ pub struct Model {
     pub r#type: i32,
     #[sea_orm(default_value = "")]
     pub uuid: String,
+    #[sea_orm(default_value = "")]
+    pub note: String,
     #[sea_orm(default_value = 0)]
     pub close_time: i64,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

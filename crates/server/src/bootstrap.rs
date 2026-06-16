@@ -28,7 +28,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{password, random};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 266;
+pub const DATABASE_VERSION: i32 = 267;
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
@@ -104,21 +104,34 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
 }
 
 async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
-    if column_exists(db, "users", "must_change_password").await? {
-        return Ok(());
+    let backend = db.get_database_backend();
+
+    if !column_exists(db, "users", "must_change_password").await? {
+        let stmt = Table::alter()
+            .table(user::Entity)
+            .add_column(
+                ColumnDef::new(user::Column::MustChangePassword)
+                    .boolean()
+                    .not_null()
+                    .default(false),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
     }
 
-    let backend = db.get_database_backend();
-    let stmt = Table::alter()
-        .table(user::Entity)
-        .add_column(
-            ColumnDef::new(user::Column::MustChangePassword)
-                .boolean()
-                .not_null()
-                .default(false),
-        )
-        .to_owned();
-    db.execute(backend.build(&stmt)).await?;
+    if !column_exists(db, "audit_conns", "note").await? {
+        let stmt = Table::alter()
+            .table(audit_conn::Entity)
+            .add_column(
+                ColumnDef::new(audit_conn::Column::Note)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
     Ok(())
 }
 

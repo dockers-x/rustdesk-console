@@ -5,10 +5,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{Duration, Utc};
 use sea_orm::Set;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use entity::{address_book, audit_conn, audit_file, group, login_log, peer};
+use entity::{address_book, audit_file, group, login_log, peer};
 
 use crate::http::middleware::{AcceptLang, ClientIp, RustClientUser};
 use crate::http::payloads::*;
@@ -33,15 +33,26 @@ pub struct HeartbeatForm {
     #[serde(default)]
     pub uuid: String,
     #[serde(default)]
+    pub version: String,
+    #[serde(default)]
     pub ver: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct HeartbeatStrategy {
+    translate_mode: bool,
+}
+
 pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response {
-    let info: HeartbeatForm = serde_json::from_str(&body).unwrap_or_default();
-    if info.uuid.is_empty() {
-        return Json(json!({})).into_response();
+    let info: HeartbeatForm = match serde_json::from_str(&body) {
+        Ok(info) => info,
+        Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
+    };
+    let rustdesk_id = resolve_heartbeat_rustdesk_id(&info.id, &info.uuid);
+    if rustdesk_id.is_empty() {
+        return Json(json!({ "error": "missing id" })).into_response();
     }
-    if let Ok(Some(p)) = services::peer::find_by_id(&state.db, &info.id).await {
+    if let Ok(Some(p)) = services::peer::find_by_id(&state.db, &rustdesk_id).await {
         if Utc::now().timestamp() - p.last_online_time >= 30 {
             let am = peer::ActiveModel {
                 row_id: Set(p.row_id),
@@ -51,7 +62,89 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
             let _ = services::peer::update(&state.db, am).await;
         }
     }
-    Json(json!({})).into_response()
+    Json(json!({
+        "modified_at": Utc::now().timestamp(),
+        "strategy": resolve_capability(&normalize_reported_version(&info.version, info.ver)),
+    }))
+    .into_response()
+}
+
+fn resolve_heartbeat_rustdesk_id(id: &str, uuid: &str) -> String {
+    if !id.is_empty() {
+        id.to_string()
+    } else {
+        uuid.to_string()
+    }
+}
+
+fn normalize_reported_version(version: &str, ver: i64) -> String {
+    if !version.is_empty() {
+        version.to_string()
+    } else if ver > 0 {
+        ver.to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn resolve_capability(version: &str) -> HeartbeatStrategy {
+    HeartbeatStrategy {
+        translate_mode: version_gte(version, "1.4.6"),
+    }
+}
+
+fn version_gte(version: &str, target: &str) -> bool {
+    let version = parse_version(version);
+    let target = parse_version(target);
+    for i in 0..3 {
+        if version[i] > target[i] {
+            return true;
+        }
+        if version[i] < target[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn parse_version(version: &str) -> [i64; 3] {
+    let version = version.trim().trim_start_matches('v');
+    let mut parsed = [0; 3];
+    for (i, part) in version.split('.').take(3).enumerate() {
+        let Ok(n) = part.parse::<i64>() else {
+            return [0; 3];
+        };
+        parsed[i] = n;
+    }
+    parsed
+}
+
+#[cfg(test)]
+mod heartbeat_tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_id_prefers_id_and_falls_back_to_uuid() {
+        assert_eq!(
+            resolve_heartbeat_rustdesk_id("182921366", "u-1"),
+            "182921366"
+        );
+        assert_eq!(resolve_heartbeat_rustdesk_id("", "u-1"), "u-1");
+    }
+
+    #[test]
+    fn heartbeat_version_prefers_string_and_falls_back_to_numeric_ver() {
+        assert_eq!(normalize_reported_version("1.4.6", 1002070), "1.4.6");
+        assert_eq!(normalize_reported_version("", 10604), "10604");
+        assert_eq!(normalize_reported_version("", 0), "");
+    }
+
+    #[test]
+    fn heartbeat_capability_enables_translate_mode_from_1_4_6() {
+        assert!(!resolve_capability("1.4.5").translate_mode);
+        assert!(resolve_capability("1.4.6").translate_mode);
+        assert!(resolve_capability("v1.4.7").translate_mode);
+    }
 }
 
 // ---------- login ----------
@@ -456,25 +549,9 @@ pub async fn shared_peer(State(state): State<AppState>, Json(body): Json<Value>)
 // ---------- audit ----------
 
 pub async fn audit_conn(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
-    let g = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let gi = |k: &str| body.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-    let am = audit_conn::ActiveModel {
-        action: Set(g("action")),
-        conn_id: Set(gi("conn_id")),
-        peer_id: Set(g("peer_id")),
-        from_peer: Set(g("from_peer")),
-        from_name: Set(g("from_name")),
-        ip: Set(g("ip")),
-        session_id: Set(g("session_id")),
-        r#type: Set(gi("type") as i32),
-        uuid: Set(g("uuid")),
-        close_time: Set(gi("close_time")),
-        created_at: Set(services::now()),
-        updated_at: Set(services::now()),
-        ..Default::default()
-    };
-    use sea_orm::ActiveModelTrait;
-    let _ = am.insert(&state.db).await;
+    if let Err(e) = services::audit::record_conn_event(&state.db, &body).await {
+        tracing::warn!("failed to record audit conn event: {e}");
+    }
     Json(Value::Null).into_response()
 }
 
