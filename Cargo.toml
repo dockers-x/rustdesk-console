@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/entity", "crates/server"]
 
 [workspace.package]
-version = "1.0.0"
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/czyt/rustdesk-console"
@@ -13,7 +13,7 @@ description = "RustDesk API server, rewritten in Rust (axum + SeaORM)"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 # Web
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "multipart"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 # ORM
@@ -36,6 +36,8 @@ config = { version = "0.14", default-features = false, features = ["yaml"] }
 jsonwebtoken = "9"
 bcrypt = "0.15"
 md-5 = "0.10"
+hmac = "0.12"
+sha1 = "0.10"
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 # Errors / logging
@@ -43,6 +45,7 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 # Misc
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }

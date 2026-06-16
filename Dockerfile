@@ -19,7 +19,7 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY . .
 COPY --from=webui /app/resources/admin ./resources/admin
-RUN cargo build --release -p rustdesk-api-server
+RUN cargo build --release -p rustdesk-console
 
 # ---------------------------------------------------------------------------
 # Stage 3: minimal runtime. The binary is self-contained (frontend + i18n +
@@ -30,9 +30,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /app/target/release/rustdesk-api-server /app/rustdesk-api-server
+COPY --from=builder /app/target/release/rustdesk-console /app/rustdesk-console
 COPY --from=builder /app/conf /app/conf
 RUN mkdir -p /app/data /app/runtime
 VOLUME /app/data
 EXPOSE 21114
-CMD ["./rustdesk-api-server", "-c", "./conf/config.yaml"]
+CMD ["./rustdesk-console", "-c", "./conf/config.yaml"]

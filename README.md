@@ -1,200 +1,133 @@
-# RustDesk Console (Rust)
+# RustDesk Console
 
-A Rust rewrite of [`lejianwen/rustdesk-api`](https://github.com/lejianwen/rustdesk-api) — a
-self-hosted API server for [RustDesk](https://rustdesk.com), built with **axum** + **SeaORM**.
-The web frontend is **embedded into a single binary**, so deployment is one self-contained
-executable.
+A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
+management, address books, audit logs and a built-in admin web UI, all shipped as a
+**single self-contained binary**.
 
-> 中文说明见下方 [中文文档](#中文文档)。
+It is a from-scratch **Rust rewrite** of [`lejianwen/rustdesk-api`](https://github.com/lejianwen/rustdesk-api),
+with its own brand-new admin web interface (not the original web project).
 
-![rust](https://img.shields.io/badge/rust-1.96-blue)
-![axum](https://img.shields.io/badge/axum-0.7-blue)
-![sea--orm](https://img.shields.io/badge/SeaORM-1.1-green)
+**English** · [中文](README.zh-CN.md)
+
+![release](https://img.shields.io/badge/release-v0.1.0-blue)
+![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 ---
 
-## Highlights
+## Features
 
-- **Single binary** — the Flutter web client, i18n bundles and templates are embedded via
-  `rust-embed`. No separate `resources/` directory to ship.
-- **Wire-compatible** — JSON keys, headers, token semantics and the response envelope match the
-  original Go server, so existing RustDesk clients and the admin web UI work unchanged.
-- **Multi-database** — SQLite, MySQL and PostgreSQL from one codebase (SeaORM). Tables are created
-  automatically on first run (the equivalent of GORM `AutoMigrate`), and a random admin password is
-  generated and logged.
-- **Auth** — bcrypt password hashing (with transparent upgrade from the legacy MD5 scheme), JWT,
-  device-token auth for the PC client (`Authorization: Bearer`) and the admin panel (`api-token`),
-  captcha + login rate-limiting.
-
-## Project status
-
-The backend is now **feature-complete** against the original Go server's API surface:
-
-| Area | Status |
-| --- | --- |
-| RustDesk PC-client API (login, heartbeat, sysinfo, address book, groups, peers, web client, audit) | ✅ implemented |
-| Admin auth (login, captcha, logout, config) + register | ✅ implemented |
-| Admin CRUD: user, group, device group, tag, peer, oauth, address book (+collections/rules), login-log, audit, share records, user tokens | ✅ implemented |
-| Server-command dispatch (cmd CRUD + live `sendCmd` over TCP) | ✅ implemented |
-| `my/*` self-service API (address book, collections, rules, tags, peers, share records, login logs) | ✅ implemented |
-| OAuth/OIDC login (GitHub, Google, OIDC, LinuxDO) + web SSO + bind/unbind | ✅ implemented¹ |
-| LDAP login (search + group check + sync) | ✅ implemented¹ |
-| Single-binary frontend embedding, Docker, multi-arch CI | ✅ implemented |
-
-¹ The OAuth/OIDC/LDAP **external** flows require real identity providers / a directory
-server to exercise. The full handshake (state cache, web SSO, callback, bind, polling) is
-verified end-to-end; the external token-exchange and LDAP bind paths are implemented over
-rustls but need a live provider to validate.
+- **Works with the RustDesk client out of the box** — login, heartbeat, device
+  (peer) registration, address books, groups, and the web client config. JSON shapes,
+  headers and tokens match the original server, so existing clients need no changes.
+- **Admin web console** (served at `/_admin/`) to manage:
+  - Users, groups, device groups, tags, devices
+  - Address books, collections and share rules
+  - OAuth providers, login logs, connection/file audit logs, share records, tokens
+  - Light/dark theme, English / 中文
+- **Sign-in options**: username/password (with captcha + rate limiting), third-party
+  login (GitHub, Google, OIDC, LinuxDO), web SSO, and LDAP.
+- **Personal area** for each user to manage their own devices, address book, tags,
+  share records and login history.
+- **Server commands**: send commands to your RustDesk ID/relay server from the console.
+- **Single binary**: the web UI, translations and templates are embedded — nothing
+  else to deploy. Works with **SQLite, MySQL or PostgreSQL**; tables are created
+  automatically on first run.
+- **File upload**: local uploads out of the box, or direct-to-OSS with a signed policy.
 
 ## Quick start
+
+### Docker Compose (recommended)
+
+```bash
+docker compose up -d --build
+```
+
+Then open `http://<host>:21114/_admin/`.
+
+### Pre-built image
+
+```bash
+docker run -d --name rustdesk-console -p 21114:21114 \
+  -v $PWD/data:/app/data -v $PWD/conf:/app/conf \
+  ghcr.io/dockers-x/rustdesk-console:latest
+```
+
+Images are published to both **GHCR** (`ghcr.io/dockers-x/rustdesk-console`) and
+**Docker Hub** on each release.
 
 ### From source
 
 ```bash
-cargo build --release -p rustdesk-api-server
-./target/release/rustdesk-api-server -c ./conf/config.yaml
+# 1) build the admin web UI (outputs into resources/admin)
+cd web && npm install && npx vite build && cd ..
+# 2) build the server (embeds the UI)
+cargo build --release
+./target/release/rustdesk-console -c ./conf/config.yaml
 ```
 
-On first run the admin password is printed to the log:
+### First login
+
+On first start an **admin** account is created and its random password is printed to
+the log:
 
 ```
-INFO rustdesk_api_server::bootstrap: Admin Password Is: <random>
+INFO rustdesk-console: Admin Password Is: <random>
 ```
 
-The server listens on `0.0.0.0:21114` by default. The admin UI is served at `/_admin/`, the web
-client at `/webclient/`.
-
-### Docker
-
-```bash
-docker compose up -d --build
-```
-
-The Docker build clones and builds the admin UI from
-[`lejianwen/rustdesk-api-web`](https://github.com/lejianwen/rustdesk-api-web) and embeds it into the
-binary. Data (SQLite) and config are mounted from `./data` and `./conf`.
-
-### CLI
-
-```bash
-rustdesk-api-server reset-admin-pwd <newpassword>     # reset the admin (user 1) password
-rustdesk-api-server reset-pwd <userId> <newpassword>  # reset any user's password
-```
+The server listens on `0.0.0.0:21114`. Sign in at `/_admin/`. You can reset the
+password any time (see [CLI](#cli)).
 
 ## Configuration
 
-Config is read from `conf/config.yaml`. Every key can be overridden with an environment variable
-named `RUSTDESK_API_<PATH>`, where `<PATH>` is the upper-cased key path joined by `_` and hyphens
-replaced by `_` (identical to the original server):
+Settings live in `conf/config.yaml`. **Every** setting can also be provided via an
+environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, join with
+`_`, and replace `-` with `_`. This matches the original server exactly.
 
-| Config key | Environment variable |
+| Setting | Environment variable |
 | --- | --- |
-| `app.web-client` | `RUSTDESK_API_APP_WEB_CLIENT` |
 | `rustdesk.id-server` | `RUSTDESK_API_RUSTDESK_ID_SERVER` |
-| `gorm.type` | `RUSTDESK_API_GORM_TYPE` |
+| `rustdesk.relay-server` | `RUSTDESK_API_RUSTDESK_RELAY_SERVER` |
+| `rustdesk.api-server` | `RUSTDESK_API_RUSTDESK_API_SERVER` |
+| `rustdesk.key` | `RUSTDESK_API_RUSTDESK_KEY` |
+| `gorm.type` | `RUSTDESK_API_GORM_TYPE` (`sqlite` / `mysql` / `postgresql`) |
+| `mysql.addr` / `mysql.dbname` / … | `RUSTDESK_API_MYSQL_ADDR` / `RUSTDESK_API_MYSQL_DBNAME` / … |
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
+| `app.register` | `RUSTDESK_API_APP_REGISTER` |
+| `app.disable-pwd-login` | `RUSTDESK_API_APP_DISABLE_PWD_LOGIN` |
+| `logger.path` / `logger.level` | `RUSTDESK_API_LOGGER_PATH` / `RUSTDESK_API_LOGGER_LEVEL` |
 
-Supported `gorm.type` values: `sqlite` (default, file `./data/rustdeskapi.db`), `mysql`,
-`postgresql`.
+Database default is **SQLite** at `./data/rustdeskapi.db`. Logs go to `logger.path`
+(default `./runtime/log.txt`) at `logger.level`, or to stdout if the path is empty.
 
-## Architecture
+## Web admin UI
 
-```
-crates/
-  entity/   SeaORM entities (17 models), ported 1:1 from the Go model/ structs
-  server/   axum app, config, bootstrap (connect + migrate + seed), services, HTTP layer, CLI
-web/        React + Cloudflare kumo admin UI (Vite + TS); build output embeds into the binary
-resources/  Flutter web client + i18n + templates (embedded); admin/ is filled from web/ at build time
-conf/       default config.yaml
-```
+The admin console under `web/` is a **brand-new interface we wrote ourselves**
+(it does not use the original project's web app). Its production build is embedded into
+the binary and served at `/_admin/`.
 
-Request flow: `router` → extractor-based auth middleware (`RustClientUser` / `BackendUser` /
-`AdminUser`) → controller → service → SeaORM entity.
-
-## Web UI
-
-A new admin UI is being built in `web/` with **React 19 + [Cloudflare kumo](https://github.com/cloudflare/kumo)**
-(Base UI + Tailwind v4), TanStack Query, and react-i18next. Its production build is emitted to
-`resources/admin/` and embedded into the binary, served at `/_admin/`.
+For UI development:
 
 ```bash
 cd web
 npm install
-npm run dev      # dev server, proxies /api -> http://127.0.0.1:21114
-npm run build    # outputs to ../resources/admin (then rebuild the Rust binary to embed)
+npm run dev    # dev server; proxies /api to http://127.0.0.1:21114
 ```
 
-Current screens: sign-in (with captcha) and user management (list / create / edit / delete,
-search, pagination, light-dark, EN/中文). Remaining management screens are being added on the
-same data-fetching + table/dialog pattern; the backend endpoints for all of them already exist.
+## CLI
+
+```bash
+rustdesk-console reset-admin-pwd <newpassword>    # reset the admin (user 1) password
+rustdesk-console reset-pwd <userId> <newpassword> # reset any user's password
+rustdesk-console -c ./conf/config.yaml            # run the server (default)
+```
 
 ## Tech stack
 
-axum · tokio · SeaORM (sqlx) · jsonwebtoken · bcrypt · rust-embed · clap · tracing · captcha.
+Server: Rust · axum · SeaORM (SQLite/MySQL/PostgreSQL) · tokio · JWT · bcrypt ·
+rust-embed. Web: React + [Cloudflare kumo](https://github.com/cloudflare/kumo) ·
+Vite · TanStack Query.
 
 ## Acknowledgements
 
-This project is a Rust port of [`lejianwen/rustdesk-api`](https://github.com/lejianwen/rustdesk-api);
-the admin web UI comes from
-[`lejianwen/rustdesk-api-web`](https://github.com/lejianwen/rustdesk-api-web). Licensed under
-Apache-2.0.
-
----
-
-## 中文文档
-
-[RustDesk](https://rustdesk.com) 自建 API 服务的 **Rust 重写版**，基于 **axum + SeaORM**，前端被
-**打包进单个二进制文件**，部署时只需一个可执行文件。
-
-### 特性
-
-- **单文件部署**：Flutter Web 客户端、i18n、模板通过 `rust-embed` 嵌入二进制，无需额外的
-  `resources/` 目录。
-- **协议兼容**：JSON 字段、请求头、令牌语义、响应结构与原 Go 版本一致，现有 RustDesk 客户端与后台
-  Web UI 无需改动即可使用。
-- **多数据库**：SQLite / MySQL / PostgreSQL 同一套代码（SeaORM）。首次启动自动建表（等价于 GORM
-  `AutoMigrate`），并生成并打印一个随机管理员密码。
-- **认证**：bcrypt 密码哈希（兼容旧 MD5 并自动升级）、JWT、PC 客户端设备令牌
-  （`Authorization: Bearer`）、后台 `api-token`、验证码与登录限流。
-
-### 当前进度（第一阶段）
-
-已实现并通过测试的核心：RustDesk 客户端 API（登录、心跳、系统信息、地址簿、群组、设备、Web
-客户端、审计）、后台登录/验证码/配置、用户/群组/设备组/标签/设备的增删改查、登录日志查询、单文件
-前端嵌入、Docker 与多架构 CI。
-
-暂未移植：OAuth/OIDC/LDAP 登录、Web SSO，以及部分后台增删改查（oauth、审计管理、分享记录、用户令牌、
-地址簿集合、服务器命令、`my/*`）——这些接口会返回明确的 `501 NotImplemented` 并记录日志，留待后续
-阶段补全。
-
-### 快速开始
-
-```bash
-# 源码编译
-cargo build --release -p rustdesk-api-server
-./target/release/rustdesk-api-server -c ./conf/config.yaml
-
-# 或使用 Docker（构建时会自动拉取并打包后台 Web UI）
-docker compose up -d --build
-```
-
-首次启动会在日志中打印管理员密码。默认监听 `0.0.0.0:21114`，后台 UI 位于 `/_admin/`，Web 客户端位于
-`/webclient/`。
-
-### 配置
-
-读取 `conf/config.yaml`；任意配置项均可用环境变量 `RUSTDESK_API_<键路径>` 覆盖（大写、`.`/`-` 均转为
-`_`），例如 `rustdesk.id-server` 对应 `RUSTDESK_API_RUSTDESK_ID_SERVER`。
-
-### 命令行
-
-```bash
-rustdesk-api-server reset-admin-pwd <新密码>     # 重置管理员（用户 1）密码
-rustdesk-api-server reset-pwd <用户ID> <新密码>   # 重置指定用户密码
-```
-
-### 致谢
-
-本项目是 [`lejianwen/rustdesk-api`](https://github.com/lejianwen/rustdesk-api) 的 Rust 移植版，后台 Web
-UI 来自 [`lejianwen/rustdesk-api-web`](https://github.com/lejianwen/rustdesk-api-web)。以 Apache-2.0
-协议开源。
+This project is a Rust port of [`lejianwen/rustdesk-api`](https://github.com/lejianwen/rustdesk-api)
+by 乐见文. The admin web UI is our own rewrite. Licensed under Apache-2.0.

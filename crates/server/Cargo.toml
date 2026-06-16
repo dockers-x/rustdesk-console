@@ -1,13 +1,13 @@
 [package]
-name = "rustdesk-api-server"
+name = "rustdesk-console"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description.workspace = true
-default-run = "rustdesk-api-server"
+default-run = "rustdesk-console"
 
 [[bin]]
-name = "rustdesk-api-server"
+name = "rustdesk-console"
 path = "src/main.rs"
 
 [dependencies]
@@ -24,11 +24,14 @@ config = { workspace = true }
 jsonwebtoken = { workspace = true }
 bcrypt = { workspace = true }
 md-5 = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
 clap = { workspace = true }

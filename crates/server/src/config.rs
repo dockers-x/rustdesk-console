@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const DB_TYPE_SQLITE: &str = "sqlite";
@@ -20,7 +20,7 @@ pub const CACHE_TYPE_REDIS: &str = "redis";
 pub const DEFAULT_ID_SERVER_PORT: i32 = 21116;
 pub const DEFAULT_RELAY_SERVER_PORT: i32 = 21117;
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub lang: String,
@@ -40,7 +40,7 @@ pub struct Config {
     pub ldap: Ldap,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct App {
     #[serde(rename = "web-client")]
@@ -69,7 +69,7 @@ impl App {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Admin {
     pub title: String,
@@ -93,7 +93,7 @@ impl Admin {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Gorm {
     pub r#type: String,
@@ -103,7 +103,7 @@ pub struct Gorm {
     pub max_open_conns: u32,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Mysql {
     pub addr: String,
@@ -113,7 +113,7 @@ pub struct Mysql {
     pub tls: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Postgresql {
     pub host: String,
@@ -126,7 +126,7 @@ pub struct Postgresql {
     pub time_zone: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Gin {
     #[serde(rename = "api-addr")]
@@ -140,7 +140,7 @@ pub struct Gin {
     pub trust_proxy: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Logger {
     pub path: String,
@@ -149,7 +149,7 @@ pub struct Logger {
     pub report_caller: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Redis {
     pub addr: String,
@@ -157,7 +157,7 @@ pub struct Redis {
     pub db: i64,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Cache {
     pub r#type: String,
@@ -171,7 +171,7 @@ pub struct Cache {
     pub file_dir: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Oss {
     #[serde(rename = "access-key-id")]
@@ -187,7 +187,7 @@ pub struct Oss {
     pub max_byte: i64,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Jwt {
     pub key: String,
@@ -201,7 +201,7 @@ impl Jwt {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Rustdesk {
     #[serde(rename = "id-server")]
@@ -234,14 +234,14 @@ impl Rustdesk {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Proxy {
     pub enable: bool,
     pub host: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Ldap {
     pub enable: bool,
@@ -259,7 +259,7 @@ pub struct Ldap {
     pub user: LdapUser,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct LdapUser {
     #[serde(rename = "base-dn")]
@@ -284,15 +284,36 @@ pub struct LdapUser {
 
 /// Load configuration from `path`, apply environment overrides, then run the
 /// same post-load fix-ups as the Go server (`LoadKeyFile`, `Admin.Init`).
+///
+/// Env overrides are applied against the *full* config schema (defaults merged
+/// with the file), so every field can be set by `RUSTDESK_API_*` even when it is
+/// absent from the YAML — matching viper's `AutomaticEnv` on the Go side.
 pub fn init(path: &str) -> anyhow::Result<Config> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("Fatal error config file {}: {}", path, e))?;
-    let mut value: Value = serde_yaml_to_json(&raw)?;
+    let file_val = serde_yaml_to_json(&raw)?;
+    // Start from the full default schema so env vars for keys missing in the
+    // file still resolve, then overlay the file, then env vars.
+    let mut value = serde_json::to_value(Config::default())?;
+    merge(&mut value, file_val);
     apply_env_overrides(&mut value, "RUSTDESK_API");
     let mut cfg: Config = serde_json::from_value(value)?;
     cfg.rustdesk.load_key_file();
     cfg.admin.init();
     Ok(cfg)
+}
+
+/// Deep-merge `overlay` into `base` (objects merge recursively; other values
+/// replace). Used to layer the YAML file on top of the default schema.
+fn merge(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Object(b), Value::Object(o)) => {
+            for (k, v) in o {
+                merge(b.entry(k).or_insert(Value::Null), v);
+            }
+        }
+        (b, o) => *b = o,
+    }
 }
 
 /// Parse YAML into a `serde_json::Value` (the `config` crate's yaml support
@@ -410,5 +431,23 @@ mod tests {
         assert_eq!(v["app"]["web-client"], serde_json::json!(0));
         assert_eq!(v["app"]["register"], serde_json::json!(true));
         assert_eq!(v["rustdesk"]["personal"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn env_overrides_apply_to_schema_keys_absent_from_file() {
+        // cache/redis/oss are not in conf/config.yaml, but viper (and now we)
+        // still bind them from the env via the full default schema.
+        std::env::set_var("RUSTDESK_API_CACHE_TYPE", "redis");
+        std::env::set_var("RUSTDESK_API_REDIS_DB", "3");
+        std::env::set_var("RUSTDESK_API_OSS_HOST", "https://oss.example.com");
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        apply_env_overrides(&mut value, "RUSTDESK_API");
+        let cfg: Config = serde_json::from_value(value).unwrap();
+        std::env::remove_var("RUSTDESK_API_CACHE_TYPE");
+        std::env::remove_var("RUSTDESK_API_REDIS_DB");
+        std::env::remove_var("RUSTDESK_API_OSS_HOST");
+        assert_eq!(cfg.cache.r#type, "redis");
+        assert_eq!(cfg.redis.db, 3);
+        assert_eq!(cfg.oss.host, "https://oss.example.com");
     }
 }

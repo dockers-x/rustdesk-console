@@ -3,9 +3,10 @@
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::http::{admin, api, my, oauth, static_files};
+use crate::http::{admin, api, file, my, oauth, static_files};
 use crate::state::AppState;
 
 pub fn build(state: AppState) -> Router {
@@ -78,6 +79,17 @@ pub fn build(state: AppState) -> Router {
         .route("/_admin", get(static_files::admin_index))
         .route("/_admin/", get(static_files::admin_index))
         .route("/_admin/*path", get(static_files::admin_path));
+
+    // user-uploaded files (written to disk under resources/public/upload)
+    let upload_dir = {
+        let base = if state.config.gin.resources_path.is_empty() {
+            "resources".to_string()
+        } else {
+            state.config.gin.resources_path.clone()
+        };
+        format!("{base}/public/upload")
+    };
+    app = app.nest_service("/upload", ServeDir::new(upload_dir));
 
     app.layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -194,6 +206,10 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/rustdesk/cmdCreate", post(admin::rustdesk_cmd_create))
         .route("/api/admin/rustdesk/cmdDelete", post(admin::rustdesk_cmd_delete))
         .route("/api/admin/rustdesk/sendCmd", post(admin::rustdesk_send_cmd))
+        // file upload (local + OSS)
+        .route("/api/admin/file/upload", post(file::upload))
+        .route("/api/admin/file/oss_token", get(file::oss_token))
+        .route("/api/admin/file/notify", post(file::notify))
         // my/*
         .route("/api/admin/my/share_record/list", get(my::share_record_list))
         .route("/api/admin/my/share_record/delete", post(my::share_record_delete))

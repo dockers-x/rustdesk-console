@@ -46,11 +46,11 @@ jobs:
           path: resources/admin
       - name: Build (${{ matrix.target }})
         run: |
-          cross build --release --target ${{ matrix.target }} -p rustdesk-api-server
+          cross build --release --target ${{ matrix.target }} -p rustdesk-console
       - name: Package
         run: |
           mkdir -p release
-          cp target/${{ matrix.target }}/release/rustdesk-api-server release/
+          cp target/${{ matrix.target }}/release/rustdesk-console release/
           cp -r conf release/
           mkdir -p release/data release/runtime
           tar -C release -czf rustdesk-console-${{ matrix.target }}.tar.gz .

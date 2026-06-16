@@ -11,6 +11,7 @@ mod config;
 mod error;
 mod i18n;
 mod http;
+mod logging;
 mod services;
 mod state;
 mod support;
@@ -42,20 +43,15 @@ enum Command {
 async fn main() {
     let cli = Cli::parse();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
-        )
-        .init();
-
     let cfg = match config::init(&cli.config) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("{e}");
+            eprintln!("{e}");
             std::process::exit(1);
         }
     };
+
+    logging::init(&cfg);
 
     let result = match cli.command {
         Some(Command::ResetAdminPwd { pwd }) => reset_password(&cfg, 1, &pwd).await,
