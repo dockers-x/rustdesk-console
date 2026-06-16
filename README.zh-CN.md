@@ -1,5 +1,7 @@
 # RustDesk Console
 
+![release](https://img.shields.io/badge/release-v0.1.0-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
 
@@ -7,9 +9,6 @@
 **Rust 完全重写版**，并配有一套**全新自研的管理后台**（不是原项目的 web）。
 
 [English](README.md) · **中文**
-
-![release](https://img.shields.io/badge/release-v0.1.0-blue)
-![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 ---
 
@@ -64,7 +63,7 @@ cargo build --release
 
 首次启动会创建 **admin** 账号，随机密码打印在日志里：
 
-```
+```text
 INFO rustdesk-console: Admin Password Is: <随机密码>
 ```
 

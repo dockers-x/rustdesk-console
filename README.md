@@ -1,5 +1,7 @@
 # RustDesk Console
 
+![release](https://img.shields.io/badge/release-v0.1.0-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
 **single self-contained binary**.
@@ -8,9 +10,6 @@ It is a from-scratch **Rust rewrite** of [`lejianwen/rustdesk-api`](https://gith
 with its own brand-new admin web interface (not the original web project).
 
 **English** · [中文](README.zh-CN.md)
-
-![release](https://img.shields.io/badge/release-v0.1.0-blue)
-![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 ---
 
@@ -70,7 +69,7 @@ cargo build --release
 On first start an **admin** account is created and its random password is printed to
 the log:
 
-```
+```text
 INFO rustdesk-console: Admin Password Is: <random>
 ```
 
