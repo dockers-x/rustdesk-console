@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.2-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.3-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
@@ -27,6 +27,8 @@
 - **服务器命令**：从后台向 RustDesk ID/中继服务器下发命令。
 - **单文件部署**：前端、翻译、模板都嵌入二进制，无需额外文件。支持
   **SQLite / MySQL / PostgreSQL**，首次启动自动建表。
+- **可观测性**：提供公开的 `/health` 和 Prometheus 兼容 `/metrics`，方便容器、
+  负载均衡和监控系统接入。
 - **文件上传**：内置本地上传，也支持带签名策略的 OSS 直传。
 
 ## 快速开始
@@ -112,6 +114,18 @@ rustdesk-console reset-admin-pwd <新密码>
 容器镜像默认设置 `TZ=Asia/Shanghai`，`docker-compose.yaml` 也支持用标准 `TZ`
 环境变量覆盖。非中国时区部署时可改成对应 IANA 时区，例如 `TZ=Europe/Berlin`。
 业务时间戳仍按 UTC 保存；`TZ` 用于服务端本地日志/启动时间，以及管理后台界面的本地时间显示。
+
+## 可观测性
+
+服务提供无需后台登录的机器可读接口：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /health` | 存活/就绪 JSON。API 和数据库可用时返回 `200`，数据库检查失败时返回 `503`。 |
+| `GET /metrics` | Prometheus 文本指标，包含用户数、设备数、在线设备数、活动连接、审计记录、登录日志、运行时长和数据库状态。 |
+
+`rustdesk_console_peers_online` 统计最近 90 秒内上报过心跳的设备，和 RustDesk
+心跳更新节奏保持一致，同时避免边界时间导致监控短暂抖动。
 
 ## 管理后台
 

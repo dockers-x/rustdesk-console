@@ -3,6 +3,7 @@ pub mod api;
 pub mod file;
 pub mod middleware;
 pub mod my;
+pub mod observability;
 pub mod oauth;
 pub mod payloads;
 pub mod response;

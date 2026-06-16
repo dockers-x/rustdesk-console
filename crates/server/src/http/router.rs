@@ -6,7 +6,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::http::{admin, api, file, my, oauth, static_files};
+use crate::http::{admin, api, file, my, oauth, observability, static_files};
 use crate::state::AppState;
 
 pub fn build(state: AppState) -> Router {
@@ -20,6 +20,8 @@ pub fn build(state: AppState) -> Router {
     let mut app = Router::new()
         // web index + config
         .route("/", get(static_files::index))
+        .route("/health", get(observability::health))
+        .route("/metrics", get(observability::metrics))
         // ---- client API (/api) ----
         .route("/api/", get(api::index))
         .route("/api/version", get(api::version))

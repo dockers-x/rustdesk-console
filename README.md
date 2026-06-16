@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.2-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.3-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
@@ -31,6 +31,8 @@ with its own brand-new admin web interface (not the original web project).
 - **Single binary**: the web UI, translations and templates are embedded — nothing
   else to deploy. Works with **SQLite, MySQL or PostgreSQL**; tables are created
   automatically on first run.
+- **Observability**: public `/health` and Prometheus-compatible `/metrics` endpoints
+  for containers, load balancers and monitoring systems.
 - **File upload**: local uploads out of the box, or direct-to-OSS with a signed policy.
 
 ## Quick start
@@ -124,6 +126,18 @@ override it with the standard `TZ` environment variable. Set it to your IANA tim
 zone, for example `TZ=Europe/Berlin`, if you do not want Asia/Shanghai local time.
 Business timestamps remain stored in UTC; `TZ` is used for server-local logs/start
 time and for the admin UI's local-time display.
+
+## Observability
+
+The server exposes machine-readable observability endpoints without admin login:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Liveness/readiness JSON. Returns `200` when the API and database are available, or `503` when the database check fails. |
+| `GET /metrics` | Prometheus text metrics with counts for users, peers, online peers, active connections, audit rows, login logs, uptime and database status. |
+
+`rustdesk_console_peers_online` uses peers seen in the last 90 seconds, matching the
+RustDesk heartbeat update cadence while avoiding short boundary flaps.
 
 ## Web admin UI
 
