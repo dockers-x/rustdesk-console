@@ -94,28 +94,28 @@ export function MyProfilePage() {
     <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-semibold">{t("myInfo")}</h1>
-        <p className="mt-1 text-sm text-color-muted">{t("myInfoHint")}</p>
+        <p className="mt-1 text-sm text-kumo-subtle">{t("myInfoHint")}</p>
       </div>
 
-      <section className="rounded-lg border border-color-border bg-kumo-elevated p-5">
+      <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
         <h2 className="mb-4 text-base font-semibold">{t("account")}</h2>
         <dl className="grid gap-3 text-sm sm:grid-cols-[140px_1fr]">
           <div className="contents">
-            <dt className="text-color-muted">{t("username")}</dt>
+            <dt className="text-kumo-subtle">{t("username")}</dt>
             <dd className="font-medium">{user.data?.username || "—"}</dd>
           </div>
           <div className="contents">
-            <dt className="text-color-muted">{t("email")}</dt>
+            <dt className="text-kumo-subtle">{t("email")}</dt>
             <dd className="font-medium">{user.data?.email || "—"}</dd>
           </div>
           <div className="contents">
-            <dt className="text-color-muted">{t("nickname")}</dt>
+            <dt className="text-kumo-subtle">{t("nickname")}</dt>
             <dd className="font-medium">{user.data?.nickname || "—"}</dd>
           </div>
         </dl>
       </section>
 
-      <section className="rounded-lg border border-color-border bg-kumo-elevated p-5">
+      <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
         <h2 className="mb-4 text-base font-semibold">{t("changePassword")}</h2>
         <form onSubmit={submitPassword} className="grid max-w-xl gap-3">
           <label className="block">
@@ -155,9 +155,9 @@ export function MyProfilePage() {
         </form>
       </section>
 
-      <section className="rounded-lg border border-color-border bg-kumo-elevated p-5">
+      <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
         <h2 className="mb-4 text-base font-semibold">{t("oauthBinding")}</h2>
-        <div className="overflow-x-auto rounded-lg border border-color-border">
+        <div className="overflow-x-auto rounded-lg border border-kumo-line">
           <Table>
             <Table.Header>
               <Table.Row>
@@ -201,13 +201,13 @@ export function MyProfilePage() {
             </Table.Body>
           </Table>
           {!oauth.isLoading && (oauth.data ?? []).length === 0 && (
-            <div className="p-4 text-sm text-color-muted">{t("noData")}</div>
+            <div className="p-4 text-sm text-kumo-subtle">{t("noData")}</div>
           )}
         </div>
       </section>
 
       {config.data?.hello && (
-        <section className="rounded-lg border border-color-border bg-kumo-elevated p-5">
+        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <h2 className="mb-3 text-base font-semibold">
             {config.data.title || t("notice")}
           </h2>

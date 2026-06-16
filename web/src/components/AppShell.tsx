@@ -1,15 +1,61 @@
 import { useState } from "react";
+import type { ComponentType } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
-import { List, Monitor, Moon, Sun, SignOut } from "@phosphor-icons/react";
+import {
+  List,
+  Monitor,
+  Moon,
+  Sun,
+  SignOut,
+  User,
+  Users,
+  UsersThree,
+  Stack,
+  Tag,
+  Key,
+  AddressBook,
+  Folders,
+  ShieldCheck,
+  ShareNetwork,
+  Ticket,
+  SignIn,
+  PlugsConnected,
+  FileText,
+  Terminal,
+  Dot,
+} from "@phosphor-icons/react";
 import { clearToken } from "../lib/auth";
+import { getMode, setMode } from "../lib/theme";
 import {
   ADMIN_RESOURCES,
   MY_RESOURCES,
   resourcePath,
 } from "../resource/registry";
 import i18n from "../i18n";
+
+type IconType = ComponentType<{ size?: number; weight?: "regular" | "fill" }>;
+
+/// Sidebar icon per nav key (titleKey). Falls back to a dot.
+const NAV_ICONS: Record<string, IconType> = {
+  myInfo: User,
+  users: Users,
+  groups: UsersThree,
+  deviceGroups: Stack,
+  tags: Tag,
+  devices: Monitor,
+  oauth: Key,
+  addressBook: AddressBook,
+  collections: Folders,
+  shareRules: ShieldCheck,
+  shareRecords: ShareNetwork,
+  userTokens: Ticket,
+  loginLogs: SignIn,
+  auditConn: PlugsConnected,
+  auditFile: FileText,
+  serverCommands: Terminal,
+};
 
 interface NavItem {
   to: string;
@@ -35,23 +81,16 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
   },
 ];
 
-function applyTheme(dark: boolean) {
-  document.documentElement.style.colorScheme = dark ? "dark" : "light";
-  document.documentElement.classList.toggle("dark", dark);
-}
-
 export function AppShell() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
-  const [dark, setDark] = useState(
-    () => document.documentElement.classList.contains("dark"),
-  );
+  const [dark, setDark] = useState(() => getMode() === "dark");
 
   const toggleTheme = () => {
     const next = !dark;
     setDark(next);
-    applyTheme(next);
+    setMode(next ? "dark" : "light");
   };
 
   const toggleLang = () => {
@@ -66,7 +105,7 @@ export function AppShell() {
   };
 
   return (
-    <div className="flex h-full bg-kumo-base text-color-surface">
+    <div className="flex h-full bg-kumo-base text-kumo-default">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-kumo-elevated focus:px-3 focus:py-2 focus:text-sm focus:shadow"
@@ -74,7 +113,7 @@ export function AppShell() {
         {t("skipToContent")}
       </a>
       <aside
-        className="flex flex-col border-r border-color-border bg-kumo-elevated transition-all"
+        className="flex flex-col border-r border-kumo-line bg-kumo-elevated transition-all"
         style={{ width: collapsed ? 64 : 220 }}
       >
         <div className="flex h-14 items-center gap-2 px-4 font-semibold">
@@ -85,7 +124,7 @@ export function AppShell() {
           {NAV_SECTIONS.map((section) => (
             <div key={section.key} className="pb-2">
               {!collapsed && (
-                <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase text-color-muted">
+                <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase text-kumo-subtle">
                   {t(section.key)}
                 </div>
               )}
@@ -97,14 +136,21 @@ export function AppShell() {
                   title={t(item.key)}
                   className={({ isActive }) =>
                     [
-                      "block rounded-md px-3 py-2 text-sm transition-colors",
+                      "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
+                      collapsed && "justify-center",
                       isActive
-                        ? "bg-kumo-tint font-medium"
-                        : "hover:bg-kumo-tint/60",
-                    ].join(" ")
+                        ? "bg-kumo-tint font-medium text-kumo-default"
+                        : "text-kumo-subtle hover:bg-kumo-tint/60 hover:text-kumo-default",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
                   }
                 >
-                  {collapsed ? t(item.key).charAt(0) : t(item.key)}
+                  {(() => {
+                    const Icon = NAV_ICONS[item.key] ?? Dot;
+                    return <Icon size={18} />;
+                  })()}
+                  {!collapsed && <span className="truncate">{t(item.key)}</span>}
                 </NavLink>
               ))}
             </div>
@@ -113,7 +159,7 @@ export function AppShell() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b border-color-border px-4">
+        <header className="flex h-14 items-center justify-between border-b border-kumo-line px-4">
           <Button
             variant="ghost"
             size="sm"

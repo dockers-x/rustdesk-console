@@ -46,10 +46,10 @@ export function RegisterPage() {
   };
 
   return (
-    <div className="flex h-full items-center justify-center bg-kumo-base px-4 text-color-surface">
+    <div className="flex h-full items-center justify-center bg-kumo-base px-4 text-kumo-default">
       <form
         onSubmit={submit}
-        className="w-full max-w-[380px] rounded-xl border border-color-border bg-kumo-elevated p-8 shadow-lg"
+        className="w-full max-w-[380px] rounded-xl border border-kumo-line bg-kumo-elevated p-8 shadow-lg"
       >
         <h1 className="mb-6 text-center text-xl font-semibold">
           {t("register")}

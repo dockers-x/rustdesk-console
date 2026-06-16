@@ -73,7 +73,7 @@ export function PeerQuickActions({
       >
         {t("addToAddressBook")}
       </Button>
-      {message && <span className="text-xs text-color-muted">{message}</span>}
+      {message && <span className="text-xs text-kumo-subtle">{message}</span>}
     </div>
   );
 }

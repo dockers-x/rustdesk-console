@@ -161,10 +161,10 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex h-full items-center justify-center bg-kumo-base text-color-surface">
+    <div className="flex h-full items-center justify-center bg-kumo-base text-kumo-default">
       <form
         onSubmit={submit}
-        className="w-[360px] rounded-xl border border-color-border bg-kumo-elevated p-8 shadow-lg"
+        className="w-[360px] rounded-xl border border-kumo-line bg-kumo-elevated p-8 shadow-lg"
       >
         <h1 className="mb-6 text-center text-xl font-semibold">
           {t("appTitle")}
@@ -224,10 +224,10 @@ export function LoginPage() {
             </Link>
           )}
           {options.ops.length > 0 && !options.disable_pwd && (
-            <div className="flex items-center gap-2 text-xs text-color-muted">
-              <span className="h-px flex-1 bg-color-border" />
+            <div className="flex items-center gap-2 text-xs text-kumo-subtle">
+              <span className="h-px flex-1 bg-kumo-line" />
               <span>{t("orLoginWith")}</span>
-              <span className="h-px flex-1 bg-color-border" />
+              <span className="h-px flex-1 bg-kumo-line" />
             </div>
           )}
           {options.ops.map((op) => (

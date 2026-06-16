@@ -71,16 +71,16 @@ export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
         <h1 className="text-2xl font-semibold">
           {mode === "bind" ? t("oauthBinding") : t("oauthLogining")}
         </h1>
-        <p className="mt-1 text-sm text-color-muted">{t("oauthCloseNote")}</p>
+        <p className="mt-1 text-sm text-kumo-subtle">{t("oauthCloseNote")}</p>
       </div>
-      <div className="rounded-lg border border-color-border bg-kumo-elevated p-5">
+      <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
         {isLoading ? (
-          <p className="text-sm text-color-muted">{t("loading")}</p>
+          <p className="text-sm text-kumo-subtle">{t("loading")}</p>
         ) : (
           <dl className="grid gap-3 text-sm sm:grid-cols-[140px_1fr]">
             {rows.map(([label, value]) => (
               <div key={label} className="contents">
-                <dt className="text-color-muted">{label}</dt>
+                <dt className="text-kumo-subtle">{label}</dt>
                 <dd className="min-w-0 break-words font-medium">
                   {value || "—"}
                 </dd>

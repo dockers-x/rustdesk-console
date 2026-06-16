@@ -115,7 +115,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-color-border">
+      <div className="overflow-x-auto rounded-lg border border-kumo-line">
         <Table>
           <Table.Header>
             <Table.Row>
@@ -165,7 +165,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
           </Table.Body>
         </Table>
         {isLoading && (
-          <div className="p-4 text-sm text-color-muted">{t("loading")}</div>
+          <div className="p-4 text-sm text-kumo-subtle">{t("loading")}</div>
         )}
         {error && (
           <div className="p-4 text-sm text-red-500">
@@ -173,7 +173,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
           </div>
         )}
         {!isLoading && !error && rows.length === 0 && (
-          <div className="p-4 text-sm text-color-muted">{t("noData")}</div>
+          <div className="p-4 text-sm text-kumo-subtle">{t("noData")}</div>
         )}
       </div>
 
@@ -278,7 +278,7 @@ function FieldInput({
       <label className="block">
         <span className="mb-1 block text-sm">{t(field.label)}</span>
         <select
-          className="h-9 w-full rounded-lg border border-color-border bg-kumo-elevated px-3 text-sm"
+          className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm"
           value={String(value ?? "")}
           disabled={locked}
           onChange={(e) => {
@@ -302,7 +302,7 @@ function FieldInput({
       <label className="block">
         <span className="mb-1 block text-sm">{t(field.label)}</span>
         <textarea
-          className="min-h-24 w-full rounded-lg border border-color-border bg-kumo-elevated px-3 py-2 text-sm"
+          className="min-h-24 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm"
           value={value === null || value === undefined ? "" : String(value)}
           disabled={locked}
           onChange={(e) => onChange(e.target.value)}

@@ -109,8 +109,8 @@ export function WebClientActions({
           <Dialog>
             <Dialog.Title>{t("shareByWebClient")}</Dialog.Title>
             <div className="mt-4 space-y-3">
-              <div className="rounded-md border border-color-border bg-kumo-base px-3 py-2 text-sm">
-                <span className="text-color-muted">{t("deviceId")}: </span>
+              <div className="rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm">
+                <span className="text-kumo-subtle">{t("deviceId")}: </span>
                 <span className="font-medium">{peerId}</span>
               </div>
               <label className="block">
@@ -125,7 +125,7 @@ export function WebClientActions({
               <label className="block">
                 <span className="mb-1 block text-sm">{t("expire")}</span>
                 <select
-                  className="h-9 w-full rounded-lg border border-color-border bg-kumo-elevated px-3 text-sm"
+                  className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm"
                   value={expire}
                   disabled={Boolean(link)}
                   onChange={(e) => setExpire(Number(e.target.value))}

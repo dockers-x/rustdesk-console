@@ -155,7 +155,7 @@ export function ServerCommandsPage() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{t("serverCommands")}</h1>
-          <p className="mt-1 text-sm text-color-muted">{t("serverCmdTips")}</p>
+          <p className="mt-1 text-sm text-kumo-subtle">{t("serverCmdTips")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ServerStatus
@@ -188,7 +188,7 @@ export function ServerCommandsPage() {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-color-border">
+      <div className="overflow-x-auto rounded-lg border border-kumo-line">
         <Table>
           <Table.Header>
             <Table.Row>
@@ -246,10 +246,10 @@ export function ServerCommandsPage() {
           </Table.Body>
         </Table>
         {list.isLoading && (
-          <div className="p-4 text-sm text-color-muted">{t("loading")}</div>
+          <div className="p-4 text-sm text-kumo-subtle">{t("loading")}</div>
         )}
         {!list.isLoading && (list.data?.list ?? []).length === 0 && (
-          <div className="p-4 text-sm text-color-muted">{t("noData")}</div>
+          <div className="p-4 text-sm text-kumo-subtle">{t("noData")}</div>
         )}
       </div>
 
@@ -301,7 +301,7 @@ export function ServerCommandsPage() {
                 }
               />
               {sendForm.explain && (
-                <span className="mt-1 block text-xs text-color-muted">
+                <span className="mt-1 block text-xs text-kumo-subtle">
                   {t("example")}: {sendForm.explain}
                 </span>
               )}
@@ -309,7 +309,7 @@ export function ServerCommandsPage() {
             <label className="block">
               <span className="mb-1 block text-sm">{t("result")}</span>
               <textarea
-                className="min-h-48 w-full rounded-lg border border-color-border bg-kumo-base px-3 py-2 font-mono text-sm"
+                className="min-h-48 w-full rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 font-mono text-sm"
                 value={sendResult}
                 readOnly
               />
@@ -341,7 +341,7 @@ function ServerStatus({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex items-center gap-2 rounded-md border border-color-border px-2 py-1 text-sm">
+    <div className="flex items-center gap-2 rounded-md border border-kumo-line px-2 py-1 text-sm">
       <span>{label}</span>
       <Badge>{value === null ? t("checking") : value ? t("available") : t("notAvailable")}</Badge>
       <Button size="sm" variant="ghost" onClick={onRefresh}>
@@ -385,7 +385,7 @@ function CommandFields({
       <label className="block">
         <span className="mb-1 block text-sm">{t("target")}</span>
         <select
-          className="h-9 w-full rounded-lg border border-color-border bg-kumo-elevated px-3 text-sm"
+          className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm"
           value={form.target}
           onChange={(e) => onChange((s) => ({ ...s, target: e.target.value }))}
         >
