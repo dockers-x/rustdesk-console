@@ -382,6 +382,7 @@ pub async fn device_group_accessible(
 // ---------- web client ----------
 
 pub async fn server_config(State(state): State<AppState>, user: RustClientUser) -> Response {
+    let cfg = state.webclient_config.get().await;
     let abs = services::address_book::list_by_user_and_collection(&state.db, user.user.id, 0)
         .await
         .unwrap_or_default();
@@ -394,20 +395,26 @@ pub async fn server_config(State(state): State<AppState>, user: RustClientUser) 
         peers.insert(ab.id.clone(), serde_json::to_value(pp).unwrap_or(Value::Null));
     }
     resp::success(json!({
-        "id_server": state.config.rustdesk.id_server,
-        "key": state.config.rustdesk.key,
+        "id_server": cfg.id_server,
+        "key": cfg.key,
+        "relay_server": cfg.relay_server,
+        "api_server": cfg.api_server,
         "peers": peers,
     }))
 }
 
 pub async fn server_config_v2(State(state): State<AppState>, _user: RustClientUser) -> Response {
+    let cfg = state.webclient_config.get().await;
     resp::success(json!({
-        "id_server": state.config.rustdesk.id_server,
-        "key": state.config.rustdesk.key,
+        "id_server": cfg.id_server,
+        "key": cfg.key,
+        "relay_server": cfg.relay_server,
+        "api_server": cfg.api_server,
     }))
 }
 
 pub async fn shared_peer(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    let cfg = state.webclient_config.get().await;
     let token = body
         .get("share_token")
         .and_then(|v| v.as_str())
@@ -438,8 +445,10 @@ pub async fn shared_peer(State(state): State<AppState>, Json(body): Json<Value>)
     pp.info.username = ab.username.clone();
     pp.info.hostname = ab.hostname.clone();
     resp::success(json!({
-        "id_server": state.config.rustdesk.id_server,
-        "key": state.config.rustdesk.key,
+        "id_server": cfg.id_server,
+        "key": cfg.key,
+        "relay_server": cfg.relay_server,
+        "api_server": cfg.api_server,
         "peer": pp,
     }))
 }

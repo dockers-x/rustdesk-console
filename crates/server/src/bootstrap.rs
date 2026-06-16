@@ -2,6 +2,7 @@
 //! schema sync + seed, and assemble the shared [`AppState`]. Mirrors the Go
 //! `InitGlobal` / `DatabaseAutoUpdate` / `Migrate` flow.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use crate::services;
 use crate::state::AppState;
 use crate::support::jwt::Jwt;
 use crate::support::login_limiter::{LoginLimiter, SecurityPolicy};
+use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{password, random};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
@@ -172,7 +174,7 @@ async fn seed(db: &DatabaseConnection, i18n: &I18n, lang: &str) -> anyhow::Resul
 }
 
 /// Build the full application state from a parsed config.
-pub async fn build_state(config: Config) -> anyhow::Result<AppState> {
+pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result<AppState> {
     let db = connect(&config).await?;
     let i18n = I18n::load(&config.lang);
 
@@ -194,6 +196,10 @@ pub async fn build_state(config: Config) -> anyhow::Result<AppState> {
 
     Ok(AppState {
         db,
+        webclient_config: Arc::new(WebClientConfigStore::new(
+            config_path,
+            WebClientConfig::from(&config.rustdesk),
+        )),
         config: Arc::new(config),
         jwt: Arc::new(jwt),
         limiter: Arc::new(limiter),

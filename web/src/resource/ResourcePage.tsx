@@ -6,6 +6,9 @@ import { Input } from "@cloudflare/kumo/components/input";
 import { Table } from "@cloudflare/kumo/components/table";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Switch } from "@cloudflare/kumo/components/switch";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DialogBody, DialogFooter, DialogHeader } from "../components/DialogLayout";
+import { TableState } from "../components/TableState";
 import { apiGet, apiPost } from "../lib/api";
 import type { FieldDef, ResourceConfig } from "./types";
 
@@ -57,6 +60,9 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<unknown>(null);
   const [form, setForm] = useState<Record<string, unknown>>({});
+  const [deleteTarget, setDeleteTarget] = useState<Record<string, unknown> | null>(
+    null,
+  );
   const editing = editingId !== null;
 
   const openCreate = () => {
@@ -100,6 +106,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
         <div className="flex flex-wrap items-center gap-2">
           {(cfg.filters ?? []).map((flt) => (
             <Input
+              aria-label={t(flt.label)}
               key={flt.name}
               placeholder={t(flt.label)}
               value={filters[flt.name] ?? ""}
@@ -148,10 +155,10 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                       {cfg.canDelete !== false && (
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="secondary-destructive"
                           onClick={() => {
-                            if (confirm(t("confirmDelete")))
-                              remove.mutate(row[idField]);
+                            remove.reset();
+                            setDeleteTarget(row);
                           }}
                         >
                           {t("delete")}
@@ -165,15 +172,15 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
           </Table.Body>
         </Table>
         {isLoading && (
-          <div className="p-4 text-sm text-kumo-subtle">{t("loading")}</div>
+          <TableState tone="loading">{t("loading")}</TableState>
         )}
         {error && (
-          <div className="p-4 text-sm text-red-500">
+          <TableState tone="error">
             {(error as Error).message || t("operationFailed")}
-          </div>
+          </TableState>
         )}
         {!isLoading && !error && rows.length === 0 && (
-          <div className="p-4 text-sm text-kumo-subtle">{t("noData")}</div>
+          <TableState tone="empty">{t("noData")}</TableState>
         )}
       </div>
 
@@ -201,39 +208,71 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
 
       {(cfg.canCreate !== false || cfg.canEdit !== false) && (
         <Dialog.Root open={open} onOpenChange={setOpen}>
-          <Dialog>
-            <Dialog.Title>
-              {editing ? t("edit") : t("create")} · {t(cfg.titleKey)}
-            </Dialog.Title>
-            <div className="mt-4 space-y-3">
-              {cfg.fields
-                .filter((f) => !(editing && f.createOnly))
-                .map((field) => (
-                  <FieldInput
-                    key={field.name}
-                    field={field}
-                    editing={editing}
-                    value={form[field.name]}
-                    onChange={(v) => setForm((s) => ({ ...s, [field.name]: v }))}
-                  />
-                ))}
-            </div>
-            <div className="mt-6 flex justify-end gap-2">
-              {save.error && (
-                <p className="mr-auto self-center text-sm text-red-500">
-                  {(save.error as Error).message || t("operationFailed")}
-                </p>
-              )}
+          <Dialog size="lg" className="p-0">
+            <DialogHeader
+              title={`${editing ? t("edit") : t("create")} · ${t(cfg.titleKey)}`}
+              description={editing ? t("editDialogHint") : t("createDialogHint")}
+            />
+            <DialogBody>
+              <div className="grid gap-4">
+                {cfg.fields
+                  .filter((f) => !(editing && f.createOnly))
+                  .map((field) => (
+                    <FieldInput
+                      key={field.name}
+                      field={field}
+                      editing={editing}
+                      value={form[field.name]}
+                      onChange={(v) =>
+                        setForm((s) => ({ ...s, [field.name]: v }))
+                      }
+                    />
+                  ))}
+              </div>
+            </DialogBody>
+            <DialogFooter
+              error={
+                save.error
+                  ? (save.error as Error).message || t("operationFailed")
+                  : undefined
+              }
+            >
               <Button variant="secondary" onClick={() => setOpen(false)}>
                 {t("cancel")}
               </Button>
-              <Button onClick={() => save.mutate()} disabled={save.isPending}>
+              <Button onClick={() => save.mutate()} loading={save.isPending}>
                 {t("save")}
               </Button>
-            </div>
+            </DialogFooter>
           </Dialog>
         </Dialog.Root>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={t("confirmDeleteTitle")}
+        description={t("confirmDeleteDescription")}
+        confirmLabel={t("delete")}
+        cancelLabel={t("cancel")}
+        error={
+          remove.error
+            ? (remove.error as Error).message || t("operationFailed")
+            : undefined
+        }
+        loading={remove.isPending}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeleteTarget(null);
+            remove.reset();
+          }
+        }}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          remove.mutate(deleteTarget[idField], {
+            onSuccess: () => setDeleteTarget(null),
+          });
+        }}
+      />
     </div>
   );
 }
@@ -263,10 +302,12 @@ function FieldInput({
     const off = field.switchOff ?? false;
     const checked = value === on || value === true;
     return (
-      <div className="flex items-center justify-between">
-        <span className="text-sm">{t(field.label)}</span>
+      <div className="rounded-lg border border-kumo-line bg-kumo-base px-3 py-2">
         <Switch
+          label={t(field.label)}
+          controlFirst={false}
           checked={checked}
+          disabled={locked}
           onCheckedChange={(v: boolean) => onChange(v ? on : off)}
         />
       </div>
@@ -278,7 +319,7 @@ function FieldInput({
       <label className="block">
         <span className="mb-1 block text-sm">{t(field.label)}</span>
         <select
-          className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm"
+          className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
           value={String(value ?? "")}
           disabled={locked}
           onChange={(e) => {
@@ -302,7 +343,7 @@ function FieldInput({
       <label className="block">
         <span className="mb-1 block text-sm">{t(field.label)}</span>
         <textarea
-          className="min-h-24 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm"
+          className="min-h-24 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
           value={value === null || value === undefined ? "" : String(value)}
           disabled={locked}
           onChange={(e) => onChange(e.target.value)}
@@ -321,6 +362,7 @@ function FieldInput({
     <label className="block">
       <span className="mb-1 block text-sm">{t(field.label)}</span>
       <Input
+        aria-label={t(field.label)}
         type={inputType}
         value={value === null || value === undefined ? "" : String(value)}
         disabled={locked}

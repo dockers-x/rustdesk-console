@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
+import { InlineMessage } from "../components/InlineMessage";
 import { apiGet, apiPost, ApiError } from "../lib/api";
 import { clearOidcCode, getOidcCode, setOidcCode, setToken } from "../lib/auth";
 
@@ -175,6 +176,7 @@ export function LoginPage() {
               <label className="block">
                 <span className="mb-1 block text-sm">{t("username")}</span>
                 <Input
+                  aria-label={t("username")}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
@@ -184,6 +186,7 @@ export function LoginPage() {
               <label className="block">
                 <span className="mb-1 block text-sm">{t("password")}</span>
                 <Input
+                  aria-label={t("password")}
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -197,6 +200,7 @@ export function LoginPage() {
               <span className="mb-1 block text-sm">{t("captcha")}</span>
               <div className="flex items-center gap-2">
                 <Input
+                  aria-label={t("captcha")}
                   value={captcha}
                   onChange={(e) => setCaptcha(e.target.value)}
                 />
@@ -209,7 +213,7 @@ export function LoginPage() {
               </div>
             </label>
           )}
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && <InlineMessage tone="error">{error}</InlineMessage>}
           {!options.disable_pwd && (
             <Button type="submit" className="w-full" disabled={loading}>
               {t("login")}

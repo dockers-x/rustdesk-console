@@ -13,21 +13,45 @@ pub async fn index() -> Response {
     Redirect::temporary("/_admin/").into_response()
 }
 
-/// `GET /webclient-config/index.js` -> bootstraps the web client's api-server.
+/// `GET /webclient-config/index.js` -> bootstraps the web client's defaults.
 pub async fn config_js(State(state): State<AppState>) -> Response {
+    let cfg = state.webclient_config.get().await;
     let rd = &state.config.rustdesk;
     let body = format!(
-        "localStorage.setItem('api-server', '{api}');\n\
-const ws2_prefix = 'wc-';\n\
-localStorage.setItem(ws2_prefix+'api-server', '{api}');\n\
-\n\
-window.webclient_magic_queryonline = {magic};\n\
-window.ws_host = '{ws}';\n",
-        api = rd.api_server,
+        "(() => {{\n\
+  const config = {{\n\
+    'api-server': {api},\n\
+    'custom-rendezvous-server': {id_server},\n\
+    'relay-server': {relay_server},\n\
+    'key': {key},\n\
+  }};\n\
+  const localOverrideKey = 'rustdesk-console.webclient.local-override';\n\
+  const hasLocalOverride = localStorage.getItem(localOverrideKey) === '1';\n\
+  const setDefault = (name, value) => {{\n\
+    if (!hasLocalOverride || localStorage.getItem(name) === null) {{\n\
+      localStorage.setItem(name, value);\n\
+    }}\n\
+  }};\n\
+  const ws2Prefix = 'wc-';\n\
+  for (const [name, value] of Object.entries(config)) {{\n\
+    setDefault(name, value);\n\
+    setDefault(ws2Prefix + name, value);\n\
+  }}\n\
+  window.webclient_magic_queryonline = {magic};\n\
+  window.ws_host = {ws};\n\
+}})();\n",
+        api = js_string(&cfg.api_server),
+        id_server = js_string(&cfg.id_server),
+        relay_server = js_string(&cfg.relay_server),
+        key = js_string(&cfg.key),
         magic = rd.webclient_magic_queryonline,
-        ws = rd.ws_host,
+        ws = js_string(&rd.ws_host),
     );
     ([(header::CONTENT_TYPE, "application/javascript")], body).into_response()
+}
+
+fn js_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn respond(bytes: Vec<u8>, path_for_mime: &str) -> Response {

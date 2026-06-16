@@ -5,6 +5,9 @@ import { Badge } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
 import { Table } from "@cloudflare/kumo/components/table";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { InlineMessage } from "../components/InlineMessage";
+import { TableState } from "../components/TableState";
 import { apiGet, apiPost, ApiError } from "../lib/api";
 
 interface CurrentUser {
@@ -36,6 +39,7 @@ export function MyProfilePage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pwdMessage, setPwdMessage] = useState("");
   const [pwdError, setPwdError] = useState("");
+  const [unbindTarget, setUnbindTarget] = useState("");
 
   const user = useQuery({
     queryKey: ["current-user"],
@@ -73,11 +77,13 @@ export function MyProfilePage() {
     window.open(res.url, "_blank", "noopener,noreferrer");
   };
 
-  const unbindOauth = async (op: string) => {
-    if (!confirm(t("confirmUnbind"))) return;
-    await apiPost("/api/admin/oauth/unbind", { op });
-    void qc.invalidateQueries({ queryKey: ["my-oauth"] });
-  };
+  const unbind = useMutation({
+    mutationFn: (op: string) => apiPost("/api/admin/oauth/unbind", { op }),
+    onSuccess: () => {
+      setUnbindTarget("");
+      void qc.invalidateQueries({ queryKey: ["my-oauth"] });
+    },
+  });
 
   const submitPassword = (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,6 +127,7 @@ export function MyProfilePage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("oldPassword")}</span>
             <Input
+              aria-label={t("oldPassword")}
               type="password"
               value={oldPassword}
               autoComplete="current-password"
@@ -130,6 +137,7 @@ export function MyProfilePage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("newPassword")}</span>
             <Input
+              aria-label={t("newPassword")}
               type="password"
               value={newPassword}
               autoComplete="new-password"
@@ -139,14 +147,17 @@ export function MyProfilePage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("confirmPassword")}</span>
             <Input
+              aria-label={t("confirmPassword")}
               type="password"
               value={confirmPassword}
               autoComplete="new-password"
               onChange={(e) => setConfirmPassword(e.target.value)}
             />
           </label>
-          {pwdMessage && <p className="text-sm text-green-600">{pwdMessage}</p>}
-          {pwdError && <p className="text-sm text-red-500">{pwdError}</p>}
+          {pwdMessage && (
+            <InlineMessage tone="success">{pwdMessage}</InlineMessage>
+          )}
+          {pwdError && <InlineMessage tone="error">{pwdError}</InlineMessage>}
           <div>
             <Button type="submit" disabled={changePwd.isPending}>
               {t("save")}
@@ -181,8 +192,11 @@ export function MyProfilePage() {
                     {row.status === 1 ? (
                       <Button
                         size="sm"
-                        variant="ghost"
-                        onClick={() => void unbindOauth(row.op)}
+                        variant="secondary-destructive"
+                        onClick={() => {
+                          unbind.reset();
+                          setUnbindTarget(row.op);
+                        }}
                       >
                         {t("unbind")}
                       </Button>
@@ -200,8 +214,16 @@ export function MyProfilePage() {
               ))}
             </Table.Body>
           </Table>
-          {!oauth.isLoading && (oauth.data ?? []).length === 0 && (
-            <div className="p-4 text-sm text-kumo-subtle">{t("noData")}</div>
+          {oauth.isLoading && (
+            <TableState tone="loading">{t("loading")}</TableState>
+          )}
+          {oauth.error && (
+            <TableState tone="error">
+              {(oauth.error as Error).message || t("operationFailed")}
+            </TableState>
+          )}
+          {!oauth.isLoading && !oauth.error && (oauth.data ?? []).length === 0 && (
+            <TableState tone="empty">{t("noData")}</TableState>
           )}
         </div>
       </section>
@@ -216,6 +238,29 @@ export function MyProfilePage() {
           </div>
         </section>
       )}
+
+      <ConfirmDialog
+        open={Boolean(unbindTarget)}
+        title={t("confirmUnbindTitle")}
+        description={t("confirmUnbindDescription")}
+        confirmLabel={t("unbind")}
+        cancelLabel={t("cancel")}
+        error={
+          unbind.error
+            ? (unbind.error as Error).message || t("operationFailed")
+            : undefined
+        }
+        loading={unbind.isPending}
+        onOpenChange={(next) => {
+          if (!next) {
+            setUnbindTarget("");
+            unbind.reset();
+          }
+        }}
+        onConfirm={() => {
+          if (unbindTarget) unbind.mutate(unbindTarget);
+        }}
+      />
     </div>
   );
 }

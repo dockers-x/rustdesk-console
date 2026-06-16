@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.0-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.1-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。

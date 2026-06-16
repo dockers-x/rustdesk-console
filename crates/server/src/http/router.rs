@@ -111,7 +111,10 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/user/register", post(admin::user_register))
         // config
         .route("/api/admin/config/admin", get(admin::config_admin))
-        .route("/api/admin/config/server", get(admin::config_server))
+        .route(
+            "/api/admin/config/server",
+            get(admin::config_server).patch(admin::config_server_update),
+        )
         .route("/api/admin/config/app", get(admin::config_app))
         // user
         .route("/api/admin/user/current", get(admin::user_current))

@@ -46,3 +46,7 @@ export async function apiGet<T>(url: string, params?: Record<string, unknown>) {
 export async function apiPost<T>(url: string, data?: unknown) {
   return (await http.post(url, data)) as unknown as T;
 }
+
+export async function apiPatch<T>(url: string, data?: unknown) {
+  return (await http.patch(url, data)) as unknown as T;
+}

@@ -6,6 +6,7 @@ import { MyProfilePage } from "./pages/MyProfilePage";
 import { OAuthActionPage } from "./pages/OAuthActionPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ServerCommandsPage } from "./pages/ServerCommandsPage";
+import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { ResourcePage } from "./resource/ResourcePage";
 import { ALL_RESOURCES, RESOURCES, resourcePath } from "./resource/registry";
 
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/" element={<Navigate to={HOME} replace />} />
           <Route path="/my" element={<MyProfilePage />} />
           <Route path="/serverCmd" element={<ServerCommandsPage />} />
+          <Route path="/webclient-settings" element={<WebClientSettingsPage />} />
           <Route path="/oauth/:code" element={<OAuthActionPage mode="confirm" />} />
           <Route path="/oauth/bind/:code" element={<OAuthActionPage mode="bind" />} />
           {ALL_RESOURCES.map((r) => (

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
+import { InlineMessage } from "../components/InlineMessage";
 import { apiGet, apiPost, ApiError } from "../lib/api";
 
 interface OAuthInfo {
@@ -88,8 +89,16 @@ export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
             ))}
           </dl>
         )}
-        {message && <p className="mt-4 text-sm text-green-600">{message}</p>}
-        {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
+        {message && (
+          <InlineMessage tone="success" className="mt-4">
+            {message}
+          </InlineMessage>
+        )}
+        {error && (
+          <InlineMessage tone="error" className="mt-4">
+            {error}
+          </InlineMessage>
+        )}
         <div className="mt-6 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => window.close()}>
             {t("close")}

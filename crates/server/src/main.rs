@@ -17,6 +17,7 @@ mod state;
 mod support;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -62,7 +63,7 @@ async fn main() {
             }
             reset_password(&cfg, user_id, &pwd).await
         }
-        None => serve(cfg).await,
+        None => serve(cfg, PathBuf::from(cli.config)).await,
     };
 
     if let Err(e) = result {
@@ -71,14 +72,14 @@ async fn main() {
     }
 }
 
-async fn serve(cfg: config::Config) -> anyhow::Result<()> {
+async fn serve(cfg: config::Config, config_path: PathBuf) -> anyhow::Result<()> {
     let addr_str = if cfg.gin.api_addr.is_empty() {
         "0.0.0.0:21114".to_string()
     } else {
         cfg.gin.api_addr.clone()
     };
     tracing::info!("API SERVER START");
-    let state = bootstrap::build_state(cfg).await?;
+    let state = bootstrap::build_state(cfg, config_path).await?;
     let app = http::router::build(state);
 
     let addr: SocketAddr = addr_str.parse()?;

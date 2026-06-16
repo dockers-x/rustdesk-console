@@ -6,6 +6,9 @@ import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
 import { Table } from "@cloudflare/kumo/components/table";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DialogBody, DialogFooter, DialogHeader } from "../components/DialogLayout";
+import { TableState } from "../components/TableState";
 import { apiGet, apiPost, ApiError } from "../lib/api";
 
 const ID_TARGET = "21115";
@@ -55,6 +58,7 @@ export function ServerCommandsPage() {
   const [sendOpen, setSendOpen] = useState(false);
   const [form, setForm] = useState<CommandForm>(emptyForm);
   const [sendForm, setSendForm] = useState<CommandForm>(emptyForm);
+  const [deleteTarget, setDeleteTarget] = useState<ServerCommand | null>(null);
   const [sendResult, setSendResult] = useState("");
   const [sendError, setSendError] = useState("");
   const [status, setStatus] = useState<Record<string, boolean | null>>({
@@ -229,10 +233,10 @@ export function ServerCommandsPage() {
                         </Button>
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="secondary-destructive"
                           onClick={() => {
-                            if (confirm(t("confirmDelete")))
-                              remove.mutate(row.id);
+                            remove.reset();
+                            setDeleteTarget(row);
                           }}
                         >
                           {t("delete")}
@@ -246,86 +250,125 @@ export function ServerCommandsPage() {
           </Table.Body>
         </Table>
         {list.isLoading && (
-          <div className="p-4 text-sm text-kumo-subtle">{t("loading")}</div>
+          <TableState tone="loading">{t("loading")}</TableState>
         )}
-        {!list.isLoading && (list.data?.list ?? []).length === 0 && (
-          <div className="p-4 text-sm text-kumo-subtle">{t("noData")}</div>
+        {list.error && (
+          <TableState tone="error">
+            {(list.error as Error).message || t("operationFailed")}
+          </TableState>
+        )}
+        {!list.isLoading && !list.error && (list.data?.list ?? []).length === 0 && (
+          <TableState tone="empty">{t("noData")}</TableState>
         )}
       </div>
 
       <Dialog.Root open={formOpen} onOpenChange={setFormOpen}>
-        <Dialog>
-          <Dialog.Title>
-            {form.id ? t("edit") : t("create")} · {t("serverCommands")}
-          </Dialog.Title>
-          <div className="mt-4 space-y-3">
-            <CommandFields form={form} onChange={setForm} />
-            {save.error && (
-              <p className="text-sm text-red-500">
-                {(save.error as Error).message || t("operationFailed")}
-              </p>
-            )}
-          </div>
-          <div className="mt-6 flex justify-end gap-2">
+        <Dialog size="lg" className="p-0">
+          <DialogHeader
+            title={`${form.id ? t("edit") : t("create")} · ${t("serverCommands")}`}
+            description={t("commandDialogHint")}
+          />
+          <DialogBody>
+            <div className="grid gap-4">
+              <CommandFields form={form} onChange={setForm} />
+            </div>
+          </DialogBody>
+          <DialogFooter
+            error={
+              save.error
+                ? (save.error as Error).message || t("operationFailed")
+                : undefined
+            }
+          >
             <Button variant="secondary" onClick={() => setFormOpen(false)}>
               {t("cancel")}
             </Button>
-            <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            <Button onClick={() => save.mutate()} loading={save.isPending}>
               {t("save")}
             </Button>
-          </div>
+          </DialogFooter>
         </Dialog>
       </Dialog.Root>
 
       <Dialog.Root open={sendOpen} onOpenChange={setSendOpen}>
-        <Dialog>
-          <Dialog.Title>
-            {t("sendCmd")} · {targetLabel(sendForm.target)}
-          </Dialog.Title>
-          <div className="mt-4 space-y-3">
-            <label className="block">
-              <span className="mb-1 block text-sm">{t("cmd")}</span>
-              <Input
-                value={sendForm.cmd}
-                onChange={(e) =>
-                  setSendForm((s) => ({ ...s, cmd: e.target.value }))
-                }
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm">{t("option")}</span>
-              <Input
-                value={sendForm.option}
-                onChange={(e) =>
-                  setSendForm((s) => ({ ...s, option: e.target.value }))
-                }
-              />
-              {sendForm.explain && (
-                <span className="mt-1 block text-xs text-kumo-subtle">
-                  {t("example")}: {sendForm.explain}
-                </span>
-              )}
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm">{t("result")}</span>
-              <textarea
-                className="min-h-48 w-full rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 font-mono text-sm"
-                value={sendResult}
-                readOnly
-              />
-            </label>
-            {sendError && <p className="text-sm text-red-500">{sendError}</p>}
-          </div>
-          <div className="mt-6 flex justify-end gap-2">
+        <Dialog size="lg" className="p-0">
+          <DialogHeader
+            title={`${t("sendCmd")} · ${targetLabel(sendForm.target)}`}
+            description={t("sendCommandHint")}
+          />
+          <DialogBody>
+            <div className="grid gap-4">
+              <label className="block">
+                <span className="mb-1 block text-sm">{t("cmd")}</span>
+                <Input
+                  aria-label={t("cmd")}
+                  value={sendForm.cmd}
+                  onChange={(e) =>
+                    setSendForm((s) => ({ ...s, cmd: e.target.value }))
+                  }
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm">{t("option")}</span>
+                <Input
+                  aria-label={t("option")}
+                  value={sendForm.option}
+                  onChange={(e) =>
+                    setSendForm((s) => ({ ...s, option: e.target.value }))
+                  }
+                />
+                {sendForm.explain && (
+                  <span className="mt-1 block text-xs text-kumo-subtle">
+                    {t("example")}: {sendForm.explain}
+                  </span>
+                )}
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm">{t("result")}</span>
+                <textarea
+                  className="min-h-48 w-full rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                  value={sendResult}
+                  readOnly
+                />
+              </label>
+            </div>
+          </DialogBody>
+          <DialogFooter error={sendError || undefined}>
             <Button variant="secondary" onClick={() => setSendOpen(false)}>
               {t("close")}
             </Button>
-            <Button onClick={() => send.mutate()} disabled={send.isPending}>
+            <Button onClick={() => send.mutate()} loading={send.isPending}>
               {t("send")}
             </Button>
-          </div>
+          </DialogFooter>
         </Dialog>
       </Dialog.Root>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={t("confirmDeleteTitle")}
+        description={t("confirmDeleteDescription")}
+        confirmLabel={t("delete")}
+        cancelLabel={t("cancel")}
+        error={
+          remove.error
+            ? (remove.error as Error).message || t("operationFailed")
+            : undefined
+        }
+        loading={remove.isPending}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeleteTarget(null);
+            remove.reset();
+          }
+        }}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          remove.mutate(deleteTarget.id, {
+            onSuccess: () => setDeleteTarget(null),
+          });
+        }}
+      />
     </div>
   );
 }
@@ -364,6 +407,7 @@ function CommandFields({
       <label className="block">
         <span className="mb-1 block text-sm">{t("cmd")}</span>
         <Input
+          aria-label={t("cmd")}
           value={form.cmd}
           onChange={(e) => onChange((s) => ({ ...s, cmd: e.target.value }))}
         />
@@ -371,6 +415,7 @@ function CommandFields({
       <label className="block">
         <span className="mb-1 block text-sm">{t("alias")}</span>
         <Input
+          aria-label={t("alias")}
           value={form.alias}
           onChange={(e) => onChange((s) => ({ ...s, alias: e.target.value }))}
         />
@@ -378,6 +423,7 @@ function CommandFields({
       <label className="block">
         <span className="mb-1 block text-sm">{t("option")}</span>
         <Input
+          aria-label={t("option")}
           value={form.option}
           onChange={(e) => onChange((s) => ({ ...s, option: e.target.value }))}
         />
@@ -385,7 +431,7 @@ function CommandFields({
       <label className="block">
         <span className="mb-1 block text-sm">{t("target")}</span>
         <select
-          className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm"
+          className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
           value={form.target}
           onChange={(e) => onChange((s) => ({ ...s, target: e.target.value }))}
         >
@@ -396,6 +442,7 @@ function CommandFields({
       <label className="block">
         <span className="mb-1 block text-sm">{t("explain")}</span>
         <Input
+          aria-label={t("explain")}
           value={form.explain}
           onChange={(e) =>
             onChange((s) => ({ ...s, explain: e.target.value }))

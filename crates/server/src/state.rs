@@ -10,6 +10,7 @@ use crate::i18n::I18n;
 use crate::support::jwt::Jwt;
 use crate::support::login_limiter::LoginLimiter;
 use crate::support::oauth_cache::OauthCache;
+use crate::support::webclient_config::WebClientConfigStore;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,6 +20,7 @@ pub struct AppState {
     pub limiter: Arc<LoginLimiter>,
     pub i18n: Arc<I18n>,
     pub oauth_cache: Arc<OauthCache>,
+    pub webclient_config: Arc<WebClientConfigStore>,
     pub start_time: Arc<String>,
     pub version: Arc<String>,
 }

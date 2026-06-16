@@ -16,6 +16,7 @@ use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
 use crate::services;
 use crate::state::AppState;
+use crate::support::webclient_config::WebClientConfig;
 
 pub fn list_json<T: serde::Serialize>(list: Vec<T>, page: i64, total: i64, page_size: i64) -> Response {
     resp::success(json!({
@@ -158,12 +159,22 @@ pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUse
 }
 
 pub async fn config_server(State(state): State<AppState>, _user: BackendUser) -> Response {
-    resp::success(json!({
-        "id_server": state.config.rustdesk.id_server,
-        "key": state.config.rustdesk.key,
-        "relay_server": state.config.rustdesk.relay_server,
-        "api_server": state.config.rustdesk.api_server,
-    }))
+    resp::success(state.webclient_config.get().await)
+}
+
+pub async fn config_server_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<WebClientConfig>,
+) -> Response {
+    match state.webclient_config.update(f).await {
+        Ok(cfg) => resp::success(cfg),
+        Err(e) => resp::fail(
+            101,
+            format!("{}{}", state.tr(&lang, "OperationFailed"), e),
+        ),
+    }
 }
 
 pub async fn config_app(State(state): State<AppState>, _user: BackendUser) -> Response {

@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
+import { InlineMessage } from "../components/InlineMessage";
 import { apiPost, ApiError } from "../lib/api";
 import { setToken } from "../lib/auth";
 
@@ -58,6 +59,7 @@ export function RegisterPage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("username")}</span>
             <Input
+              aria-label={t("username")}
               value={username}
               autoComplete="username"
               autoFocus
@@ -67,6 +69,7 @@ export function RegisterPage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("email")}</span>
             <Input
+              aria-label={t("email")}
               type="email"
               value={email}
               autoComplete="email"
@@ -76,6 +79,7 @@ export function RegisterPage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("password")}</span>
             <Input
+              aria-label={t("password")}
               type="password"
               value={password}
               autoComplete="new-password"
@@ -85,13 +89,14 @@ export function RegisterPage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("confirmPassword")}</span>
             <Input
+              aria-label={t("confirmPassword")}
               type="password"
               value={confirmPassword}
               autoComplete="new-password"
               onChange={(e) => setConfirmPassword(e.target.value)}
             />
           </label>
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && <InlineMessage tone="error">{error}</InlineMessage>}
           <Button type="submit" className="w-full" disabled={loading}>
             {t("submit")}
           </Button>

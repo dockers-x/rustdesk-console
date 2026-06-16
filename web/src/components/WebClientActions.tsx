@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
+import { DialogBody, DialogFooter, DialogHeader } from "./DialogLayout";
 import { apiPost, ApiError } from "../lib/api";
 
 const EXPIRE_OPTIONS = [
@@ -106,60 +107,68 @@ export function WebClientActions({
           <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
             {t("share")}
           </Button>
-          <Dialog>
-            <Dialog.Title>{t("shareByWebClient")}</Dialog.Title>
-            <div className="mt-4 space-y-3">
-              <div className="rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm">
-                <span className="text-kumo-subtle">{t("deviceId")}: </span>
-                <span className="font-medium">{peerId}</span>
-              </div>
-              <label className="block">
-                <span className="mb-1 block text-sm">{t("password")}</span>
-                <Input
-                  type="password"
-                  value={password}
-                  disabled={Boolean(link)}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-sm">{t("expire")}</span>
-                <select
-                  className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm"
-                  value={expire}
-                  disabled={Boolean(link)}
-                  onChange={(e) => setExpire(Number(e.target.value))}
-                >
-                  {EXPIRE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {t(o.labelKey)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {link && (
+          <Dialog size="lg" className="p-0">
+            <DialogHeader
+              title={t("shareByWebClient")}
+              description={t("shareWebClientHint")}
+            />
+            <DialogBody>
+              <div className="grid gap-4">
+                <div className="rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm">
+                  <span className="text-kumo-subtle">{t("deviceId")}: </span>
+                  <span className="break-all font-medium">{peerId}</span>
+                </div>
                 <label className="block">
-                  <span className="mb-1 block text-sm">{t("link")}</span>
-                  <div className="flex gap-2">
-                    <Input value={link} readOnly />
-                    <Button variant="secondary" onClick={() => void copyText(link)}>
-                      {t("copy")}
-                    </Button>
-                  </div>
+                  <span className="mb-1 block text-sm">{t("password")}</span>
+                  <Input
+                    aria-label={t("password")}
+                    type="password"
+                    value={password}
+                    disabled={Boolean(link)}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
                 </label>
-              )}
-              {error && <p className="text-sm text-red-500">{error}</p>}
-            </div>
-            <div className="mt-6 flex justify-end gap-2">
+                <label className="block">
+                  <span className="mb-1 block text-sm">{t("expire")}</span>
+                  <select
+                    className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                    value={expire}
+                    disabled={Boolean(link)}
+                    onChange={(e) => setExpire(Number(e.target.value))}
+                  >
+                    {EXPIRE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {t(o.labelKey)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {link && (
+                  <label className="block">
+                    <span className="mb-1 block text-sm">{t("link")}</span>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input aria-label={t("link")} value={link} readOnly />
+                      <Button
+                        variant="secondary"
+                        onClick={() => void copyText(link)}
+                      >
+                        {t("copy")}
+                      </Button>
+                    </div>
+                  </label>
+                )}
+              </div>
+            </DialogBody>
+            <DialogFooter error={error || undefined}>
               <Button variant="secondary" onClick={() => setOpen(false)}>
                 {link ? t("close") : t("cancel")}
               </Button>
               {!link && (
-                <Button onClick={submitShare} disabled={loading}>
+                <Button onClick={submitShare} loading={loading}>
                   {t("createShare")}
                 </Button>
               )}
-            </div>
+            </DialogFooter>
           </Dialog>
         </Dialog.Root>
       )}
