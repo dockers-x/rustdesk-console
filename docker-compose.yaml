@@ -17,4 +17,4 @@ services:
       # RUSTDESK_API_RUSTDESK_RELAY_SERVER: "192.168.1.66:21117"
       # RUSTDESK_API_RUSTDESK_API_SERVER: "http://127.0.0.1:21114"
       # RUSTDESK_API_GORM_TYPE: "sqlite"
-      TZ: Asia/Shanghai
+      TZ: ${TZ:-Asia/Shanghai}

@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.1-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.2-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
@@ -43,6 +43,7 @@ docker compose up -d --build
 
 ```bash
 docker run -d --name rustdesk-console -p 21114:21114 \
+  -e TZ=Asia/Shanghai \
   -v $PWD/data:/app/data -v $PWD/conf:/app/conf \
   ghcr.io/dockers-x/rustdesk-console:latest
 ```
@@ -61,13 +62,28 @@ cargo build --release
 
 ### 首次登录
 
-首次启动会创建 **admin** 账号，随机密码打印在日志里：
+Web 后台没有固定默认密码。首次启动时服务会创建默认管理员账号：
+
+- 用户名：`admin`
+- 密码：随机生成，只在服务启动日志里打印一次
+- 首次建库前可通过 `RUSTDESK_API_ADMIN_USERNAME`、`RUSTDESK_API_ADMIN_PASSWORD`
+  和 `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD` 自定义初始化管理员
 
 ```text
 INFO rustdesk-console: Admin Password Is: <随机密码>
 ```
 
-服务默认监听 `0.0.0.0:21114`，在 `/_admin/` 登录。密码可随时重置（见 [命令行](#命令行)）。
+服务默认监听 `0.0.0.0:21114`，在 `/_admin/` 登录。如果启动日志已经找不到，可以随时重置密码：
+
+```bash
+rustdesk-console reset-admin-pwd <新密码>
+```
+
+当 `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD` 为空时，服务会生成随机初始密码并写入日志；
+当它有值时，会使用该配置密码，但不会把密码打印到日志里。这些初始化管理员配置只在数据库首次
+初始化时生效，后续重启不会覆盖已有管理员。设置
+`admin.force-change-password` / `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD=true`
+后，初始化管理员首次登录后必须先修改密码。
 
 ## 配置
 
@@ -80,6 +96,10 @@ INFO rustdesk-console: Admin Password Is: <随机密码>
 | `rustdesk.relay-server` | `RUSTDESK_API_RUSTDESK_RELAY_SERVER` |
 | `rustdesk.api-server` | `RUSTDESK_API_RUSTDESK_API_SERVER` |
 | `rustdesk.key` | `RUSTDESK_API_RUSTDESK_KEY` |
+| `admin.title` | `RUSTDESK_API_ADMIN_TITLE` |
+| `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
+| `admin.password` | `RUSTDESK_API_ADMIN_PASSWORD` |
+| `admin.force-change-password` | `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD` |
 | `gorm.type` | `RUSTDESK_API_GORM_TYPE`（`sqlite` / `mysql` / `postgresql`） |
 | `mysql.addr` / `mysql.dbname` / … | `RUSTDESK_API_MYSQL_ADDR` / `RUSTDESK_API_MYSQL_DBNAME` / … |
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
@@ -89,6 +109,9 @@ INFO rustdesk-console: Admin Password Is: <随机密码>
 
 数据库默认是 **SQLite**，文件 `./data/rustdeskapi.db`。日志写入 `logger.path`
 （默认 `./runtime/log.txt`），级别为 `logger.level`；路径为空则输出到控制台。
+容器镜像默认设置 `TZ=Asia/Shanghai`，`docker-compose.yaml` 也支持用标准 `TZ`
+环境变量覆盖。非中国时区部署时可改成对应 IANA 时区，例如 `TZ=Europe/Berlin`。
+业务时间戳仍按 UTC 保存；`TZ` 用于服务端本地日志/启动时间，以及管理后台界面的本地时间显示。
 
 ## 管理后台
 

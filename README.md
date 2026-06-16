@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.1-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.2-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
@@ -47,6 +47,7 @@ Then open `http://<host>:21114/_admin/`.
 
 ```bash
 docker run -d --name rustdesk-console -p 21114:21114 \
+  -e TZ=Asia/Shanghai \
   -v $PWD/data:/app/data -v $PWD/conf:/app/conf \
   ghcr.io/dockers-x/rustdesk-console:latest
 ```
@@ -66,15 +67,32 @@ cargo build --release
 
 ### First login
 
-On first start an **admin** account is created and its random password is printed to
-the log:
+There is no fixed default password. On first start the server creates the default
+administrator account:
+
+- Username: `admin`
+- Password: random, printed once in the server log
+- The generated account can be customized before the first database seed with
+  `RUSTDESK_API_ADMIN_USERNAME`, `RUSTDESK_API_ADMIN_PASSWORD`, and
+  `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD`
 
 ```text
 INFO rustdesk-console: Admin Password Is: <random>
 ```
 
-The server listens on `0.0.0.0:21114`. Sign in at `/_admin/`. You can reset the
-password any time (see [CLI](#cli)).
+The server listens on `0.0.0.0:21114`. Sign in at `/_admin/`. If the initial log
+line is no longer available, reset the password any time:
+
+```bash
+rustdesk-console reset-admin-pwd <newpassword>
+```
+
+When `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD` is empty, the server generates
+and logs a random initial password. When it is set, that configured password is used
+but is not printed in logs. These initial admin settings are applied only when the
+database is first initialized; later restarts never overwrite an existing admin user.
+Set `admin.force-change-password` / `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD=true`
+to require that initial admin user to change the password after the first sign-in.
 
 ## Configuration
 
@@ -88,6 +106,10 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 | `rustdesk.relay-server` | `RUSTDESK_API_RUSTDESK_RELAY_SERVER` |
 | `rustdesk.api-server` | `RUSTDESK_API_RUSTDESK_API_SERVER` |
 | `rustdesk.key` | `RUSTDESK_API_RUSTDESK_KEY` |
+| `admin.title` | `RUSTDESK_API_ADMIN_TITLE` |
+| `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
+| `admin.password` | `RUSTDESK_API_ADMIN_PASSWORD` |
+| `admin.force-change-password` | `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD` |
 | `gorm.type` | `RUSTDESK_API_GORM_TYPE` (`sqlite` / `mysql` / `postgresql`) |
 | `mysql.addr` / `mysql.dbname` / … | `RUSTDESK_API_MYSQL_ADDR` / `RUSTDESK_API_MYSQL_DBNAME` / … |
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
@@ -97,6 +119,11 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 
 Database default is **SQLite** at `./data/rustdeskapi.db`. Logs go to `logger.path`
 (default `./runtime/log.txt`) at `logger.level`, or to stdout if the path is empty.
+Container images default to `TZ=Asia/Shanghai`, and `docker-compose.yaml` lets you
+override it with the standard `TZ` environment variable. Set it to your IANA time
+zone, for example `TZ=Europe/Berlin`, if you do not want Asia/Shanghai local time.
+Business timestamps remain stored in UTC; `TZ` is used for server-local logs/start
+time and for the admin UI's local-time display.
 
 ## Web admin UI
 

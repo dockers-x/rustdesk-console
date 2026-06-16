@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@cloudflare/kumo/components/badge";
@@ -9,11 +10,13 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InlineMessage } from "../components/InlineMessage";
 import { TableState } from "../components/TableState";
 import { apiGet, apiPost, ApiError } from "../lib/api";
+import { clearToken } from "../lib/auth";
 
 interface CurrentUser {
   username: string;
   email: string;
   nickname: string;
+  must_change_password: boolean;
 }
 
 interface AdminConfig {
@@ -33,6 +36,7 @@ interface BindStart {
 
 export function MyProfilePage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -64,7 +68,13 @@ export function MyProfilePage() {
       setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setPwdMessage(t("operationSuccess"));
+      setPwdMessage(t("passwordUpdatedLoginAgain"));
+      clearToken();
+      qc.clear();
+      navigate("/login", {
+        replace: true,
+        state: { message: t("passwordUpdatedLoginAgain") },
+      });
     },
     onError: (err) => {
       const ae = err as ApiError;
@@ -159,7 +169,11 @@ export function MyProfilePage() {
           )}
           {pwdError && <InlineMessage tone="error">{pwdError}</InlineMessage>}
           <div>
-            <Button type="submit" disabled={changePwd.isPending}>
+            <Button
+              type="submit"
+              disabled={changePwd.isPending}
+              loading={changePwd.isPending}
+            >
               {t("save")}
             </Button>
           </div>

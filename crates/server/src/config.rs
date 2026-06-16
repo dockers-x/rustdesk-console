@@ -73,6 +73,10 @@ impl App {
 #[serde(default)]
 pub struct Admin {
     pub title: String,
+    pub username: String,
+    pub password: String,
+    #[serde(rename = "force-change-password")]
+    pub force_change_password: bool,
     pub hello: String,
     #[serde(rename = "hello-file")]
     pub hello_file: String,
@@ -84,6 +88,10 @@ pub struct Admin {
 
 impl Admin {
     pub fn init(&mut self) {
+        self.username = self.username.trim().to_string();
+        if self.username.is_empty() {
+            self.username = "admin".to_string();
+        }
         if self.id_server_port == 0 {
             self.id_server_port = DEFAULT_ID_SERVER_PORT;
         }
@@ -405,6 +413,12 @@ pub fn parse_go_duration(s: &str) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn parses_go_durations() {
@@ -416,6 +430,7 @@ mod tests {
 
     #[test]
     fn env_overrides_hyphenated_keys() {
+        let _guard = env_lock();
         // app.web-client -> RUSTDESK_API_APP_WEB_CLIENT
         let mut v: Value = serde_json::json!({
             "app": { "web-client": 1, "register": false },
@@ -435,6 +450,7 @@ mod tests {
 
     #[test]
     fn env_overrides_apply_to_schema_keys_absent_from_file() {
+        let _guard = env_lock();
         // cache/redis/oss are not in conf/config.yaml, but viper (and now we)
         // still bind them from the env via the full default schema.
         std::env::set_var("RUSTDESK_API_CACHE_TYPE", "redis");
@@ -449,5 +465,33 @@ mod tests {
         assert_eq!(cfg.cache.r#type, "redis");
         assert_eq!(cfg.redis.db, 3);
         assert_eq!(cfg.oss.host, "https://oss.example.com");
+    }
+
+    #[test]
+    fn env_overrides_admin_initial_credentials() {
+        let _guard = env_lock();
+        std::env::set_var("RUSTDESK_API_ADMIN_USERNAME", "root");
+        std::env::set_var("RUSTDESK_API_ADMIN_PASSWORD", "change-me");
+        std::env::set_var("RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD", "true");
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        apply_env_overrides(&mut value, "RUSTDESK_API");
+        let mut cfg: Config = serde_json::from_value(value).unwrap();
+        cfg.admin.init();
+        std::env::remove_var("RUSTDESK_API_ADMIN_USERNAME");
+        std::env::remove_var("RUSTDESK_API_ADMIN_PASSWORD");
+        std::env::remove_var("RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD");
+        assert_eq!(cfg.admin.username, "root");
+        assert_eq!(cfg.admin.password, "change-me");
+        assert!(cfg.admin.force_change_password);
+    }
+
+    #[test]
+    fn admin_username_defaults_to_admin_when_empty() {
+        let mut admin = Admin {
+            username: "   ".to_string(),
+            ..Default::default()
+        };
+        admin.init();
+        assert_eq!(admin.username, "admin");
     }
 }

@@ -38,6 +38,11 @@ description = "Need login."
 one = "請先登入。"
 other = "請先登入。"
 
+[PasswordChangeRequired]
+description = "Password change required."
+one = "請先修改密碼後繼續。"
+other = "請先修改密碼後繼續。"
+
 [UsernameOrPasswordError]
 description = "Username or password error."
 one = "使用者名稱或密碼錯誤。"

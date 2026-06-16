@@ -6,9 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use sea_orm::sea_query::{ColumnDef, Table};
 use sea_orm::{
-    ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryOrder, Schema, Set,
+    ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, DatabaseBackend,
+    DatabaseConnection, EntityTrait, PaginatorTrait, QueryOrder, Schema, Set, Statement,
 };
 
 use entity::{
@@ -27,7 +28,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{password, random};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 265;
+pub const DATABASE_VERSION: i32 = 266;
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
@@ -98,11 +99,59 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(address_book_collection_rule::Entity);
     create!(server_cmd::Entity);
     create!(device_group::Entity);
+    add_missing_columns(db).await?;
     Ok(())
 }
 
+async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
+    if column_exists(db, "users", "must_change_password").await? {
+        return Ok(());
+    }
+
+    let backend = db.get_database_backend();
+    let stmt = Table::alter()
+        .table(user::Entity)
+        .add_column(
+            ColumnDef::new(user::Column::MustChangePassword)
+                .boolean()
+                .not_null()
+                .default(false),
+        )
+        .to_owned();
+    db.execute(backend.build(&stmt)).await?;
+    Ok(())
+}
+
+async fn column_exists(
+    db: &DatabaseConnection,
+    table_name: &str,
+    column_name: &str,
+) -> anyhow::Result<bool> {
+    let backend = db.get_database_backend();
+    let sql = match backend {
+        DatabaseBackend::MySql => format!(
+            "SELECT 1 AS exists_col FROM information_schema.columns \
+             WHERE table_schema = DATABASE() AND table_name = '{table_name}' \
+             AND column_name = '{column_name}' LIMIT 1"
+        ),
+        DatabaseBackend::Postgres => format!(
+            "SELECT 1 AS exists_col FROM information_schema.columns \
+             WHERE table_schema = current_schema() AND table_name = '{table_name}' \
+             AND column_name = '{column_name}' LIMIT 1"
+        ),
+        DatabaseBackend::Sqlite => format!(
+            "SELECT 1 AS exists_col FROM pragma_table_info('{table_name}') \
+             WHERE name = '{column_name}' LIMIT 1"
+        ),
+    };
+    Ok(db
+        .query_one(Statement::from_string(backend, sql))
+        .await?
+        .is_some())
+}
+
 /// Run schema sync + version bookkeeping + first-run seed.
-pub async fn migrate_and_seed(db: &DatabaseConnection, i18n: &I18n, lang: &str) -> anyhow::Result<()> {
+pub async fn migrate_and_seed(db: &DatabaseConnection, config: &Config, i18n: &I18n, lang: &str) -> anyhow::Result<()> {
     let had_versions = version::Entity::find().count(db).await.unwrap_or(0) > 0;
 
     create_tables(db).await?;
@@ -131,13 +180,13 @@ pub async fn migrate_and_seed(db: &DatabaseConnection, i18n: &I18n, lang: &str) 
     // First run ever: seed default groups + admin user.
     let version_count = version::Entity::find().count(db).await?;
     if !had_versions && version_count == 1 {
-        seed(db, i18n, lang).await?;
+        seed(db, config, i18n, lang).await?;
     }
 
     Ok(())
 }
 
-async fn seed(db: &DatabaseConnection, i18n: &I18n, lang: &str) -> anyhow::Result<()> {
+async fn seed(db: &DatabaseConnection, config: &Config, i18n: &I18n, lang: &str) -> anyhow::Result<()> {
     // default + share groups
     let default_name = i18n.translate(lang, "DefaultGroup");
     let default_name = if default_name == "DefaultGroup" {
@@ -154,17 +203,27 @@ async fn seed(db: &DatabaseConnection, i18n: &I18n, lang: &str) -> anyhow::Resul
     services::group::create(db, &default_name, group::TYPE_DEFAULT).await?;
     services::group::create(db, &share_name, group::TYPE_SHARE).await?;
 
-    // admin user with a random password (logged once, like the Go server)
-    let pwd = random::random_string(8);
-    tracing::info!("Admin Password Is: {}", pwd);
+    let configured_password = !config.admin.password.is_empty();
+    let pwd = if configured_password {
+        config.admin.password.clone()
+    } else {
+        random::random_string(8)
+    };
+    tracing::info!("Admin Username Is: {}", config.admin.username);
+    if configured_password {
+        tracing::info!("Admin password loaded from config/env.");
+    } else {
+        tracing::info!("Admin Password Is: {}", pwd);
+    }
     let hash = password::encrypt_password(&pwd)?;
     let admin = user::ActiveModel {
-        username: Set("admin".to_string()),
+        username: Set(config.admin.username.clone()),
         nickname: Set("Admin".to_string()),
         status: Set(user::STATUS_ENABLE),
         is_admin: Set(Some(true)),
         group_id: Set(1),
         password: Set(hash),
+        must_change_password: Set(config.admin.force_change_password),
         created_at: Set(services::now()),
         updated_at: Set(services::now()),
         ..Default::default()
@@ -178,7 +237,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
     let db = connect(&config).await?;
     let i18n = I18n::load(&config.lang);
 
-    migrate_and_seed(&db, &i18n, &config.lang).await?;
+    migrate_and_seed(&db, &config, &i18n, &config.lang).await?;
 
     let jwt = Jwt::new(&config.jwt.key, config.jwt.expire_duration());
     let limiter = LoginLimiter::new(SecurityPolicy {

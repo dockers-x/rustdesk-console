@@ -38,6 +38,11 @@ description = "Need login."
 one = "Please log in first."
 other = "Please log in first."
 
+[PasswordChangeRequired]
+description = "Password change required."
+one = "Please change your password before continuing."
+other = "Please change your password before continuing."
+
 [UsernameOrPasswordError]
 description = "Username or password error."
 one = "Username or password error."

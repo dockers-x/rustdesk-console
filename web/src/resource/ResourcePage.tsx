@@ -9,6 +9,7 @@ import { Switch } from "@cloudflare/kumo/components/switch";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DialogBody, DialogFooter, DialogHeader } from "../components/DialogLayout";
 import { TableState } from "../components/TableState";
+import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiGet, apiPost } from "../lib/api";
 import type { FieldDef, ResourceConfig } from "./types";
 
@@ -37,6 +38,8 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const idField = cfg.idField ?? "id";
+  const adminConfig = usePublicAdminConfig();
+  const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
 
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -137,7 +140,9 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
               <Table.Row key={String(row[idField] ?? i)}>
                 {cfg.columns.map((c) => (
                   <Table.Cell key={c.key}>
-                    {c.render ? c.render(row, t) : asText(row[c.key])}
+                    {c.render
+                      ? c.render(row, t)
+                      : asText(row[c.key], c.key, displayTimeZone)}
                   </Table.Cell>
                 ))}
                 {showActions && (
@@ -277,10 +282,67 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
   );
 }
 
-function asText(v: unknown): string {
+function asText(v: unknown, key = "", timeZone?: string): string {
   if (v === null || v === undefined) return "";
+  if (isDateTimeKey(key)) {
+    return formatUtcDateTime(v, timeZone);
+  }
+  if (key === "expired_at") {
+    return formatUnixSeconds(v, timeZone);
+  }
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
+}
+
+function isDateTimeKey(key: string) {
+  return key === "created_at" || key === "updated_at";
+}
+
+function formatUtcDateTime(value: unknown, timeZone?: string) {
+  if (typeof value !== "string" || value.trim() === "") return asText(value);
+  const iso = value.includes("T")
+    ? value
+    : value.trim().replace(" ", "T") + "Z";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return value;
+  return formatDate(date, timeZone);
+}
+
+function formatUnixSeconds(value: unknown, timeZone?: string) {
+  const seconds =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(seconds) || seconds <= 0) return asText(value);
+  return formatDate(new Date(seconds * 1000), timeZone);
+}
+
+function formatDate(date: Date, timeZone?: string) {
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    ...(timeZone ? { timeZone } : {}),
+  };
+  try {
+    return formatDateParts(date, options);
+  } catch {
+    const { timeZone: _timeZone, ...fallback } = options;
+    return formatDateParts(date, fallback);
+  }
+}
+
+function formatDateParts(date: Date, options: Intl.DateTimeFormatOptions) {
+  const parts = new Intl.DateTimeFormat("en-US", options).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 function FieldInput({

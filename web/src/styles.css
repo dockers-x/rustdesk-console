@@ -16,3 +16,10 @@ body {
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
 }
+
+.login-grid-bg {
+  background-image:
+    linear-gradient(to right, var(--color-kumo-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-kumo-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+}

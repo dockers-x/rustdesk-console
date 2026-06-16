@@ -29,6 +29,7 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
+ENV TZ=Asia/Shanghai
 WORKDIR /app
 COPY --from=builder /app/target/release/rustdesk-console /app/rustdesk-console
 COPY --from=builder /app/conf /app/conf

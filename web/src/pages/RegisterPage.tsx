@@ -9,6 +9,7 @@ import { setToken } from "../lib/auth";
 
 interface AdminLoginPayload {
   token: string;
+  must_change_password?: boolean;
 }
 
 export function RegisterPage() {
@@ -36,8 +37,9 @@ export function RegisterPage() {
         password,
         confirm_password: confirmPassword,
       });
-      setToken(res.token);
-      navigate("/", { replace: true });
+      const changeRequired = Boolean(res.must_change_password);
+      setToken(res.token, changeRequired);
+      navigate(changeRequired ? "/change-password" : "/", { replace: true });
     } catch (err) {
       const ae = err as ApiError;
       setError(ae.message || t("operationFailed"));
@@ -97,7 +99,12 @@ export function RegisterPage() {
             />
           </label>
           {error && <InlineMessage tone="error">{error}</InlineMessage>}
-          <Button type="submit" className="w-full" disabled={loading}>
+          <Button
+            type="submit"
+            className="w-full justify-center"
+            disabled={loading}
+            loading={loading}
+          >
             {t("submit")}
           </Button>
           <Link

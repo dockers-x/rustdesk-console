@@ -28,6 +28,8 @@ pub struct Model {
     pub is_admin: Option<bool>,
     #[sea_orm(default_value = 1)]
     pub status: i32,
+    #[sea_orm(default_value = false)]
+    pub must_change_password: bool,
     #[sea_orm(default_value = "")]
     pub remark: String,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

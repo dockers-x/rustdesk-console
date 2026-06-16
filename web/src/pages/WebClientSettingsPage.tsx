@@ -33,19 +33,40 @@ const emptyConfig: WebClientConfig = {
   key: "",
 };
 
+function toConfigString(value: unknown) {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+}
+
+function normalizeConfig(config: Partial<Record<keyof WebClientConfig, unknown>>): WebClientConfig {
+  return {
+    id_server: toConfigString(config.id_server),
+    relay_server: toConfigString(config.relay_server),
+    api_server: toConfigString(config.api_server),
+    key: toConfigString(config.key),
+  };
+}
+
 function hasLocalOverride() {
   return localStorage.getItem(LOCAL_OVERRIDE_KEY) === "1";
 }
 
 function readLocalConfig(server: WebClientConfig): WebClientConfig {
+  const normalized = normalizeConfig(server);
   return {
     id_server:
-      localStorage.getItem(STORAGE_KEYS.id_server) ?? server.id_server ?? "",
+      localStorage.getItem(STORAGE_KEYS.id_server) ??
+      normalized.id_server,
     relay_server:
-      localStorage.getItem(STORAGE_KEYS.relay_server) ?? server.relay_server ?? "",
+      localStorage.getItem(STORAGE_KEYS.relay_server) ??
+      normalized.relay_server,
     api_server:
-      localStorage.getItem(STORAGE_KEYS.api_server) ?? server.api_server ?? "",
-    key: localStorage.getItem(STORAGE_KEYS.key) ?? server.key ?? "",
+      localStorage.getItem(STORAGE_KEYS.api_server) ??
+      normalized.api_server,
+    key: localStorage.getItem(STORAGE_KEYS.key) ?? normalized.key,
   };
 }
 
@@ -54,7 +75,7 @@ function writeWebClientOptions(config: WebClientConfig, localOverride: boolean) 
     keyof WebClientConfig,
     string,
   ][]) {
-    const value = config[field] ?? "";
+    const value = toConfigString(config[field]);
     localStorage.setItem(key, value);
     localStorage.setItem(`wc-${key}`, value);
   }
@@ -85,10 +106,11 @@ export function WebClientSettingsPage() {
 
   useEffect(() => {
     if (!serverConfig.data) return;
+    const normalized = normalizeConfig(serverConfig.data);
     const active = hasLocalOverride();
     setLocalActive(active);
     setSaveTarget(active ? "local" : "server");
-    setForm(active ? readLocalConfig(serverConfig.data) : serverConfig.data);
+    setForm(active ? readLocalConfig(normalized) : normalized);
   }, [serverConfig.data]);
 
   const saveServer = useMutation({
@@ -128,8 +150,9 @@ export function WebClientSettingsPage() {
 
   const resetLocalOverride = () => {
     if (!serverConfig.data) return;
-    writeWebClientOptions(serverConfig.data, false);
-    setForm(serverConfig.data);
+    const normalized = normalizeConfig(serverConfig.data);
+    writeWebClientOptions(normalized, false);
+    setForm(normalized);
     setSaveTarget("server");
     setLocalActive(false);
     setMessage(t("localOverrideCleared"));
@@ -138,8 +161,10 @@ export function WebClientSettingsPage() {
 
   const effectiveConfig =
     serverConfig.data && localActive
-      ? readLocalConfig(serverConfig.data)
-      : serverConfig.data;
+      ? readLocalConfig(normalizeConfig(serverConfig.data))
+      : serverConfig.data
+        ? normalizeConfig(serverConfig.data)
+        : undefined;
 
   return (
     <div className="space-y-5">

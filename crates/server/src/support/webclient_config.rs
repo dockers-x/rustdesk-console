@@ -2,20 +2,20 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use tokio::sync::RwLock;
 
 use crate::config::Rustdesk;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WebClientConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_like")]
     pub id_server: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_like")]
     pub relay_server: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_like")]
     pub api_server: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_like")]
     pub key: String,
 }
 
@@ -27,6 +27,20 @@ impl From<&Rustdesk> for WebClientConfig {
             api_server: value.api_server.clone(),
             key: value.key.clone(),
         }
+    }
+}
+
+fn deserialize_string_like<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(String::new()),
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Bool(b) => Ok(b.to_string()),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        _ => Err(de::Error::custom("expected a string-like scalar")),
     }
 }
 
@@ -272,5 +286,22 @@ logger:
         );
         assert!(out.contains("  key-file: \"pub\"\n  id-server: \"id\""));
         assert!(out.ends_with('\n'));
+    }
+
+    #[test]
+    fn accepts_scalar_values_as_strings() {
+        let cfg: WebClientConfig = serde_json::from_str(
+            r#"{
+                "id_server": 123,
+                "relay_server": true,
+                "api_server": "https://api.example",
+                "key": null
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.id_server, "123");
+        assert_eq!(cfg.relay_server, "true");
+        assert_eq!(cfg.api_server, "https://api.example");
+        assert_eq!(cfg.key, "");
     }
 }

@@ -130,6 +130,9 @@ impl FromRequestParts<AppState> for BackendUser {
         if !user.is_enabled() {
             return Err(response::unauthorized());
         }
+        if user.must_change_password && !password_change_allowed_path(parts.uri.path()) {
+            return Err(response::fail(112, state.tr(&lang, "PasswordChangeRequired")));
+        }
         // auto-refresh token if close to expiry
         let _ = crate::services::user::auto_refresh_access_token(&state.db, &state.config, &ut).await;
         Ok(BackendUser {
@@ -138,6 +141,13 @@ impl FromRequestParts<AppState> for BackendUser {
             user_token: ut,
         })
     }
+}
+
+fn password_change_allowed_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/admin/user/current" | "/api/admin/user/changeCurPwd" | "/api/admin/logout"
+    )
 }
 
 /// Admin-only: a [`BackendUser`] that is also an admin.

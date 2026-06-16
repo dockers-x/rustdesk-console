@@ -311,6 +311,7 @@ pub async fn create(db: &DatabaseConnection, mut model: user::Model) -> Result<u
         } else {
             model.status
         }),
+        must_change_password: Set(model.must_change_password),
         remark: Set(model.remark),
         created_at: Set(now()),
         updated_at: Set(now()),
@@ -320,7 +321,12 @@ pub async fn create(db: &DatabaseConnection, mut model: user::Model) -> Result<u
 }
 
 pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), String> {
-    if let Some(current) = info_by_id(db, model.id).await.map_err(|e| e.to_string())? {
+    let current = info_by_id(db, model.id).await.map_err(|e| e.to_string())?;
+    let must_change_password = current
+        .as_ref()
+        .map(|u| u.must_change_password)
+        .unwrap_or(model.must_change_password);
+    if let Some(current) = &current {
         if current.is_admin() {
             let count = admin_user_count(db).await.map_err(|e| e.to_string())?;
             if count <= 1 && (!model.is_admin() || model.status == user::STATUS_DISABLED) {
@@ -337,6 +343,7 @@ pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), 
         group_id: Set(model.group_id),
         is_admin: Set(model.is_admin),
         status: Set(model.status),
+        must_change_password: Set(must_change_password),
         remark: Set(model.remark.clone()),
         updated_at: Set(now()),
         ..Default::default()
@@ -366,6 +373,7 @@ pub async fn update_password(
     let hash = encrypt_password(password).map_err(|e| e.to_string())?;
     let mut am: user::ActiveModel = u.clone().into();
     am.password = Set(hash);
+    am.must_change_password = Set(false);
     am.updated_at = Set(now());
     am.update(db).await.map_err(|e| e.to_string())?;
     // Invalidate existing tokens.
@@ -462,6 +470,7 @@ pub async fn register(
         group_id: 1,
         is_admin: Some(false),
         status,
+        must_change_password: false,
         remark: String::new(),
         created_at: None,
         updated_at: None,

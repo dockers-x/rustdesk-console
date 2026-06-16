@@ -152,6 +152,7 @@ pub struct AdminLoginPayload {
     pub token: String,
     pub route_names: Vec<String>,
     pub nickname: String,
+    pub must_change_password: bool,
 }
 
 impl AdminLoginPayload {
@@ -179,6 +180,7 @@ impl AdminLoginPayload {
             token,
             route_names,
             nickname: u.nickname.clone(),
+            must_change_password: u.must_change_password,
         }
     }
 }

@@ -1,5 +1,5 @@
 import axios, { type AxiosInstance } from "axios";
-import { getToken, clearToken } from "./auth";
+import { getToken, clearToken, setMustChangePassword } from "./auth";
 
 /// Shared axios client. Sends the `api-token` header and unwraps the
 /// `{ code, message, data }` envelope used by the admin API.
@@ -31,6 +31,12 @@ http.interceptors.response.use(
       if (body.code === 0) return body.data;
       // 403 NeedLogin -> drop creds and let the app redirect to login.
       if (body.code === 403) clearToken();
+      if (body.code === 112) {
+        setMustChangePassword(true);
+        if (window.location.hash !== "#/change-password") {
+          window.location.hash = "#/change-password";
+        }
+      }
       throw new ApiError(body.code, body.message ?? "error");
     }
     return body;

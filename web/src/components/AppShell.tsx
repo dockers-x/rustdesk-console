@@ -32,6 +32,7 @@ import {
   UsersThree,
 } from "@phosphor-icons/react";
 import { clearToken } from "../lib/auth";
+import { useAppTitle } from "../lib/adminTitle";
 import { getMode, setMode } from "../lib/theme";
 import {
   ADMIN_RESOURCES,
@@ -110,6 +111,7 @@ const isItemActive = (pathname: string, item: NavItem) => {
 
 export function AppShell() {
   const { t } = useTranslation();
+  const appTitle = useAppTitle();
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(
@@ -171,7 +173,11 @@ export function AppShell() {
           )}
         >
           <Monitor size={20} />
-          {!collapsed && <span className="truncate">{t("appTitle")}</span>}
+          {!collapsed && (
+            <span className="truncate" title={appTitle}>
+              {appTitle}
+            </span>
+          )}
         </div>
         <nav className="flex-1 overflow-y-auto px-2 py-2" aria-label="main">
           {NAV_SECTIONS.map((section, sectionIndex) => {

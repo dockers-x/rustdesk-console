@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "entity"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "sea-orm",
@@ -2542,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-console"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",

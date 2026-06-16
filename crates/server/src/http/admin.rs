@@ -143,8 +143,12 @@ pub async fn login_options(State(state): State<AppState>, ClientIp(ip): ClientIp
 // ---------- config ----------
 
 pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUser>) -> Response {
+    let timezone = std::env::var("TZ").unwrap_or_default();
     let Some(user) = user else {
-        return resp::success(json!({ "title": state.config.admin.title }));
+        return resp::success(json!({
+            "title": state.config.admin.title,
+            "timezone": timezone,
+        }));
     };
     let mut hello = state.config.admin.hello.clone();
     if hello.is_empty() && !state.config.admin.hello_file.is_empty() {
@@ -155,7 +159,11 @@ pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUse
         }
     }
     hello = hello.replace("{{username}}", &user.user.username);
-    resp::success(json!({ "title": state.config.admin.title, "hello": hello }))
+    resp::success(json!({
+        "title": state.config.admin.title,
+        "hello": hello,
+        "timezone": timezone,
+    }))
 }
 
 pub async fn config_server(State(state): State<AppState>, _user: BackendUser) -> Response {
@@ -245,6 +253,7 @@ impl UserForm {
             group_id: self.group_id,
             is_admin: self.is_admin,
             status: self.status,
+            must_change_password: false,
             remark: self.remark.clone(),
             created_at: None,
             updated_at: None,
