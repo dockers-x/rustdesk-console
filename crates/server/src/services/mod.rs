@@ -2,6 +2,7 @@
 //! data-access + business logic for one domain, operating on a SeaORM
 //! `DatabaseConnection`.
 
+pub mod active_connection;
 pub mod address_book;
 pub mod audit;
 pub mod group;

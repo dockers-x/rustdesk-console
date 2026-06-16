@@ -153,6 +153,8 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/peer/update", post(admin::peer_update))
         .route("/api/admin/peer/delete", post(admin::peer_delete))
         .route("/api/admin/peer/batchDelete", post(admin::peer_batch_delete))
+        .route("/api/admin/peer/disconnect", post(admin::peer_disconnect))
+        .route("/api/admin/active_connection/list", get(admin::active_connection_list))
         // login log
         .route("/api/admin/login_log/list", get(admin::login_log_list))
         .route("/api/admin/login_log/delete", post(admin::login_log_delete))

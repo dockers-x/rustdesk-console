@@ -36,6 +36,8 @@ pub struct HeartbeatForm {
     pub version: String,
     #[serde(default)]
     pub ver: i64,
+    #[serde(default)]
+    pub conns: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -62,11 +64,26 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
             let _ = services::peer::update(&state.db, am).await;
         }
     }
-    Json(json!({
+    let disconnect_key = heartbeat_disconnect_key(&info.uuid, &rustdesk_id);
+    if let Some(conns) = &info.conns {
+        if let Err(e) =
+            services::active_connection::sync_for_device(&state.db, &rustdesk_id, &info.uuid, conns)
+                .await
+        {
+            tracing::warn!("failed to sync active connections: {e}");
+        }
+        state.disconnect_store.remove_disconnected(&disconnect_key, conns);
+    }
+
+    let mut res = json!({
         "modified_at": Utc::now().timestamp(),
         "strategy": resolve_capability(&normalize_reported_version(&info.version, info.ver)),
-    }))
-    .into_response()
+    });
+    let disconnect = state.disconnect_store.pending(&disconnect_key);
+    if !disconnect.is_empty() {
+        res["disconnect"] = json!(disconnect);
+    }
+    Json(res).into_response()
 }
 
 fn resolve_heartbeat_rustdesk_id(id: &str, uuid: &str) -> String {
@@ -74,6 +91,14 @@ fn resolve_heartbeat_rustdesk_id(id: &str, uuid: &str) -> String {
         id.to_string()
     } else {
         uuid.to_string()
+    }
+}
+
+fn heartbeat_disconnect_key(uuid: &str, rustdesk_id: &str) -> String {
+    if !uuid.is_empty() {
+        uuid.to_string()
+    } else {
+        rustdesk_id.to_string()
     }
 }
 
@@ -137,6 +162,12 @@ mod heartbeat_tests {
         assert_eq!(normalize_reported_version("1.4.6", 1002070), "1.4.6");
         assert_eq!(normalize_reported_version("", 10604), "10604");
         assert_eq!(normalize_reported_version("", 0), "");
+    }
+
+    #[test]
+    fn heartbeat_disconnect_key_prefers_uuid_and_falls_back_to_rustdesk_id() {
+        assert_eq!(heartbeat_disconnect_key("uuid-1", "182921366"), "uuid-1");
+        assert_eq!(heartbeat_disconnect_key("", "182921366"), "182921366");
     }
 
     #[test]

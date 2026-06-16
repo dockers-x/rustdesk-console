@@ -1,4 +1,5 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
+import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
 import { PeerQuickActions } from "../components/PeerQuickActions";
 import { WebClientActions } from "../components/WebClientActions";
 import type { ResourceConfig } from "./types";
@@ -13,6 +14,22 @@ const boolCol = (key: string, label: string) => ({
   key,
   label,
   render: (r: Record<string, unknown>) => (r[key] ? "✓" : "—"),
+});
+const monoCol = (key: string, label: string, width = "max-w-44") => ({
+  key,
+  label,
+  render: (r: Record<string, unknown>) => {
+    const value = String(r[key] ?? "");
+    if (!value) return "—";
+    return (
+      <span
+        className={`block ${width} truncate font-mono text-xs tabular-nums`}
+        title={value}
+      >
+        {value}
+      </span>
+    );
+  },
 });
 const adminCol = {
   key: "is_admin",
@@ -34,6 +51,17 @@ const myPeerActionsCol = {
     <PeerQuickActions
       peerId={String(r.id ?? "")}
       rowId={Number(r.row_id ?? 0)}
+    />
+  ),
+};
+const activeConnectionActionsCol = {
+  key: "__active_connection_actions",
+  label: "actions",
+  render: (r: Record<string, unknown>) => (
+    <ActiveConnectionActions
+      connId={Number(r.conn_id ?? 0)}
+      peerId={String(r.peer_id ?? "")}
+      uuid={String(r.uuid ?? "")}
     />
   ),
 };
@@ -326,6 +354,27 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "type", label: "type" },
       { key: "platform", label: "platform" },
       { key: "created_at", label: "createdAt" },
+    ],
+    fields: [],
+  },
+  {
+    name: "active_connection",
+    titleKey: "activeConnections",
+    api: "/api/admin/active_connection",
+    canCreate: false,
+    canEdit: false,
+    canDelete: false,
+    filters: [
+      { name: "peer_id", label: "deviceId" },
+      { name: "uuid", label: "uuid" },
+    ],
+    columns: [
+      { key: "id", label: "id" },
+      monoCol("conn_id", "connId", "max-w-24"),
+      activeConnectionActionsCol,
+      monoCol("peer_id", "deviceId", "max-w-28"),
+      monoCol("uuid", "uuid", "max-w-48"),
+      { key: "updated_at", label: "updatedAt" },
     ],
     fields: [],
   },

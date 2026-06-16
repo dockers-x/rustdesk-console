@@ -66,6 +66,7 @@ const NAV_ICONS: Record<string, IconType> = {
   shareRecords: ShareNetwork,
   userTokens: Ticket,
   loginLogs: SignIn,
+  activeConnections: PlugsConnected,
   auditConn: PlugsConnected,
   auditFile: FileText,
   serverCommands: Terminal,

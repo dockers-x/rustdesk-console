@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 
+export const dialogPanelClass =
+  "overflow-hidden bg-kumo-elevated p-0 shadow-xl ring-1 ring-kumo-line";
+
 export function DialogHeader({
   title,
   description,
@@ -36,7 +39,7 @@ export function DialogFooter({
   error?: ReactNode;
 }) {
   return (
-    <div className="border-t border-kumo-line bg-kumo-elevated/60 px-6 py-4">
+    <div className="border-t border-kumo-line bg-kumo-recessed px-6 py-4">
       {error && (
         <p role="alert" className="mb-3 text-sm text-kumo-danger">
           {error}

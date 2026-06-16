@@ -3,7 +3,12 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
-import { DialogBody, DialogFooter, DialogHeader } from "./DialogLayout";
+import {
+  DialogBody,
+  DialogFooter,
+  DialogHeader,
+  dialogPanelClass,
+} from "./DialogLayout";
 import { apiPost, ApiError } from "../lib/api";
 
 const EXPIRE_OPTIONS = [
@@ -107,7 +112,7 @@ export function WebClientActions({
           <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
             {t("share")}
           </Button>
-          <Dialog size="lg" className="p-0">
+          <Dialog size="lg" className={dialogPanelClass}>
             <DialogHeader
               title={t("shareByWebClient")}
               description={t("shareWebClientHint")}

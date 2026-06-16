@@ -13,9 +13,9 @@ use sea_orm::{
 };
 
 use entity::{
-    address_book, address_book_collection, address_book_collection_rule, audit_conn, audit_file,
-    device_group, group, login_log, oauth, peer, server_cmd, share_record, tag, user, user_third,
-    user_token, version,
+    active_connection, address_book, address_book_collection, address_book_collection_rule,
+    audit_conn, audit_file, device_group, group, login_log, oauth, peer, server_cmd, share_record,
+    tag, user, user_third, user_token, version,
 };
 
 use crate::config::{self, Config};
@@ -28,7 +28,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{password, random};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 267;
+pub const DATABASE_VERSION: i32 = 268;
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
@@ -99,6 +99,7 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(address_book_collection_rule::Entity);
     create!(server_cmd::Entity);
     create!(device_group::Entity);
+    create!(active_connection::Entity);
     add_missing_columns(db).await?;
     Ok(())
 }
@@ -277,6 +278,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
         limiter: Arc::new(limiter),
         i18n: Arc::new(i18n),
         oauth_cache: Arc::new(crate::support::oauth_cache::OauthCache::new()),
+        disconnect_store: Arc::new(crate::support::disconnect_store::DisconnectStore::new()),
         start_time: Arc::new(start_time),
         version: Arc::new(version),
     })

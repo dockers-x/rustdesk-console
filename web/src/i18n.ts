@@ -80,6 +80,7 @@ const en: Record<string, string> = {
   shareRecords: "Share records",
   userTokens: "Tokens",
   loginLogs: "Login logs",
+  activeConnections: "Active connections",
   auditConn: "Connection audit",
   auditFile: "File audit",
   // fields / columns
@@ -118,6 +119,7 @@ const en: Record<string, string> = {
   shareToken: "Share token",
   passwordType: "Password type",
   expire: "Expire",
+  connId: "Connection ID",
   fromPeer: "From peer",
   fromName: "From name",
   action: "Action",
@@ -216,6 +218,11 @@ const en: Record<string, string> = {
   expire1w: "1 week",
   expire1mo: "1 month",
   expireForever: "Forever",
+  disconnect: "Disconnect",
+  disconnectConnection: "Disconnect connection {{connId}}",
+  disconnectSent: "Disconnect requested",
+  confirmDisconnectTitle: "Disconnect connection",
+  confirmDisconnectDescription: "The server will ask this RustDesk client to close connection {{connId}} on its next heartbeat.",
 };
 
 const zhCN: Record<string, string> = {
@@ -295,6 +302,7 @@ const zhCN: Record<string, string> = {
   shareRecords: "分享记录",
   userTokens: "登录凭证",
   loginLogs: "登录日志",
+  activeConnections: "活跃连接",
   auditConn: "连接审计",
   auditFile: "文件审计",
   id: "ID",
@@ -332,6 +340,7 @@ const zhCN: Record<string, string> = {
   shareToken: "分享令牌",
   passwordType: "密码类型",
   expire: "有效期",
+  connId: "连接 ID",
   fromPeer: "来源设备",
   fromName: "来源名称",
   action: "动作",
@@ -430,6 +439,11 @@ const zhCN: Record<string, string> = {
   expire1w: "1 周",
   expire1mo: "1 个月",
   expireForever: "永久",
+  disconnect: "断开",
+  disconnectConnection: "断开连接 {{connId}}",
+  disconnectSent: "已下发断开请求",
+  confirmDisconnectTitle: "断开连接",
+  confirmDisconnectDescription: "服务端会在该 RustDesk 客户端下次心跳时请求关闭连接 {{connId}}。",
 };
 
 void i18n.use(initReactI18next).init({

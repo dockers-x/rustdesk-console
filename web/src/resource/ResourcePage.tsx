@@ -7,7 +7,12 @@ import { Table } from "@cloudflare/kumo/components/table";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Switch } from "@cloudflare/kumo/components/switch";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { DialogBody, DialogFooter, DialogHeader } from "../components/DialogLayout";
+import {
+  DialogBody,
+  DialogFooter,
+  DialogHeader,
+  dialogPanelClass,
+} from "../components/DialogLayout";
 import { TableState } from "../components/TableState";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiGet, apiPost } from "../lib/api";
@@ -213,7 +218,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
 
       {(cfg.canCreate !== false || cfg.canEdit !== false) && (
         <Dialog.Root open={open} onOpenChange={setOpen}>
-          <Dialog size="lg" className="p-0">
+          <Dialog size="lg" className={dialogPanelClass}>
             <DialogHeader
               title={`${editing ? t("edit") : t("create")} · ${t(cfg.titleKey)}`}
               description={editing ? t("editDialogHint") : t("createDialogHint")}

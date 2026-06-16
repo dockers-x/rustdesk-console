@@ -757,6 +757,84 @@ pub async fn peer_batch_delete(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct ActiveConnectionQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub peer_id: Option<String>,
+    #[serde(default)]
+    pub uuid: Option<String>,
+}
+
+pub async fn active_connection_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<ActiveConnectionQuery>,
+) -> Response {
+    match services::active_connection::list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.peer_id,
+        q.uuid,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct PeerDisconnectForm {
+    #[serde(default)]
+    pub row_id: i32,
+    #[serde(default)]
+    pub peer_id: String,
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub conn_ids: Vec<i64>,
+}
+
+pub async fn peer_disconnect(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<PeerDisconnectForm>,
+) -> Response {
+    let conn_ids: Vec<i64> = f.conn_ids.into_iter().filter(|id| *id > 0).collect();
+    if conn_ids.is_empty() {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+
+    let key = if f.row_id > 0 {
+        match services::peer::info_by_row_id(&state.db, f.row_id).await {
+            Ok(Some(p)) => disconnect_key(&p.uuid, &p.id),
+            _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+        }
+    } else {
+        disconnect_key(&f.uuid, &f.peer_id)
+    };
+    if key.is_empty() {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+
+    let pending = state.disconnect_store.add_pending(&key, &conn_ids);
+    resp::success(json!({ "disconnect": pending }))
+}
+
+fn disconnect_key(uuid: &str, peer_id: &str) -> String {
+    if !uuid.is_empty() {
+        uuid.to_string()
+    } else {
+        peer_id.to_string()
+    }
+}
+
 // ---------- login log (read) ----------
 
 pub async fn login_log_list(

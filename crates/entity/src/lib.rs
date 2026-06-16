@@ -6,6 +6,7 @@
 
 pub mod datetime;
 
+pub mod active_connection;
 pub mod address_book;
 pub mod address_book_collection;
 pub mod address_book_collection_rule;

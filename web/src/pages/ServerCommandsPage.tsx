@@ -7,7 +7,12 @@ import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
 import { Table } from "@cloudflare/kumo/components/table";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { DialogBody, DialogFooter, DialogHeader } from "../components/DialogLayout";
+import {
+  DialogBody,
+  DialogFooter,
+  DialogHeader,
+  dialogPanelClass,
+} from "../components/DialogLayout";
 import { TableState } from "../components/TableState";
 import { apiGet, apiPost, ApiError } from "../lib/api";
 
@@ -263,7 +268,7 @@ export function ServerCommandsPage() {
       </div>
 
       <Dialog.Root open={formOpen} onOpenChange={setFormOpen}>
-        <Dialog size="lg" className="p-0">
+        <Dialog size="lg" className={dialogPanelClass}>
           <DialogHeader
             title={`${form.id ? t("edit") : t("create")} · ${t("serverCommands")}`}
             description={t("commandDialogHint")}
@@ -291,7 +296,7 @@ export function ServerCommandsPage() {
       </Dialog.Root>
 
       <Dialog.Root open={sendOpen} onOpenChange={setSendOpen}>
-        <Dialog size="lg" className="p-0">
+        <Dialog size="lg" className={dialogPanelClass}>
           <DialogHeader
             title={`${t("sendCmd")} · ${targetLabel(sendForm.target)}`}
             description={t("sendCommandHint")}
