@@ -44,6 +44,8 @@ export interface FilterDef {
 export interface ResourceConfig<T = Record<string, unknown>> {
   /** Route segment + query key. */
   name: string;
+  /** Optional absolute route path, used for legacy-compatible nested paths. */
+  path?: string;
   /** i18n key for the page title + sidebar label. */
   titleKey: string;
   /** API base, e.g. `/api/admin/user`. */

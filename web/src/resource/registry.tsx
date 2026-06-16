@@ -1,4 +1,6 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
+import { PeerQuickActions } from "../components/PeerQuickActions";
+import { WebClientActions } from "../components/WebClientActions";
 import type { ResourceConfig } from "./types";
 
 const statusCol = {
@@ -18,6 +20,23 @@ const adminCol = {
   render: (r: Record<string, unknown>, t: (k: string) => string) =>
     r.is_admin ? <Badge>{t("isAdmin")}</Badge> : "—",
 };
+const webClientCol = (share = false) => ({
+  key: "__webclient",
+  label: "webClient",
+  render: (r: Record<string, unknown>) => (
+    <WebClientActions peerId={String(r.id ?? "")} share={share} />
+  ),
+});
+const myPeerActionsCol = {
+  key: "__my_peer_actions",
+  label: "quickActions",
+  render: (r: Record<string, unknown>) => (
+    <PeerQuickActions
+      peerId={String(r.id ?? "")}
+      rowId={Number(r.row_id ?? 0)}
+    />
+  ),
+};
 
 const RULE_OPTIONS = [
   { label: "ruleRead", value: 1 },
@@ -29,8 +48,12 @@ const RULE_TYPE_OPTIONS = [
   { label: "ruleGroup", value: 2 },
 ];
 
+export function resourcePath(r: ResourceConfig) {
+  return r.path ?? `/${r.name}`;
+}
+
 /// Every config-driven admin screen. Adding a screen = adding an entry here.
-export const RESOURCES: ResourceConfig[] = [
+export const ADMIN_RESOURCES: ResourceConfig[] = [
   {
     name: "users",
     titleKey: "users",
@@ -138,6 +161,7 @@ export const RESOURCES: ResourceConfig[] = [
       { key: "last_online_ip", label: "ip" },
       { key: "group_id", label: "groupId" },
       { key: "alias", label: "alias" },
+      webClientCol(false),
     ],
     fields: [
       { name: "alias", label: "alias", type: "text" },
@@ -153,6 +177,8 @@ export const RESOURCES: ResourceConfig[] = [
       { key: "id", label: "id" },
       { key: "op", label: "op" },
       { key: "oauth_type", label: "oauthType" },
+      boolCol("auto_register", "autoRegister"),
+      boolCol("pkce_enable", "pkce"),
       { key: "client_id", label: "clientId" },
       { key: "issuer", label: "issuer" },
     ],
@@ -174,6 +200,9 @@ export const RESOURCES: ResourceConfig[] = [
       { name: "client_secret", label: "clientSecret", type: "text" },
       { name: "issuer", label: "issuer", type: "text" },
       { name: "scopes", label: "scopes", type: "text" },
+      { name: "auto_register", label: "autoRegister", type: "switch" },
+      { name: "pkce_enable", label: "pkce", type: "switch" },
+      { name: "pkce_method", label: "pkceMethod", type: "text" },
     ],
   },
   {
@@ -193,6 +222,7 @@ export const RESOURCES: ResourceConfig[] = [
       { key: "platform", label: "platform" },
       { key: "user_id", label: "userId" },
       { key: "collection_id", label: "collectionId" },
+      webClientCol(false),
     ],
     fields: [
       { name: "id", label: "deviceId", type: "text", lockOnEdit: true },
@@ -342,3 +372,160 @@ export const RESOURCES: ResourceConfig[] = [
     fields: [],
   },
 ];
+
+export const MY_RESOURCES: ResourceConfig[] = [
+  {
+    name: "my_peer",
+    path: "/my/peer",
+    titleKey: "myPeers",
+    api: "/api/admin/my/peer",
+    idField: "row_id",
+    canCreate: false,
+    canEdit: false,
+    canDelete: false,
+    filters: [
+      { name: "id", label: "deviceId" },
+      { name: "hostname", label: "hostname" },
+      { name: "username", label: "username" },
+    ],
+    columns: [
+      { key: "id", label: "deviceId" },
+      { key: "hostname", label: "hostname" },
+      { key: "os", label: "os" },
+      { key: "username", label: "username" },
+      { key: "last_online_ip", label: "ip" },
+      { key: "alias", label: "alias" },
+      { key: "version", label: "version" },
+      { key: "updated_at", label: "updatedAt" },
+      myPeerActionsCol,
+    ],
+    fields: [],
+  },
+  {
+    name: "my_address_book_collection",
+    path: "/my/address_book_collection",
+    titleKey: "myCollections",
+    api: "/api/admin/my/address_book_collection",
+    columns: [
+      { key: "id", label: "id" },
+      { key: "name", label: "name" },
+      { key: "created_at", label: "createdAt" },
+    ],
+    fields: [{ name: "name", label: "name", type: "text" }],
+  },
+  {
+    name: "my_address_book",
+    path: "/my/address_book",
+    titleKey: "myAddressBook",
+    api: "/api/admin/my/address_book",
+    idField: "row_id",
+    filters: [
+      { name: "id", label: "deviceId" },
+      { name: "username", label: "username" },
+      { name: "hostname", label: "hostname" },
+      { name: "collection_id", label: "collectionId" },
+    ],
+    columns: [
+      { key: "id", label: "deviceId" },
+      { key: "username", label: "username" },
+      { key: "hostname", label: "hostname" },
+      { key: "platform", label: "platform" },
+      { key: "alias", label: "alias" },
+      { key: "collection_id", label: "collectionId" },
+      webClientCol(true),
+    ],
+    fields: [
+      { name: "id", label: "deviceId", type: "text", lockOnEdit: true },
+      { name: "username", label: "username", type: "text" },
+      { name: "hostname", label: "hostname", type: "text" },
+      { name: "platform", label: "platform", type: "text" },
+      { name: "alias", label: "alias", type: "text" },
+      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+    ],
+  },
+  {
+    name: "my_tag",
+    path: "/my/tag",
+    titleKey: "myTags",
+    api: "/api/admin/my/tag",
+    filters: [{ name: "collection_id", label: "collectionId" }],
+    columns: [
+      { key: "id", label: "id" },
+      { key: "name", label: "name" },
+      { key: "color", label: "color" },
+      { key: "collection_id", label: "collectionId" },
+    ],
+    fields: [
+      { name: "name", label: "name", type: "text" },
+      { name: "color", label: "color", type: "number", defaultValue: 0 },
+      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+    ],
+  },
+  {
+    name: "my_address_book_collection_rule",
+    path: "/my/address_book_collection_rule",
+    titleKey: "myShareRules",
+    api: "/api/admin/my/address_book_collection_rule",
+    filters: [{ name: "collection_id", label: "collectionId" }],
+    columns: [
+      { key: "id", label: "id" },
+      { key: "collection_id", label: "collectionId" },
+      {
+        key: "rule",
+        label: "rule",
+        render: (r, t) =>
+          t(["", "ruleRead", "ruleReadWrite", "ruleFull"][r.rule as number] || "—"),
+      },
+      {
+        key: "type",
+        label: "type",
+        render: (r, t) => (r.type === 2 ? t("ruleGroup") : t("rulePersonal")),
+      },
+      { key: "to_id", label: "toId" },
+    ],
+    fields: [
+      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+      { name: "rule", label: "rule", type: "select", defaultValue: 1, options: RULE_OPTIONS },
+      { name: "type", label: "type", type: "select", defaultValue: 1, options: RULE_TYPE_OPTIONS },
+      { name: "to_id", label: "toId", type: "number" },
+    ],
+  },
+  {
+    name: "my_share_record",
+    path: "/my/shareRecord",
+    titleKey: "myShareRecords",
+    api: "/api/admin/my/share_record",
+    canCreate: false,
+    canEdit: false,
+    columns: [
+      { key: "id", label: "id" },
+      { key: "peer_id", label: "deviceId" },
+      { key: "share_token", label: "shareToken" },
+      { key: "password_type", label: "passwordType" },
+      { key: "expire", label: "expire" },
+      { key: "created_at", label: "createdAt" },
+    ],
+    fields: [],
+  },
+  {
+    name: "my_login_log",
+    path: "/my/loginLog",
+    titleKey: "myLoginLogs",
+    api: "/api/admin/my/login_log",
+    canCreate: false,
+    canEdit: false,
+    columns: [
+      { key: "id", label: "id" },
+      { key: "client", label: "client" },
+      { key: "device_id", label: "deviceId" },
+      { key: "ip", label: "ip" },
+      { key: "type", label: "type" },
+      { key: "platform", label: "platform" },
+      { key: "created_at", label: "createdAt" },
+    ],
+    fields: [],
+  },
+];
+
+export const RESOURCES = ADMIN_RESOURCES;
+export const ALL_RESOURCES = [...ADMIN_RESOURCES, ...MY_RESOURCES];

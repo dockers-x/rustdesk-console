@@ -42,7 +42,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
     () => [cfg.name, page, filters],
     [cfg.name, page, filters],
   );
-  const { data, isLoading } = useQuery({
+  const { data, error, isLoading } = useQuery({
     queryKey,
     queryFn: () =>
       apiGet<ListResult>(`${cfg.api}/list`, {
@@ -165,10 +165,15 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
           </Table.Body>
         </Table>
         {isLoading && (
-          <div className="p-4 text-sm text-color-muted">…</div>
+          <div className="p-4 text-sm text-color-muted">{t("loading")}</div>
         )}
-        {!isLoading && rows.length === 0 && (
-          <div className="p-4 text-sm text-color-muted">No data</div>
+        {error && (
+          <div className="p-4 text-sm text-red-500">
+            {(error as Error).message || t("operationFailed")}
+          </div>
+        )}
+        {!isLoading && !error && rows.length === 0 && (
+          <div className="p-4 text-sm text-color-muted">{t("noData")}</div>
         )}
       </div>
 
@@ -214,6 +219,11 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                 ))}
             </div>
             <div className="mt-6 flex justify-end gap-2">
+              {save.error && (
+                <p className="mr-auto self-center text-sm text-red-500">
+                  {(save.error as Error).message || t("operationFailed")}
+                </p>
+              )}
               <Button variant="secondary" onClick={() => setOpen(false)}>
                 {t("cancel")}
               </Button>
@@ -283,6 +293,20 @@ function FieldInput({
             </option>
           ))}
         </select>
+      </label>
+    );
+  }
+
+  if (field.type === "textarea") {
+    return (
+      <label className="block">
+        <span className="mb-1 block text-sm">{t(field.label)}</span>
+        <textarea
+          className="min-h-24 w-full rounded-lg border border-color-border bg-kumo-elevated px-3 py-2 text-sm"
+          value={value === null || value === undefined ? "" : String(value)}
+          disabled={locked}
+          onChange={(e) => onChange(e.target.value)}
+        />
       </label>
     );
   }

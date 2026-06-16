@@ -42,10 +42,21 @@ async fn begin(
     f: &OidcAuthRequest,
     device_type: &str,
 ) -> Response {
+    match begin_value(state, f, device_type).await {
+        Ok(v) => Json(v).into_response(),
+        Err(r) => r,
+    }
+}
+
+async fn begin_value(
+    state: &AppState,
+    f: &OidcAuthRequest,
+    device_type: &str,
+) -> Result<serde_json::Value, Response> {
     let (st, verifier, nonce, url) =
         match services::oauth::begin_auth(&state.config, &state.db, &f.op).await {
             Ok(v) => v,
-            Err(e) => return resp::error(e),
+            Err(e) => return Err(resp::error(e)),
         };
     state.oauth_cache.set(
         &st,
@@ -63,7 +74,7 @@ async fn begin(
         },
         5 * 60,
     );
-    Json(json!({ "code": st, "url": url })).into_response()
+    Ok(json!({ "code": st, "url": url }))
 }
 
 // ---------- client ----------
@@ -274,7 +285,10 @@ pub async fn message(State(state): State<AppState>, Query(mp): Query<MessagePara
 // ---------- admin ----------
 
 pub async fn admin_oidc_auth(State(state): State<AppState>, Json(f): Json<OidcAuthRequest>) -> Response {
-    begin(&state, &f, entity::login_log::CLIENT_WEB_ADMIN).await
+    match begin_value(&state, &f, entity::login_log::CLIENT_WEB_ADMIN).await {
+        Ok(v) => resp::success(v),
+        Err(r) => r,
+    }
 }
 
 pub async fn admin_oidc_auth_query(

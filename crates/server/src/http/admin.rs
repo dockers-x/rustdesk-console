@@ -1767,6 +1767,31 @@ pub async fn rustdesk_cmd_create(
     }
 }
 
+pub async fn rustdesk_cmd_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<ServerCmdForm>,
+) -> Response {
+    if f.id == 0 || f.cmd.is_empty() || f.target.is_empty() {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::server_cmd::update(
+        &state.db,
+        f.id,
+        &f.cmd,
+        &f.alias,
+        &f.option,
+        &f.explain,
+        &f.target,
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
 pub async fn rustdesk_cmd_delete(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,

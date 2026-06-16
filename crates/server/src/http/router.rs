@@ -69,7 +69,10 @@ pub fn build(state: AppState) -> Router {
             .route("/webclient-config/index.js", get(static_files::config_js))
             .route("/webclient", get(static_files::webclient_index))
             .route("/webclient/", get(static_files::webclient_index))
-            .route("/webclient/*path", get(static_files::webclient_path));
+            .route("/webclient/*path", get(static_files::webclient_path))
+            .route("/webclient2", get(static_files::webclient_index))
+            .route("/webclient2/", get(static_files::webclient_index))
+            .route("/webclient2/*path", get(static_files::webclient_path));
     }
 
     app = app.merge(admin_routes());
@@ -204,6 +207,7 @@ fn admin_routes() -> Router<AppState> {
         // rustdesk server commands
         .route("/api/admin/rustdesk/cmdList", get(admin::rustdesk_cmd_list))
         .route("/api/admin/rustdesk/cmdCreate", post(admin::rustdesk_cmd_create))
+        .route("/api/admin/rustdesk/cmdUpdate", post(admin::rustdesk_cmd_update))
         .route("/api/admin/rustdesk/cmdDelete", post(admin::rustdesk_cmd_delete))
         .route("/api/admin/rustdesk/sendCmd", post(admin::rustdesk_send_cmd))
         // file upload (local + OSS)

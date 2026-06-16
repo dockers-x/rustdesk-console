@@ -64,6 +64,28 @@ pub async fn create(
     am.insert(db).await
 }
 
+pub async fn update(
+    db: &DatabaseConnection,
+    id: i32,
+    cmd: &str,
+    alias: &str,
+    option: &str,
+    explain: &str,
+    target: &str,
+) -> Result<server_cmd::Model, DbErr> {
+    let Some(existing) = info(db, id).await? else {
+        return Err(DbErr::RecordNotFound(format!("server_cmd {id}")));
+    };
+    let mut am: server_cmd::ActiveModel = existing.into();
+    am.cmd = Set(cmd.to_string());
+    am.alias = Set(alias.to_string());
+    am.option = Set(option.to_string());
+    am.explain = Set(explain.to_string());
+    am.target = Set(target.to_string());
+    am.updated_at = Set(now());
+    am.update(db).await
+}
+
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
     server_cmd::Entity::delete_by_id(id).exec(db).await?;
     Ok(())

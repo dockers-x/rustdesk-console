@@ -2,12 +2,38 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
-import { List, Moon, Sun, SignOut } from "@phosphor-icons/react";
+import { List, Monitor, Moon, Sun, SignOut } from "@phosphor-icons/react";
 import { clearToken } from "../lib/auth";
-import { RESOURCES } from "../resource/registry";
+import {
+  ADMIN_RESOURCES,
+  MY_RESOURCES,
+  resourcePath,
+} from "../resource/registry";
 import i18n from "../i18n";
 
-const NAV = RESOURCES.map((r) => ({ to: `/${r.name}`, key: r.titleKey }));
+interface NavItem {
+  to: string;
+  key: string;
+  end?: boolean;
+}
+
+const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
+  {
+    key: "personal",
+    items: [
+      { to: "/my", key: "myInfo", end: true },
+      ...MY_RESOURCES.map((r) => ({ to: resourcePath(r), key: r.titleKey })),
+    ],
+  },
+  {
+    key: "management",
+    items: ADMIN_RESOURCES.map((r) => ({ to: resourcePath(r), key: r.titleKey })),
+  },
+  {
+    key: "operations",
+    items: [{ to: "/serverCmd", key: "serverCommands" }],
+  },
+];
 
 function applyTheme(dark: boolean) {
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
@@ -41,30 +67,47 @@ export function AppShell() {
 
   return (
     <div className="flex h-full bg-kumo-base text-color-surface">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-kumo-elevated focus:px-3 focus:py-2 focus:text-sm focus:shadow"
+      >
+        {t("skipToContent")}
+      </a>
       <aside
         className="flex flex-col border-r border-color-border bg-kumo-elevated transition-all"
         style={{ width: collapsed ? 64 : 220 }}
       >
         <div className="flex h-14 items-center gap-2 px-4 font-semibold">
-          <span className="text-lg">🖥️</span>
+          <Monitor size={20} />
           {!collapsed && <span className="truncate">{t("appTitle")}</span>}
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-2">
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                [
-                  "block rounded-md px-3 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-kumo-tint font-medium"
-                    : "hover:bg-kumo-tint/60",
-                ].join(" ")
-              }
-            >
-              {collapsed ? t(item.key).charAt(0) : t(item.key)}
-            </NavLink>
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.key} className="pb-2">
+              {!collapsed && (
+                <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase text-color-muted">
+                  {t(section.key)}
+                </div>
+              )}
+              {section.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  title={t(item.key)}
+                  className={({ isActive }) =>
+                    [
+                      "block rounded-md px-3 py-2 text-sm transition-colors",
+                      isActive
+                        ? "bg-kumo-tint font-medium"
+                        : "hover:bg-kumo-tint/60",
+                    ].join(" ")
+                  }
+                >
+                  {collapsed ? t(item.key).charAt(0) : t(item.key)}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
       </aside>
@@ -97,7 +140,7 @@ export function AppShell() {
             </Button>
           </div>
         </header>
-        <main className="min-h-0 flex-1 overflow-auto p-6">
+        <main id="main-content" className="min-h-0 flex-1 overflow-auto p-6">
           <Outlet />
         </main>
       </div>
