@@ -1063,3 +1063,37 @@ fn iso_from_unix(ts: i64) -> String {
 fn naive_to_unix(ts: Option<NaiveDateTime>) -> i64 {
     ts.map(|ts| ts.and_utc().timestamp()).unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn pro_page_query_accepts_script_pagination_aliases() {
+        let q: ProPageQuery = serde_json::from_value(json!({
+            "current": 3,
+            "pageSize": 7,
+            "device_name": "workstation"
+        }))
+        .unwrap();
+
+        assert_eq!(q.page, Some(3));
+        assert_eq!(q.page_size, Some(7));
+        assert_eq!(q.device_name.as_deref(), Some("workstation"));
+    }
+
+    #[test]
+    fn pro_page_query_keeps_native_page_field() {
+        let q: ProPageQuery = serde_json::from_value(json!({
+            "page": 2,
+            "pageSize": 25,
+            "group_name": "ops"
+        }))
+        .unwrap();
+
+        assert_eq!(q.page, Some(2));
+        assert_eq!(q.page_size, Some(25));
+        assert_eq!(q.group_name.as_deref(), Some("ops"));
+    }
+}

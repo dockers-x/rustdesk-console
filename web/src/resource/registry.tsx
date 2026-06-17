@@ -272,6 +272,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         type: "relation",
         relation: USER_RELATION,
         defaultValue: 0,
+        hint: "deploymentTokenDefaultUserHint",
       },
       {
         name: "default_device_group_id",

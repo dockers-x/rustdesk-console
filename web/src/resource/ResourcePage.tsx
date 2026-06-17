@@ -703,7 +703,7 @@ function OAuthProviderInput({
               type="button"
               disabled={locked}
               className={[
-                "flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand disabled:opacity-50",
+                "flex min-h-[44px] min-w-0 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand disabled:opacity-50",
                 selected === provider.value
                   ? "border-kumo-brand bg-kumo-tint text-kumo-default"
                   : "border-kumo-line bg-kumo-elevated text-kumo-subtle hover:text-kumo-default",

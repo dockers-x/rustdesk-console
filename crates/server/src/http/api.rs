@@ -2451,3 +2451,205 @@ pub async fn ab_rules_delete(
     }
     "".into_response()
 }
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn client_page_query_accepts_current_and_page_size_aliases() {
+        let q: PageQuery = serde_json::from_value(json!({
+            "current": 4,
+            "pageSize": 12,
+            "name": "alice",
+            "group_name": "support"
+        }))
+        .unwrap();
+
+        assert_eq!(q.page, Some(4));
+        assert_eq!(q.page_size, Some(12));
+        assert_eq!(q.name.as_deref(), Some("alice"));
+        assert_eq!(q.group_name.as_deref(), Some("support"));
+    }
+
+    #[test]
+    fn shared_address_book_queries_accept_script_pagination_aliases() {
+        let profiles: AbProfilesQuery = serde_json::from_value(json!({
+            "current": 2,
+            "pageSize": 20,
+            "name": "team"
+        }))
+        .unwrap();
+        let peers: AbPeersQuery = serde_json::from_value(json!({
+            "ab": "1-2-3",
+            "current": 3,
+            "pageSize": 15,
+            "alias": "laptop"
+        }))
+        .unwrap();
+        let rules: AbRulesQuery = serde_json::from_value(json!({
+            "ab": "1-2-3",
+            "current": 5,
+            "pageSize": 8
+        }))
+        .unwrap();
+
+        assert_eq!(profiles.page, Some(2));
+        assert_eq!(profiles.page_size, Some(20));
+        assert_eq!(profiles.name.as_deref(), Some("team"));
+        assert_eq!(peers.ab, "1-2-3");
+        assert_eq!(peers.page, Some(3));
+        assert_eq!(peers.page_size, Some(15));
+        assert_eq!(peers.alias.as_deref(), Some("laptop"));
+        assert_eq!(rules.ab, "1-2-3");
+        assert_eq!(rules.page, Some(5));
+        assert_eq!(rules.page_size, Some(8));
+    }
+
+    #[test]
+    fn script_page_defaults_and_clamps_to_positive_values() {
+        assert_eq!(script_page(None, None), (1, 30));
+        assert_eq!(script_page(Some(0), Some(0)), (1, 1));
+    }
+}
+
+#[cfg(test)]
+mod deployment_tests {
+    use super::*;
+    use crate::config::{Config, RecordStorage};
+    use crate::i18n::I18n;
+    use crate::support::disconnect_store::DisconnectStore;
+    use crate::support::jwt::Jwt;
+    use crate::support::login_limiter::{LoginLimiter, SecurityPolicy};
+    use crate::support::oauth_cache::OauthCache;
+    use crate::support::record_storage_config::RecordStorageConfigStore;
+    use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
+    use sea_orm::{
+        ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema,
+    };
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration as StdDuration;
+
+    async fn setup_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let backend = db.get_database_backend();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(backend.build(&schema.create_table_from_entity(entity::user::Entity)))
+            .await
+            .unwrap();
+        db.execute(backend.build(&schema.create_table_from_entity(peer::Entity)))
+            .await
+            .unwrap();
+        entity::user::ActiveModel {
+            id: Set(7),
+            username: Set("deployer".to_string()),
+            status: Set(entity::user::STATUS_ENABLE),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        db
+    }
+
+    fn test_state(db: DatabaseConnection) -> AppState {
+        let config = Config::default();
+        AppState {
+            db,
+            config: Arc::new(config.clone()),
+            jwt: Arc::new(Jwt::new("test", StdDuration::from_secs(3600))),
+            limiter: Arc::new(LoginLimiter::new(SecurityPolicy {
+                captcha_threshold: -1,
+                ban_threshold: 0,
+                attempts_window: StdDuration::from_secs(60),
+                ban_duration: StdDuration::from_secs(60),
+            })),
+            i18n: Arc::new(I18n::load("en")),
+            oauth_cache: Arc::new(OauthCache::new()),
+            disconnect_store: Arc::new(DisconnectStore::new()),
+            external_webclient: None,
+            webclient_config: Arc::new(WebClientConfigStore::new(
+                PathBuf::from("/tmp/rustdesk-console-test-config.yaml"),
+                WebClientConfig::default(),
+            )),
+            record_storage_config: Arc::new(RecordStorageConfigStore::new(
+                PathBuf::from("/tmp/rustdesk-console-test-config.yaml"),
+                RecordStorage::default(),
+            )),
+            start_time: Arc::new(String::new()),
+            version: Arc::new("test".to_string()),
+        }
+    }
+
+    fn deployment_auth() -> DeploymentAuth {
+        DeploymentAuth {
+            user: None,
+            token: "rdt_test".to_string(),
+            deployment_token: Some(deployment_token::Model {
+                id: 42,
+                token_hash: "hash".to_string(),
+                name: "test-token".to_string(),
+                scopes: serde_json::to_string(&services::deployment::default_scopes()).unwrap(),
+                default_user_id: 7,
+                default_device_group_id: 5,
+                default_strategy_id: 0,
+                expires_at: 0,
+                max_uses: 0,
+                used_count: 0,
+                revoked_at: 0,
+                created_by: 1,
+                created_at: None,
+                updated_at: None,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn deployment_upsert_persists_uuid_pk_and_rejects_conflicting_uuid() {
+        let db = setup_db().await;
+        let state = test_state(db.clone());
+        let auth = deployment_auth();
+
+        let peer = upsert_deployed_peer(
+            &state,
+            &auth,
+            None,
+            "desk-1",
+            "uuid-1",
+            Some("public-key-1"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(peer.id, "desk-1");
+        assert_eq!(peer.uuid, "uuid-1");
+        assert_eq!(peer.pk, "public-key-1");
+        assert_eq!(peer.user_id, 7);
+        assert_eq!(peer.group_id, 5);
+
+        let stored = services::peer::find_by_id(&db, "desk-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.uuid, "uuid-1");
+        assert_eq!(stored.pk, "public-key-1");
+        assert_eq!(stored.user_id, 7);
+        assert_eq!(stored.group_id, 5);
+
+        let conflict = upsert_deployed_peer(
+            &state,
+            &auth,
+            None,
+            "desk-1",
+            "uuid-2",
+            Some("public-key-2"),
+            None,
+        )
+        .await;
+
+        assert!(matches!(conflict, Err(DeviceDeployError::IdTaken)));
+    }
+}

@@ -217,6 +217,20 @@ The password and access-mode choices are not written to `conf/config.yaml`, the
 database, localStorage, encoded config, or installer filename. Run the generated
 commands on the client machine with administrator/root privileges.
 
+## Deployment tokens and hbbs state
+
+Deployment tokens are bearer tokens for RustDesk CLI deployment and assignment
+calls to `/api/devices/deploy` and `/api/devices/cli`. Tokens are stored as
+hashes, can be scoped to `deploy`, `assign`, `strategy_assign`, and
+`address_book_assign`, and may carry default user, device group, and strategy
+assignments.
+
+The console stores deployment registration material on its own `peers` rows:
+`uuid`, `pk`, and `guid`. It does not write to the hbbs database. This avoids
+risky double-writes when hbbs owns its own device registry; if your deployment
+uses a separate hbbs database, treat these APIs as console-side fleet metadata
+and keep hbbs registration state owned by hbbs.
+
 ## Observability
 
 The server exposes machine-readable observability endpoints without admin login:
