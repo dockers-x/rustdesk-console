@@ -46,3 +46,4 @@ sha2 = { workspace = true }
 ldap3 = { workspace = true }
 urlencoding = { workspace = true }
 url = { workspace = true }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

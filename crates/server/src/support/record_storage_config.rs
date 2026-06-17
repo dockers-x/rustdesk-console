@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::config::{
-    RecordStorage, RecordStorageS3, RecordStorageWebDav, RECORD_STORAGE_LOCAL, RECORD_STORAGE_S3,
-    RECORD_STORAGE_WEBDAV,
+    RecordStorage, RECORD_STORAGE_LOCAL, RECORD_STORAGE_S3, RECORD_STORAGE_WEBDAV,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -327,6 +326,7 @@ fn yaml_double_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{RecordStorageS3, RecordStorageWebDav};
 
     fn configured_s3() -> RecordStorage {
         RecordStorage {

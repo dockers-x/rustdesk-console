@@ -26,7 +26,7 @@ use crate::support::jwt::Jwt;
 use crate::support::login_limiter::{LoginLimiter, SecurityPolicy};
 use crate::support::record_storage_config::RecordStorageConfigStore;
 use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
-use crate::support::{password, random};
+use crate::support::{external_webclient::ExternalWebClient, password, random};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
 pub const DATABASE_VERSION: i32 = 268;
@@ -329,6 +329,9 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
     let start_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let record_storage = config.record_storage.clone();
+    let external_webclient = ExternalWebClient::try_load_from_default_zip()
+        .await
+        .map(Arc::new);
 
     Ok(AppState {
         db,
@@ -343,6 +346,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
         i18n: Arc::new(i18n),
         oauth_cache: Arc::new(crate::support::oauth_cache::OauthCache::new()),
         disconnect_store: Arc::new(crate::support::disconnect_store::DisconnectStore::new()),
+        external_webclient,
         start_time: Arc::new(start_time),
         version: Arc::new(version),
     })

@@ -11,7 +11,7 @@ import {
   DialogBody,
   DialogFooter,
   DialogHeader,
-  dialogPanelClass,
+  resourceFormDialogPanelClass,
 } from "../components/DialogLayout";
 import { TableState } from "../components/TableState";
 import { usePublicAdminConfig } from "../lib/adminTitle";
@@ -228,45 +228,53 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
       </div>
 
       {(cfg.canCreate !== false || cfg.canEdit !== false) && (
-        <Dialog.Root open={open} onOpenChange={setOpen}>
-          <Dialog size="lg" className={dialogPanelClass}>
-            <DialogHeader
-              title={`${editing ? t("edit") : t("create")} · ${t(cfg.titleKey)}`}
-              description={editing ? t("editDialogHint") : t("createDialogHint")}
+        <>
+          {open && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none fixed inset-0 z-40 bg-kumo-recessed opacity-95"
             />
-            <DialogBody>
-              <div className="grid gap-4">
-                {cfg.fields
-                  .filter((f) => !(editing && f.createOnly))
-                  .map((field) => (
-                    <FieldInput
-                      key={field.name}
-                      field={field}
-                      editing={editing}
-                      value={form[field.name]}
-                      onChange={(v) =>
-                        setForm((s) => ({ ...s, [field.name]: v }))
-                      }
-                    />
-                  ))}
-              </div>
-            </DialogBody>
-            <DialogFooter
-              error={
-                save.error
-                  ? (save.error as Error).message || t("operationFailed")
-                  : undefined
-              }
-            >
-              <Button variant="secondary" onClick={() => setOpen(false)}>
-                {t("cancel")}
-              </Button>
-              <Button onClick={() => save.mutate()} loading={save.isPending}>
-                {t("save")}
-              </Button>
-            </DialogFooter>
-          </Dialog>
-        </Dialog.Root>
+          )}
+          <Dialog.Root open={open} onOpenChange={setOpen}>
+            <Dialog size="lg" className={resourceFormDialogPanelClass}>
+              <DialogHeader
+                title={`${editing ? t("edit") : t("create")} · ${t(cfg.titleKey)}`}
+                description={editing ? t("editDialogHint") : t("createDialogHint")}
+              />
+              <DialogBody>
+                <div className="grid gap-4">
+                  {cfg.fields
+                    .filter((f) => !(editing && f.createOnly))
+                    .map((field) => (
+                      <FieldInput
+                        key={field.name}
+                        field={field}
+                        editing={editing}
+                        value={form[field.name]}
+                        onChange={(v) =>
+                          setForm((s) => ({ ...s, [field.name]: v }))
+                        }
+                      />
+                    ))}
+                </div>
+              </DialogBody>
+              <DialogFooter
+                error={
+                  save.error
+                    ? (save.error as Error).message || t("operationFailed")
+                    : undefined
+                }
+              >
+                <Button variant="secondary" onClick={() => setOpen(false)}>
+                  {t("cancel")}
+                </Button>
+                <Button onClick={() => save.mutate()} loading={save.isPending}>
+                  {t("save")}
+                </Button>
+              </DialogFooter>
+            </Dialog>
+          </Dialog.Root>
+        </>
       )}
 
       <ConfirmDialog

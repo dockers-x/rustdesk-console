@@ -1,5 +1,6 @@
 pub mod deployment_config;
 pub mod disconnect_store;
+pub mod external_webclient;
 pub mod jwt;
 pub mod login_limiter;
 pub mod oauth_cache;

@@ -1,17 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as QRCode from "qrcode";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
-import { SensitiveInput } from "@cloudflare/kumo/components/sensitive-input";
 import { Switch } from "@cloudflare/kumo/components/switch";
 import { Tabs } from "@cloudflare/kumo/components/tabs";
 import { cn } from "@cloudflare/kumo/utils";
 import {
   CloudArrowUp,
   CopySimple,
+  Eye,
+  EyeSlash,
   GlobeHemisphereWest,
   PlugsConnected,
+  QrCode,
   TerminalWindow,
 } from "@phosphor-icons/react";
 import { InlineMessage } from "../components/InlineMessage";
@@ -47,6 +50,7 @@ interface DeploymentCommandSet {
 
 interface DeploymentConfig {
   encoded_config: string;
+  mobile_config_text: string;
   filename_hint: string;
   config_command: DeploymentCommandSet;
   option_commands: DeploymentCommandSet;
@@ -847,18 +851,52 @@ function SensitiveConfigField({
   helper?: string;
   compact?: boolean;
 }) {
+  const inputId = useId();
+  const [revealed, setRevealed] = useState(false);
+  const revealLabel = revealed ? "Hide value" : "Reveal value";
+
   return (
-    <SensitiveInput
-      label={label}
-      labelTooltip={helper}
-      value={value}
-      onValueChange={onChange}
-      placeholder={placeholder}
-      size={compact ? "sm" : "base"}
-      autoComplete="off"
-      spellCheck={false}
-      className="w-full min-w-0"
-    />
+    <div className="block min-w-0">
+      <label htmlFor={inputId} className="mb-1 block text-sm font-medium">
+        {label}
+      </label>
+      <div className="relative min-w-0">
+        <Input
+          id={inputId}
+          aria-label={label}
+          type={revealed ? "text" : "password"}
+          size={compact ? "sm" : "base"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className={cn("w-full min-w-0", compact ? "pr-12" : "pr-14")}
+        />
+        <button
+          type="button"
+          aria-label={revealLabel}
+          aria-pressed={revealed}
+          title={revealLabel}
+          onClick={() => setRevealed((current) => !current)}
+          className={cn(
+            "absolute right-0 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-md text-kumo-subtle transition-colors hover:bg-kumo-tint hover:text-kumo-default focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand",
+            compact ? "text-xs" : "text-sm",
+          )}
+        >
+          {revealed ? (
+            <EyeSlash size={16} aria-hidden="true" />
+          ) : (
+            <Eye size={16} aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      {!compact && helper && (
+        <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
+          {helper}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -1162,6 +1200,7 @@ function DeploymentPreview({
               value={deployment.filename_hint}
             />
           </div>
+          <MobileConfigPanel value={deployment.mobile_config_text} />
           <div className="rounded-md border border-kumo-line bg-kumo-base p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -1202,6 +1241,82 @@ function DeploymentPreview({
         </div>
       )}
     </section>
+  );
+}
+
+function MobileConfigPanel({ value }: { value: string }) {
+  const { t } = useTranslation();
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [qrError, setQrError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setQrDataUrl("");
+    setQrError("");
+    if (!value) return;
+
+    QRCode.toDataURL(value, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 192,
+    })
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setQrError(error instanceof Error ? error.message : t("operationFailed"));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [t, value]);
+
+  return (
+    <div className="rounded-md border border-kumo-line bg-kumo-base p-3">
+      <div className="flex items-start gap-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-kumo-line bg-kumo-elevated text-kumo-brand">
+          <QrCode size={17} />
+        </div>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">{t("mobileDevices")}</h3>
+          <p className="mt-1 text-xs leading-5 text-kumo-subtle">
+            {t("mobileDevicesHint")}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="flex justify-center rounded-lg border border-kumo-line bg-white p-3">
+          {qrDataUrl ? (
+            <img
+              src={qrDataUrl}
+              alt={t("mobileConfigQrAlt")}
+              className="size-48"
+            />
+          ) : (
+            <div
+              role="status"
+              className="flex size-48 items-center justify-center rounded-md border border-kumo-line bg-kumo-base p-4 text-center text-xs leading-5 text-kumo-subtle"
+            >
+              {qrError || t("loading")}
+            </div>
+          )}
+        </div>
+        <div className="grid min-w-0 content-start gap-3">
+          <p className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 text-xs leading-5 text-kumo-subtle">
+            {t("mobileConfigSecurityHint")}
+          </p>
+          <CopyField
+            label={t("mobileConfigText")}
+            description={t("mobileConfigTextHint")}
+            value={value}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 

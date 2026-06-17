@@ -13,6 +13,7 @@ pub struct DeploymentConfig {
     pub ws_relay_host: String,
     pub key: String,
     pub encoded_config: String,
+    pub mobile_config_text: String,
     pub filename_hint: String,
     pub config_command: DeploymentCommandSet,
     pub option_commands: DeploymentCommandSet,
@@ -70,6 +71,7 @@ pub fn build_with_options(cfg: &WebClientConfig, options: &DeploymentOptions) ->
     let ws_relay_host = cfg.ws_relay_host.trim().to_string();
     let key = cfg.key.trim().to_string();
     let encoded_config = encode_server_config(&id_server, &relay_server, &api_server, &key);
+    let mobile_config_text = format!("config={encoded_config}");
     let filename_hint = filename_hint(&id_server, &relay_server, &api_server, &key);
     let mut config_command = DeploymentCommandSet {
         linux: vec![format!(
@@ -124,6 +126,7 @@ pub fn build_with_options(cfg: &WebClientConfig, options: &DeploymentOptions) ->
         ws_relay_host,
         key,
         encoded_config,
+        mobile_config_text,
         filename_hint,
         config_command,
         option_commands,
@@ -434,11 +437,28 @@ mod tests {
         };
         let deployment = build_with_password(&cfg, "do-not-store");
         assert!(!deployment.encoded_config.contains("do-not-store"));
+        assert!(!deployment.mobile_config_text.contains("do-not-store"));
         assert!(!deployment.filename_hint.contains("do-not-store"));
         let normalized = deployment.encoded_config.chars().rev().collect::<String>();
         let decoded = URL_SAFE_NO_PAD.decode(normalized).unwrap();
         let json = String::from_utf8(decoded).unwrap();
         assert!(!json.contains("do-not-store"));
+    }
+
+    #[test]
+    fn mobile_config_text_reuses_encoded_config() {
+        let cfg = WebClientConfig {
+            id_server: "id.example.com:21116".to_string(),
+            relay_server: "relay.example.com:21117".to_string(),
+            api_server: "https://api.example.com".to_string(),
+            key: "pk".to_string(),
+            ..Default::default()
+        };
+        let deployment = build(&cfg);
+        assert_eq!(
+            deployment.mobile_config_text,
+            format!("config={}", deployment.encoded_config)
+        );
     }
 
     #[test]
@@ -519,6 +539,10 @@ mod tests {
         );
         assert!(!deployment.encoded_config.contains("approve-mode"));
         assert!(!deployment.encoded_config.contains("verification-method"));
+        assert!(!deployment.mobile_config_text.contains("approve-mode"));
+        assert!(!deployment
+            .mobile_config_text
+            .contains("verification-method"));
         assert!(!deployment.filename_hint.contains("approve-mode"));
         assert!(!deployment.filename_hint.contains("verification-method"));
         let normalized = deployment.encoded_config.chars().rev().collect::<String>();
