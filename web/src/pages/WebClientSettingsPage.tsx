@@ -5,6 +5,12 @@ import { Button } from "@cloudflare/kumo/components/button";
 import { Input, Textarea } from "@cloudflare/kumo/components/input";
 import { Radio } from "@cloudflare/kumo/components/radio";
 import { cn } from "@cloudflare/kumo/utils";
+import {
+  CloudArrowUp,
+  GlobeHemisphereWest,
+  Key,
+  PlugsConnected,
+} from "@phosphor-icons/react";
 import { InlineMessage } from "../components/InlineMessage";
 import { apiGet, apiPatch, ApiError } from "../lib/api";
 
@@ -14,6 +20,7 @@ interface WebClientConfig {
   id_server: string;
   relay_server: string;
   api_server: string;
+  ws_host: string;
   key: string;
 }
 
@@ -23,6 +30,7 @@ const STORAGE_KEYS: Record<keyof WebClientConfig, string> = {
   id_server: "custom-rendezvous-server",
   relay_server: "relay-server",
   api_server: "api-server",
+  ws_host: "ws-host",
   key: "key",
 };
 
@@ -30,6 +38,7 @@ const emptyConfig: WebClientConfig = {
   id_server: "",
   relay_server: "",
   api_server: "",
+  ws_host: "",
   key: "",
 };
 
@@ -41,11 +50,14 @@ function toConfigString(value: unknown) {
   return "";
 }
 
-function normalizeConfig(config: Partial<Record<keyof WebClientConfig, unknown>>): WebClientConfig {
+function normalizeConfig(
+  config: Partial<Record<keyof WebClientConfig, unknown>>,
+): WebClientConfig {
   return {
     id_server: toConfigString(config.id_server),
     relay_server: toConfigString(config.relay_server),
     api_server: toConfigString(config.api_server),
+    ws_host: toConfigString(config.ws_host),
     key: toConfigString(config.key),
   };
 }
@@ -58,14 +70,12 @@ function readLocalConfig(server: WebClientConfig): WebClientConfig {
   const normalized = normalizeConfig(server);
   return {
     id_server:
-      localStorage.getItem(STORAGE_KEYS.id_server) ??
-      normalized.id_server,
+      localStorage.getItem(STORAGE_KEYS.id_server) ?? normalized.id_server,
     relay_server:
-      localStorage.getItem(STORAGE_KEYS.relay_server) ??
-      normalized.relay_server,
+      localStorage.getItem(STORAGE_KEYS.relay_server) ?? normalized.relay_server,
     api_server:
-      localStorage.getItem(STORAGE_KEYS.api_server) ??
-      normalized.api_server,
+      localStorage.getItem(STORAGE_KEYS.api_server) ?? normalized.api_server,
+    ws_host: localStorage.getItem(STORAGE_KEYS.ws_host) ?? normalized.ws_host,
     key: localStorage.getItem(STORAGE_KEYS.key) ?? normalized.key,
   };
 }
@@ -88,6 +98,13 @@ function writeWebClientOptions(config: WebClientConfig, localOverride: boolean) 
 
 function valueOrEmpty(value: string, emptyLabel: string) {
   return value ? value : emptyLabel;
+}
+
+function normalizeWsBase(value: string) {
+  let base = value.trim();
+  if (!base) return "";
+  base = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
+  return base.replace(/\/+$/, "");
 }
 
 export function WebClientSettingsPage() {
@@ -117,8 +134,9 @@ export function WebClientSettingsPage() {
     mutationFn: (payload: WebClientConfig) =>
       apiPatch<WebClientConfig>("/api/admin/config/server", payload),
     onSuccess: (saved) => {
-      writeWebClientOptions(saved, false);
-      setForm(saved);
+      const normalized = normalizeConfig(saved);
+      writeWebClientOptions(normalized, false);
+      setForm(normalized);
       setLocalActive(false);
       setMessage(t("serverConfigSaved"));
       void qc.invalidateQueries({ queryKey: ["webclient-server-config"] });
@@ -186,63 +204,55 @@ export function WebClientSettingsPage() {
         </Button>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <form
           onSubmit={submit}
-          className="rounded-lg border border-kumo-line bg-kumo-elevated p-5"
+          className="rounded-lg border border-kumo-line bg-kumo-elevated"
         >
-          <div className="mb-5">
-            <h2 className="text-base font-semibold">{t("storageTarget")}</h2>
-            <p className="mt-1 text-sm leading-6 text-kumo-subtle">
-              {t("storageTargetHint")}
-            </p>
-          </div>
-
-          <Radio.Group
-            legend={t("storageTarget")}
-            appearance="card"
-            value={saveTarget}
-            onValueChange={(value) => setSaveTarget(value as SaveTarget)}
-            className="mb-5 grid gap-3 md:grid-cols-2"
+          <FormSection
+            icon={<PlugsConnected size={18} />}
+            title={t("connectionEndpoints")}
+            description={t("connectionEndpointsHint")}
           >
-            <Radio.Item
-              value="local"
-              label={t("localStorageMode")}
-              description={t("localStorageModeHint")}
-            />
-            <Radio.Item
-              value="server"
-              label={t("serverPersistentMode")}
-              description={t("serverPersistentModeHint")}
-            />
-          </Radio.Group>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ConfigField
+                label={t("apiServer")}
+                storageKey={STORAGE_KEYS.api_server}
+                value={form.api_server}
+                onChange={(value) => updateField("api_server", value)}
+                placeholder="https://api.example.com"
+              />
+              <ConfigField
+                label={t("idServer")}
+                storageKey={STORAGE_KEYS.id_server}
+                value={form.id_server}
+                onChange={(value) => updateField("id_server", value)}
+                placeholder="id.example.com:21116"
+              />
+              <ConfigField
+                label={t("relayServer")}
+                storageKey={STORAGE_KEYS.relay_server}
+                value={form.relay_server}
+                onChange={(value) => updateField("relay_server", value)}
+                placeholder="relay.example.com:21117"
+              />
+              <ConfigField
+                label={t("wsHost")}
+                storageKey={STORAGE_KEYS.ws_host}
+                value={form.ws_host}
+                onChange={(value) => updateField("ws_host", value)}
+                placeholder="https://rd.example.com"
+                helper={t("wsHostHint")}
+              />
+            </div>
+          </FormSection>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <ConfigField
-              label={t("apiServer")}
-              storageKey={STORAGE_KEYS.api_server}
-              value={form.api_server}
-              onChange={(value) => updateField("api_server", value)}
-              placeholder="https://api.example.com"
-            />
-            <ConfigField
-              label={t("idServer")}
-              storageKey={STORAGE_KEYS.id_server}
-              value={form.id_server}
-              onChange={(value) => updateField("id_server", value)}
-              placeholder="id.example.com:21116"
-            />
-            <ConfigField
-              label={t("relayServer")}
-              storageKey={STORAGE_KEYS.relay_server}
-              value={form.relay_server}
-              onChange={(value) => updateField("relay_server", value)}
-              placeholder="relay.example.com:21117"
-            />
-            <label className="block lg:row-span-2">
-              <span className="mb-1 block text-sm font-medium">
-                {t("publicKey")}
-              </span>
+          <FormSection
+            icon={<Key size={18} />}
+            title={t("publicKey")}
+            description={t("publicKeyHint")}
+          >
+            <label className="block">
               <Textarea
                 aria-label={t("publicKey")}
                 value={form.key}
@@ -252,25 +262,52 @@ export function WebClientSettingsPage() {
                 placeholder="OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="
               />
               <span className="mt-1 block text-xs text-kumo-subtle">
-                {STORAGE_KEYS.key}. {t("publicKeyHint")}
+                {STORAGE_KEYS.key}
               </span>
             </label>
-          </div>
+          </FormSection>
 
-          {message && (
-            <InlineMessage tone="success" className="mt-5">
-              {message}
-            </InlineMessage>
-          )}
-          {(localError || serverConfig.error) && (
-            <InlineMessage tone="error" className="mt-5">
-              {localError ||
-                (serverConfig.error as Error).message ||
-                t("operationFailed")}
-            </InlineMessage>
+          <FormSection
+            icon={<CloudArrowUp size={18} />}
+            title={t("storageTarget")}
+            description={t("storageTargetHint")}
+          >
+            <Radio.Group
+              legend={t("storageTarget")}
+              appearance="card"
+              value={saveTarget}
+              onValueChange={(value) => setSaveTarget(value as SaveTarget)}
+              className="grid gap-3 md:grid-cols-2"
+            >
+              <Radio.Item
+                value="local"
+                label={t("localStorageMode")}
+                description={t("localStorageModeHint")}
+              />
+              <Radio.Item
+                value="server"
+                label={t("serverPersistentMode")}
+                description={t("serverPersistentModeHint")}
+              />
+            </Radio.Group>
+          </FormSection>
+
+          {(message || localError || serverConfig.error) && (
+            <div className="px-5 pb-5">
+              {message && (
+                <InlineMessage tone="success">{message}</InlineMessage>
+              )}
+              {(localError || serverConfig.error) && (
+                <InlineMessage tone="error">
+                  {localError ||
+                    (serverConfig.error as Error).message ||
+                    t("operationFailed")}
+                </InlineMessage>
+              )}
+            </div>
           )}
 
-          <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-kumo-line pt-4">
+          <div className="flex flex-wrap justify-end gap-2 border-t border-kumo-line bg-kumo-recessed px-5 py-4">
             {localActive && (
               <Button
                 type="button"
@@ -293,17 +330,24 @@ export function WebClientSettingsPage() {
           </div>
         </form>
 
-        <aside className="space-y-4">
-          <ConfigSummary
-            title={t("currentEffectiveConfig")}
-            config={effectiveConfig ?? emptyConfig}
-            emptyLabel={t("emptyValue")}
-          />
+        <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
           <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
-            <h2 className="text-base font-semibold">{t("browserOverride")}</h2>
+            <div className="flex items-start gap-3">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
+                <GlobeHemisphereWest size={18} />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold">
+                  {t("webClientRuntime")}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+                  {t("webClientRuntimeHint")}
+                </p>
+              </div>
+            </div>
             <dl className="mt-4 grid gap-3 text-sm">
               <SummaryRow
-                label={t("status")}
+                label={t("browserOverride")}
                 value={localActive ? t("active") : t("inactive")}
               />
               <SummaryRow
@@ -318,16 +362,49 @@ export function WebClientSettingsPage() {
               />
             </dl>
           </section>
-          {serverConfig.data && (
-            <ConfigSummary
-              title={t("currentServerConfig")}
-              config={serverConfig.data}
-              emptyLabel={t("emptyValue")}
-            />
-          )}
+
+          <ConfigSummary
+            title={t("currentEffectiveConfig")}
+            config={effectiveConfig ?? emptyConfig}
+            emptyLabel={t("emptyValue")}
+          />
+
+          <WebSocketPreview
+            config={effectiveConfig ?? form}
+            emptyLabel={t("emptyValue")}
+          />
         </aside>
       </div>
     </div>
+  );
+}
+
+function FormSection({
+  icon,
+  title,
+  description,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border-b border-kumo-line p-5 last:border-b-0">
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
+          {icon}
+        </div>
+        <div>
+          <h2 className="text-base font-semibold">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+            {description}
+          </p>
+        </div>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -337,12 +414,14 @@ function ConfigField({
   value,
   onChange,
   placeholder,
+  helper,
 }: {
   label: string;
   storageKey: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  helper?: string;
 }) {
   return (
     <label className="block">
@@ -354,7 +433,10 @@ function ConfigField({
         placeholder={placeholder}
         spellCheck={false}
       />
-      <span className="mt-1 block text-xs text-kumo-subtle">{storageKey}</span>
+      <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
+        {storageKey}
+        {helper ? `. ${helper}` : ""}
+      </span>
     </label>
   );
 }
@@ -386,9 +468,46 @@ function ConfigSummary({
           value={valueOrEmpty(config.relay_server, emptyLabel)}
         />
         <SummaryRow
+          label={t("wsHost")}
+          value={valueOrEmpty(config.ws_host, emptyLabel)}
+        />
+        <SummaryRow
           label={t("publicKey")}
           value={valueOrEmpty(config.key, emptyLabel)}
           muted={Boolean(config.key)}
+        />
+      </dl>
+    </section>
+  );
+}
+
+function WebSocketPreview({
+  config,
+  emptyLabel,
+}: {
+  config: WebClientConfig;
+  emptyLabel: string;
+}) {
+  const { t } = useTranslation();
+  const base = normalizeWsBase(config.ws_host);
+  return (
+    <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+      <h2 className="text-base font-semibold">{t("webSocketRoutes")}</h2>
+      <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+        {t("webSocketRoutesHint")}
+      </p>
+      <dl className="mt-4 grid gap-3 text-sm">
+        <SummaryRow
+          label={t("idWebSocket")}
+          value={base ? `${base}/ws/id` : t("derivedWebSocketRoutes")}
+        />
+        <SummaryRow
+          label={t("relayWebSocket")}
+          value={base ? `${base}/ws/relay` : t("derivedWebSocketRoutes")}
+        />
+        <SummaryRow
+          label={t("wsHost")}
+          value={valueOrEmpty(config.ws_host, emptyLabel)}
         />
       </dl>
     </section>

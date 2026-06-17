@@ -23,6 +23,7 @@ pub async fn config_js(State(state): State<AppState>) -> Response {
     'api-server': {api},\n\
     'custom-rendezvous-server': {id_server},\n\
     'relay-server': {relay_server},\n\
+    'ws-host': {ws},\n\
     'key': {key},\n\
   }};\n\
   const localOverrideKey = 'rustdesk-console.webclient.local-override';\n\
@@ -38,14 +39,14 @@ pub async fn config_js(State(state): State<AppState>) -> Response {
     setDefault(ws2Prefix + name, value);\n\
   }}\n\
   window.webclient_magic_queryonline = {magic};\n\
-  window.ws_host = {ws};\n\
+  window.ws_host = localStorage.getItem('ws-host') || '';\n\
 }})();\n",
         api = js_string(&cfg.api_server),
         id_server = js_string(&cfg.id_server),
         relay_server = js_string(&cfg.relay_server),
         key = js_string(&cfg.key),
         magic = rd.webclient_magic_queryonline,
-        ws = js_string(&rd.ws_host),
+        ws = js_string(&cfg.ws_host),
     );
     ([(header::CONTENT_TYPE, "application/javascript")], body).into_response()
 }
@@ -56,11 +57,7 @@ fn js_string(value: &str) -> String {
 
 fn respond(bytes: Vec<u8>, path_for_mime: &str) -> Response {
     let mime = mime_guess::from_path(path_for_mime).first_or_octet_stream();
-    (
-        [(header::CONTENT_TYPE, mime.as_ref().to_string())],
-        bytes,
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, mime.as_ref().to_string())], bytes).into_response()
 }
 
 /// Serve `web/<path>` from the embedded Flutter client, with SPA fallback to
