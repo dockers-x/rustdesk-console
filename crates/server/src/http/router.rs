@@ -38,6 +38,16 @@ pub fn build(state: AppState) -> Router {
             "/api/users",
             get(api::group_users).post(pro_api::user_create),
         )
+        .route("/api/users/invite", post(pro_api::user_invite))
+        .route(
+            "/api/users/tfa/totp/enforce",
+            put(pro_api::user_tfa_enforce),
+        )
+        .route(
+            "/api/users/disable_login_verification",
+            put(pro_api::user_disable_login_verification),
+        )
+        .route("/api/users/force-logout", post(pro_api::user_force_logout))
         .route("/api/users/:guid/disable", post(pro_api::user_disable))
         .route("/api/users/:guid/enable", post(pro_api::user_enable))
         .route("/api/users/:guid", delete(pro_api::user_delete))
@@ -110,18 +120,41 @@ pub fn build(state: AppState) -> Router {
         .route("/api/ab", get(api::ab_get).post(api::ab_update))
         .route("/api/ab/get", post(api::ab_get))
         // address book (personal)
-        .route("/api/ab/personal", post(api::ab_personal))
-        .route("/api/ab/settings", post(api::ab_settings))
-        .route("/api/ab/shared/profiles", post(api::ab_shared_profiles))
-        .route("/api/ab/peers", post(api::ab_peers))
-        .route("/api/ab/tags/:guid", post(api::ab_tags))
+        .route(
+            "/api/ab/personal",
+            get(api::ab_personal).post(api::ab_personal),
+        )
+        .route(
+            "/api/ab/settings",
+            get(api::ab_settings).post(api::ab_settings),
+        )
+        .route(
+            "/api/ab/shared/profiles",
+            get(api::ab_shared_profiles).post(api::ab_shared_profiles),
+        )
+        .route("/api/ab/shared/add", post(api::ab_shared_add))
+        .route(
+            "/api/ab/shared/update/profile",
+            put(api::ab_shared_update_profile),
+        )
+        .route("/api/ab/shared", delete(api::ab_shared_delete))
+        .route("/api/ab/peers", get(api::ab_peers).post(api::ab_peers))
+        .route("/api/ab/tags/:guid", get(api::ab_tags).post(api::ab_tags))
         .route("/api/ab/peer/add/:guid", post(api::ab_peer_add))
         .route("/api/ab/peer/:guid", delete(api::ab_peer_del))
         .route("/api/ab/peer/update/:guid", put(api::ab_peer_update))
         .route("/api/ab/tag/add/:guid", post(api::ab_tag_add))
         .route("/api/ab/tag/rename/:guid", put(api::ab_tag_rename))
         .route("/api/ab/tag/update/:guid", put(api::ab_tag_update))
-        .route("/api/ab/tag/:guid", delete(api::ab_tag_del));
+        .route("/api/ab/tag/:guid", delete(api::ab_tag_del))
+        .route(
+            "/api/ab/rules",
+            get(api::ab_rules).delete(api::ab_rules_delete),
+        )
+        .route(
+            "/api/ab/rule",
+            post(api::ab_rule_add).patch(api::ab_rule_update),
+        );
 
     if web_client_enabled {
         app = app

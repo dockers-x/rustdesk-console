@@ -408,6 +408,17 @@ pub async fn flush_token_by_uuid(db: &DatabaseConnection, uuid: &str) -> Result<
     Ok(())
 }
 
+pub async fn delete_tokens_by_user_ids(db: &DatabaseConnection, ids: &[i32]) -> Result<(), DbErr> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    user_token::Entity::delete_many()
+        .filter(user_token::Column::UserId.is_in(ids.to_vec()))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 // --- user tokens (admin) ---
 
 pub struct UserTokenListResult {

@@ -111,8 +111,15 @@ pub async fn create(
 }
 
 pub async fn update(db: &DatabaseConnection, model: &tag::Model) -> Result<(), DbErr> {
-    let mut am: tag::ActiveModel = model.clone().into();
-    am.updated_at = Set(now());
+    let am = tag::ActiveModel {
+        id: Set(model.id),
+        name: Set(model.name.clone()),
+        color: Set(model.color),
+        user_id: Set(model.user_id),
+        collection_id: Set(model.collection_id),
+        updated_at: Set(now()),
+        ..Default::default()
+    };
     am.update(db).await?;
     Ok(())
 }
@@ -149,4 +156,29 @@ pub async fn update_tags(
         create(db, &name, color, user_id, 0).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectionTrait, Database, DbBackend, Schema};
+
+    #[tokio::test]
+    async fn update_persists_color_changes() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(tag::Entity)),
+        )
+        .await
+        .unwrap();
+
+        let mut tag = create(&db, "red", 0xFFFF0000, 1, 2).await.unwrap();
+        tag.color = 0xFF00FF00;
+        update(&db, &tag).await.unwrap();
+
+        let updated = info_by_id(&db, tag.id).await.unwrap().unwrap();
+        assert_eq!(updated.color, 0xFF00FF00);
+    }
 }

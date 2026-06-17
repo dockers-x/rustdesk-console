@@ -5,13 +5,14 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{Duration, Utc};
-use sea_orm::Set;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 use entity::{
-    address_book, audit_file, deployment_event, deployment_token, group, login_log, peer,
+    address_book, address_book_collection, address_book_collection_rule, audit_file,
+    deployment_event, deployment_token, group, login_log, peer,
 };
 
 use crate::http::middleware::{AcceptLang, ClientIp, DeploymentAuth, RustClientUser};
@@ -499,7 +500,7 @@ pub async fn group_users(
             .await
             .map(|r| r.list.into_iter().map(|g| (g.id, g.name)).collect())
             .unwrap_or_default();
-    let data: Vec<UserPayload> = users
+    let mut data: Vec<UserPayload> = users
         .iter()
         .map(|u| {
             let mut payload = UserPayload::from_user(u);
@@ -507,6 +508,23 @@ pub async fn group_users(
             payload
         })
         .collect();
+    if let Some(group_name) = q
+        .group_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        data.retain(|u| matches_ab_filter(&u.group_name, Some(group_name)));
+    }
+    let total = if q
+        .group_name
+        .as_deref()
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        data.len() as i64
+    } else {
+        total
+    };
     resp::data_response(total, data)
 }
 
@@ -1534,6 +1552,27 @@ fn compose_guid(gid: i32, uid: i32, cid: i32) -> String {
     format!("{gid}-{uid}-{cid}")
 }
 
+fn script_page(page: Option<u64>, page_size: Option<u64>) -> (u64, u64) {
+    let page = page.unwrap_or(1).max(1);
+    let page_size = page_size.unwrap_or(30).max(1);
+    (page, page_size)
+}
+
+fn matches_ab_filter(value: &str, pattern: Option<&str>) -> bool {
+    let Some(pattern) = pattern.map(str::trim).filter(|v| !v.is_empty()) else {
+        return true;
+    };
+    if pattern == "-" {
+        return value.is_empty();
+    }
+    let needle = pattern.trim_matches('%');
+    if pattern.contains('%') {
+        value.contains(needle)
+    } else {
+        value == needle || value.contains(needle)
+    }
+}
+
 /// Validate a guid against the current user (≈ `CheckGuid`); returns (uid, cid).
 async fn check_guid(
     state: &AppState,
@@ -1567,6 +1606,95 @@ async fn check_guid(
     Ok((uid, cid))
 }
 
+async fn full_control_collection(
+    state: &AppState,
+    cur: &entity::user::Model,
+    guid: &str,
+) -> Result<(entity::user::Model, address_book_collection::Model), Response> {
+    let (uid, cid) = check_guid(state, cur, guid).await?;
+    if cid == 0 {
+        return Err(resp::error("ParamsError"));
+    }
+    let collection = match services::address_book::collection_info_by_id(&state.db, cid).await {
+        Ok(Some(row)) => row,
+        _ => return Err(resp::error("ItemNotFound")),
+    };
+    if !cur.is_admin() {
+        match services::address_book::can_full_control(&state.db, cur.id, cur.group_id, uid, cid)
+            .await
+        {
+            Ok(true) => {}
+            _ => return Err(resp::error("NoAccess")),
+        }
+    }
+    let owner = match services::user::info_by_id(&state.db, uid).await {
+        Ok(Some(row)) => row,
+        _ => return Err(resp::error("ItemNotFound")),
+    };
+    Ok((owner, collection))
+}
+
+async fn can_control_collection_id(
+    state: &AppState,
+    cur: &entity::user::Model,
+    collection_id: i32,
+) -> bool {
+    let collection =
+        match services::address_book::collection_info_by_id(&state.db, collection_id).await {
+            Ok(Some(row)) => row,
+            _ => return false,
+        };
+    cur.is_admin()
+        || services::address_book::can_full_control(
+            &state.db,
+            cur.id,
+            cur.group_id,
+            collection.user_id,
+            collection.id,
+        )
+        .await
+        .unwrap_or(false)
+}
+
+async fn resolve_rule_target(state: &AppState, f: &AbRuleForm) -> Result<(i32, i32), Response> {
+    if !matches!(
+        f.rule,
+        address_book_collection_rule::RULE_READ
+            | address_book_collection_rule::RULE_READ_WRITE
+            | address_book_collection_rule::RULE_FULL_CONTROL
+    ) {
+        return Err(resp::error("ParamsError"));
+    }
+    let user_name = f.user.trim();
+    let group_name = f.group.trim();
+    if !user_name.is_empty() && !group_name.is_empty() {
+        return Err(resp::error("ParamsError"));
+    }
+    if !user_name.is_empty() {
+        let user = match services::user::info_by_username(&state.db, user_name).await {
+            Ok(Some(row)) => row,
+            _ => return Err(resp::error("user not found")),
+        };
+        return Ok((address_book_collection_rule::RULE_TYPE_PERSONAL, user.id));
+    }
+    if !group_name.is_empty() {
+        let group = match group::Entity::find()
+            .filter(group::Column::Name.eq(group_name))
+            .one(&state.db)
+            .await
+        {
+            Ok(Some(row)) => row,
+            _ => return Err(resp::error("group not found")),
+        };
+        return Ok((address_book_collection_rule::RULE_TYPE_GROUP, group.id));
+    }
+    Ok((address_book_collection_rule::RULE_TYPE_GROUP, 0))
+}
+
+fn parse_i32(value: &str) -> Option<i32> {
+    value.trim().parse::<i32>().ok()
+}
+
 pub async fn ab_personal(State(state): State<AppState>, user: RustClientUser) -> Response {
     if state.config.rustdesk.personal == 1 {
         let guid = compose_guid(user.user.group_id, user.user.id, 0);
@@ -1580,7 +1708,22 @@ pub async fn ab_settings() -> Response {
     Json(json!({ "max_peer_one_ab": 0 })).into_response()
 }
 
-pub async fn ab_shared_profiles(State(state): State<AppState>, user: RustClientUser) -> Response {
+#[derive(Deserialize, Default)]
+pub struct AbProfilesQuery {
+    #[serde(default)]
+    #[serde(alias = "current")]
+    pub page: Option<u64>,
+    #[serde(default, rename = "pageSize")]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+pub async fn ab_shared_profiles(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Query(q): Query<AbProfilesQuery>,
+) -> Response {
     let mut res: Vec<SharedProfilesPayload> = vec![];
     let u = &user.user;
     let my = services::address_book::collection_list_by_user_id(&state.db, u.id)
@@ -1617,6 +1760,9 @@ pub async fn ab_shared_profiles(State(state): State<AppState>, user: RustClientU
     let owner_map: std::collections::HashMap<i32, entity::user::Model> =
         owners.into_iter().map(|u| (u.id, u)).collect();
     for c in &collections {
+        if c.user_id == u.id {
+            continue;
+        }
         if let Some(owner) = owner_map.get(&c.user_id) {
             res.push(SharedProfilesPayload {
                 guid: compose_guid(owner.group_id, owner.id, c.id),
@@ -1627,7 +1773,119 @@ pub async fn ab_shared_profiles(State(state): State<AppState>, user: RustClientU
             });
         }
     }
-    Json(json!({ "total": 0, "data": res })).into_response()
+    let mut res: Vec<SharedProfilesPayload> = res
+        .into_iter()
+        .filter(|profile| matches_ab_filter(&profile.name, q.name.as_deref()))
+        .collect();
+    let total = res.len() as i64;
+    let (page, page_size) = script_page(q.page, q.page_size);
+    let start = ((page - 1) * page_size) as usize;
+    res = res
+        .into_iter()
+        .skip(start)
+        .take(page_size as usize)
+        .collect();
+    Json(json!({ "total": total, "data": res })).into_response()
+}
+
+#[derive(Deserialize, Default)]
+pub struct SharedAbForm {
+    #[serde(default)]
+    pub guid: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub info: Value,
+}
+
+pub async fn ab_shared_add(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<SharedAbForm>,
+) -> Response {
+    let name = f.name.trim();
+    if name.is_empty() {
+        return resp::error("ParamsError");
+    }
+    let _ = (&f.note, &f.info);
+    match services::address_book::create_collection(&state.db, user.user.id, name).await {
+        Ok(row) => Json(json!({
+            "guid": compose_guid(user.user.group_id, user.user.id, row.id),
+            "name": row.name,
+        }))
+        .into_response(),
+        Err(e) => resp::error(e.to_string()),
+    }
+}
+
+pub async fn ab_shared_update_profile(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<SharedAbForm>,
+) -> Response {
+    let (owner, collection) = match full_control_collection(&state, &user.user, &f.guid).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let new_name = if f.name.trim().is_empty() {
+        collection.name.clone()
+    } else {
+        f.name.trim().to_string()
+    };
+    let new_owner = if f.owner.trim().is_empty() || f.owner.trim() == owner.username {
+        owner.clone()
+    } else {
+        if !user.user.is_admin() {
+            return resp::error("NoAccess");
+        }
+        match services::user::info_by_username(&state.db, f.owner.trim()).await {
+            Ok(Some(row)) => row,
+            _ => return resp::error("owner not found"),
+        }
+    };
+    if let Err(e) =
+        services::address_book::update_collection(&state.db, collection.id, new_owner.id, &new_name)
+            .await
+    {
+        return resp::error(e.to_string());
+    }
+    if let Err(e) = services::address_book::transfer_collection_owner(
+        &state.db,
+        collection.id,
+        owner.id,
+        new_owner.id,
+    )
+    .await
+    {
+        return resp::error(e.to_string());
+    }
+    let _ = (&f.note, &f.info);
+    Json(json!({
+        "guid": compose_guid(new_owner.group_id, new_owner.id, collection.id),
+        "name": new_name,
+    }))
+    .into_response()
+}
+
+pub async fn ab_shared_delete(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(guids): Json<Vec<String>>,
+) -> Response {
+    for guid in guids {
+        let (_, collection) = match full_control_collection(&state, &user.user, &guid).await {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        if let Err(e) = services::address_book::delete_collection(&state.db, collection.id).await {
+            return resp::error(e.to_string());
+        }
+    }
+    "".into_response()
 }
 
 #[derive(Deserialize)]
@@ -1636,10 +1894,25 @@ pub struct AbQuery {
     pub ab: String,
 }
 
+#[derive(Deserialize, Default)]
+pub struct AbPeersQuery {
+    #[serde(default)]
+    pub ab: String,
+    #[serde(default)]
+    #[serde(alias = "current")]
+    pub page: Option<u64>,
+    #[serde(default, rename = "pageSize")]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub alias: Option<String>,
+}
+
 pub async fn ab_peers(
     State(state): State<AppState>,
     user: RustClientUser,
-    Query(q): Query<AbQuery>,
+    Query(q): Query<AbPeersQuery>,
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &q.ab).await {
         Ok(v) => v,
@@ -1651,11 +1924,23 @@ pub async fn ab_peers(
         Ok(true) => {}
         _ => return resp::error("NoAccess"),
     }
-    let abs = services::address_book::list_by_user_and_collection(&state.db, uid, cid)
+    let mut abs = services::address_book::list_by_user_and_collection(&state.db, uid, cid)
         .await
         .unwrap_or_default();
+    abs.retain(|ab| {
+        matches_ab_filter(&ab.id, q.id.as_deref())
+            && matches_ab_filter(&ab.alias, q.alias.as_deref())
+    });
+    let total = abs.len() as i64;
+    let (page, page_size) = script_page(q.page, q.page_size);
+    let start = ((page - 1) * page_size) as usize;
+    let abs: Vec<address_book::Model> = abs
+        .into_iter()
+        .skip(start)
+        .take(page_size as usize)
+        .collect();
     Json(json!({
-        "total": abs.len(),
+        "total": total,
         "data": abs,
         "licensed_devices": 99999,
     }))
@@ -1960,6 +2245,208 @@ pub async fn ab_tag_del(
                 }
             }
             _ => return resp::error(state.tr(&lang, "ItemNotFound")),
+        }
+    }
+    "".into_response()
+}
+
+#[derive(Deserialize, Default)]
+pub struct AbRulesQuery {
+    #[serde(default)]
+    pub ab: String,
+    #[serde(default)]
+    #[serde(alias = "current")]
+    pub page: Option<u64>,
+    #[serde(default, rename = "pageSize")]
+    pub page_size: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct AbRulePayload {
+    guid: String,
+    #[serde(rename = "type")]
+    rule_type: String,
+    user: String,
+    group: String,
+    rule: i32,
+}
+
+pub async fn ab_rules(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Query(q): Query<AbRulesQuery>,
+) -> Response {
+    let (_, collection) = match full_control_collection(&state, &user.user, &q.ab).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let (page, page_size) = script_page(q.page, q.page_size);
+    let rules = match services::address_book::rules_by_collection(
+        &state.db,
+        collection.id,
+        page,
+        page_size,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return resp::error(e.to_string()),
+    };
+    let user_ids: Vec<i32> = rules
+        .list
+        .iter()
+        .filter(|r| r.r#type == address_book_collection_rule::RULE_TYPE_PERSONAL)
+        .map(|r| r.to_id)
+        .collect();
+    let users = services::user::list_by_ids(&state.db, &user_ids)
+        .await
+        .unwrap_or_default();
+    let user_names: std::collections::HashMap<i32, String> =
+        users.into_iter().map(|u| (u.id, u.username)).collect();
+    let groups = services::group::list(&state.db, 1, 9999)
+        .await
+        .map(|r| r.list)
+        .unwrap_or_default();
+    let group_names: std::collections::HashMap<i32, String> =
+        groups.into_iter().map(|g| (g.id, g.name)).collect();
+    let data: Vec<AbRulePayload> = rules
+        .list
+        .into_iter()
+        .map(|r| {
+            let (rule_type, user, group) =
+                if r.r#type == address_book_collection_rule::RULE_TYPE_PERSONAL {
+                    (
+                        "user".to_string(),
+                        user_names.get(&r.to_id).cloned().unwrap_or_default(),
+                        String::new(),
+                    )
+                } else if r.to_id == 0 {
+                    (
+                        "everyone".to_string(),
+                        String::new(),
+                        "everyone".to_string(),
+                    )
+                } else {
+                    (
+                        "group".to_string(),
+                        String::new(),
+                        group_names.get(&r.to_id).cloned().unwrap_or_default(),
+                    )
+                };
+            AbRulePayload {
+                guid: r.id.to_string(),
+                rule_type,
+                user,
+                group,
+                rule: r.rule,
+            }
+        })
+        .collect();
+    resp::data_response(rules.total, data)
+}
+
+#[derive(Deserialize, Default)]
+pub struct AbRuleForm {
+    #[serde(default)]
+    pub guid: String,
+    #[serde(default)]
+    pub rule: i32,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub group: String,
+}
+
+pub async fn ab_rule_add(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<AbRuleForm>,
+) -> Response {
+    let (owner, collection) = match full_control_collection(&state, &user.user, &f.guid).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let (rule_type, to_id) = match resolve_rule_target(&state, &f).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let mut row = match services::address_book::rule_info_by_type_to_cid(
+        &state.db,
+        rule_type,
+        to_id,
+        collection.id,
+    )
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => address_book_collection_rule::Model {
+            id: 0,
+            user_id: owner.id,
+            collection_id: collection.id,
+            rule: f.rule,
+            r#type: rule_type,
+            to_id,
+            created_at: None,
+            updated_at: None,
+        },
+        Err(e) => return resp::error(e.to_string()),
+    };
+    row.rule = f.rule;
+    row.user_id = owner.id;
+    let saved = if row.id > 0 {
+        match services::address_book::update_rule(&state.db, &row).await {
+            Ok(_) => row,
+            Err(e) => return resp::error(e.to_string()),
+        }
+    } else {
+        match services::address_book::create_rule(&state.db, &row).await {
+            Ok(row) => row,
+            Err(e) => return resp::error(e.to_string()),
+        }
+    };
+    Json(json!({ "guid": saved.id.to_string(), "rule": saved.rule })).into_response()
+}
+
+pub async fn ab_rule_update(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<AbRuleForm>,
+) -> Response {
+    let Some(rule_id) = parse_i32(&f.guid) else {
+        return resp::error("ParamsError");
+    };
+    let mut rule = match services::address_book::rule_info_by_id(&state.db, rule_id).await {
+        Ok(Some(row)) => row,
+        _ => return resp::error("ItemNotFound"),
+    };
+    if !can_control_collection_id(&state, &user.user, rule.collection_id).await {
+        return resp::error("NoAccess");
+    }
+    rule.rule = f.rule;
+    match services::address_book::update_rule(&state.db, &rule).await {
+        Ok(_) => "".into_response(),
+        Err(e) => resp::error(e.to_string()),
+    }
+}
+
+pub async fn ab_rules_delete(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(guids): Json<Vec<String>>,
+) -> Response {
+    for guid in guids {
+        let Some(rule_id) = parse_i32(&guid) else {
+            return resp::error("ParamsError");
+        };
+        let rule = match services::address_book::rule_info_by_id(&state.db, rule_id).await {
+            Ok(Some(row)) => row,
+            _ => return resp::error("ItemNotFound"),
+        };
+        if !can_control_collection_id(&state, &user.user, rule.collection_id).await {
+            return resp::error("NoAccess");
+        }
+        if let Err(e) = services::address_book::delete_rule(&state.db, rule.id).await {
+            return resp::error(e.to_string());
         }
     }
     "".into_response()

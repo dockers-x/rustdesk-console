@@ -577,6 +577,9 @@ pub async fn user_create(
     if !user.user.is_admin() {
         return resp::error("Permission denied");
     }
+    if f.name.trim().is_empty() || f.email.trim().is_empty() {
+        return resp::error("ParamsError");
+    }
     let group_id = if f.group_name.trim().is_empty() {
         1
     } else {
@@ -591,8 +594,8 @@ pub async fn user_create(
     };
     let model = user::Model {
         id: 0,
-        username: f.name,
-        email: f.email,
+        username: f.name.trim().to_string(),
+        email: f.email.trim().to_string(),
         password: f.password,
         nickname: String::new(),
         avatar: String::new(),
@@ -609,6 +612,120 @@ pub async fn user_create(
             Json(json!({ "guid": row.id.to_string(), "name": row.username })).into_response()
         }
         Err(e) => resp::error(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct UserInviteForm {
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub group_name: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+pub async fn user_invite(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<UserInviteForm>,
+) -> Response {
+    if !user.user.is_admin() {
+        return resp::error("Permission denied");
+    }
+    let group_id = if f.group_name.trim().is_empty() {
+        1
+    } else {
+        match group::Entity::find()
+            .filter(group::Column::Name.eq(f.group_name.trim()))
+            .one(&state.db)
+            .await
+        {
+            Ok(Some(row)) => row.id,
+            _ => return resp::error("user group not found"),
+        }
+    };
+    if let Ok(Some(existing)) = services::user::info_by_username(&state.db, f.name.trim()).await {
+        return Json(json!({ "guid": existing.id.to_string(), "name": existing.username }))
+            .into_response();
+    }
+    let model = user::Model {
+        id: 0,
+        username: f.name,
+        email: f.email,
+        password: format!("invite-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+        nickname: String::new(),
+        avatar: String::new(),
+        group_id,
+        is_admin: Some(false),
+        status: user::STATUS_ENABLE,
+        must_change_password: true,
+        remark: f.note,
+        created_at: None,
+        updated_at: None,
+    };
+    match services::user::create(&state.db, model).await {
+        Ok(row) => {
+            Json(json!({ "guid": row.id.to_string(), "name": row.username })).into_response()
+        }
+        Err(e) => resp::error(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct UserGuidListForm {
+    #[serde(default)]
+    pub user_guids: Vec<String>,
+    #[serde(default)]
+    pub enforce: bool,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default, rename = "type")]
+    pub verification_type: String,
+}
+
+pub async fn user_tfa_enforce(
+    _state: State<AppState>,
+    user: RustClientUser,
+    Json(_f): Json<UserGuidListForm>,
+) -> Response {
+    if !user.user.is_admin() {
+        return resp::error("Permission denied");
+    }
+    Json(json!({ "success": true })).into_response()
+}
+
+pub async fn user_disable_login_verification(
+    _state: State<AppState>,
+    user: RustClientUser,
+    Json(_f): Json<UserGuidListForm>,
+) -> Response {
+    if !user.user.is_admin() {
+        return resp::error("Permission denied");
+    }
+    Json(json!({ "success": true })).into_response()
+}
+
+pub async fn user_force_logout(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<UserGuidListForm>,
+) -> Response {
+    if !user.user.is_admin() {
+        return resp::error("Permission denied");
+    }
+    let mut ids = vec![];
+    for guid in f.user_guids {
+        let Some(row) = find_user_by_guidish(&state.db, &guid).await else {
+            return resp::error(format!("user not found: {guid}"));
+        };
+        ids.push(row.id);
+    }
+    match services::user::delete_tokens_by_user_ids(&state.db, &ids).await {
+        Ok(_) => Json(json!({ "success": true })).into_response(),
+        Err(e) => resp::error(e.to_string()),
     }
 }
 

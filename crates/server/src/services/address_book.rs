@@ -3,10 +3,13 @@
 
 use std::collections::HashMap;
 
+use sea_orm::sea_query::Expr;
 use sea_orm::*;
 use serde_json::Value;
 
-use ::entity::{address_book, address_book_collection, address_book_collection_rule, share_record};
+use ::entity::{
+    address_book, address_book_collection, address_book_collection_rule, share_record, tag,
+};
 
 use crate::services::now;
 
@@ -233,6 +236,39 @@ pub async fn collection_list_by_ids(
         .await
 }
 
+pub async fn transfer_collection_owner(
+    db: &DatabaseConnection,
+    collection_id: i32,
+    old_user_id: i32,
+    new_user_id: i32,
+) -> Result<(), DbErr> {
+    if old_user_id == new_user_id {
+        return Ok(());
+    }
+    address_book::Entity::update_many()
+        .col_expr(address_book::Column::UserId, Expr::value(new_user_id))
+        .filter(address_book::Column::CollectionId.eq(collection_id))
+        .filter(address_book::Column::UserId.eq(old_user_id))
+        .exec(db)
+        .await?;
+    tag::Entity::update_many()
+        .col_expr(tag::Column::UserId, Expr::value(new_user_id))
+        .filter(tag::Column::CollectionId.eq(collection_id))
+        .filter(tag::Column::UserId.eq(old_user_id))
+        .exec(db)
+        .await?;
+    address_book_collection_rule::Entity::update_many()
+        .col_expr(
+            address_book_collection_rule::Column::UserId,
+            Expr::value(new_user_id),
+        )
+        .filter(address_book_collection_rule::Column::CollectionId.eq(collection_id))
+        .filter(address_book_collection_rule::Column::UserId.eq(old_user_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 // --- share rules / privileges ---
 
 pub async fn collection_read_rules(
@@ -249,7 +285,7 @@ pub async fn collection_read_rules(
         .await?;
     let group = r::Entity::find()
         .filter(r::Column::Type.eq(r::RULE_TYPE_GROUP))
-        .filter(r::Column::ToId.eq(group_id))
+        .filter(r::Column::ToId.is_in(vec![group_id, 0]))
         .filter(r::Column::Rule.gt(0))
         .all(db)
         .await?;
@@ -285,7 +321,8 @@ pub async fn user_max_rule(
     if let Some(g) = r::Entity::find()
         .filter(r::Column::Type.eq(r::RULE_TYPE_GROUP))
         .filter(r::Column::CollectionId.eq(cid))
-        .filter(r::Column::ToId.eq(cur_group_id))
+        .filter(r::Column::ToId.is_in(vec![cur_group_id, 0]))
+        .order_by_desc(r::Column::Rule)
         .one(db)
         .await?
     {
@@ -652,6 +689,30 @@ pub async fn rule_info_by_type_to_cid(
         .await
 }
 
+pub async fn rules_by_collection(
+    db: &DatabaseConnection,
+    collection_id: i32,
+    page: u64,
+    page_size: u64,
+) -> Result<RuleListResult, DbErr> {
+    let (page, page_size) = crate::services::paginate(page, page_size);
+    let q = address_book_collection_rule::Entity::find()
+        .filter(address_book_collection_rule::Column::CollectionId.eq(collection_id));
+    let total = q.clone().count(db).await? as i64;
+    let list = q
+        .order_by_desc(address_book_collection_rule::Column::Id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok(RuleListResult {
+        list,
+        page: page as i64,
+        page_size: page_size as i64,
+        total,
+    })
+}
+
 pub async fn create_rule(
     db: &DatabaseConnection,
     m: &address_book_collection_rule::Model,
@@ -692,4 +753,38 @@ pub async fn delete_rule(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> 
         .exec(db)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectionTrait, Database, DbBackend, Schema, Set};
+
+    #[tokio::test]
+    async fn everyone_rule_applies_to_any_group() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(address_book_collection_rule::Entity)),
+        )
+        .await
+        .unwrap();
+
+        address_book_collection_rule::ActiveModel {
+            user_id: Set(1),
+            collection_id: Set(7),
+            rule: Set(address_book_collection_rule::RULE_READ_WRITE),
+            r#type: Set(address_book_collection_rule::RULE_TYPE_GROUP),
+            to_id: Set(0),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        assert!(can_read(&db, 42, 99, 1, 7).await.unwrap());
+        assert!(can_write(&db, 42, 99, 1, 7).await.unwrap());
+        assert!(!can_full_control(&db, 42, 99, 1, 7).await.unwrap());
+    }
 }
