@@ -43,6 +43,16 @@ description = "Password change required."
 one = "请先修改密码后继续。"
 other = "请先修改密码后继续。"
 
+[PasswordMismatch]
+description = "Password confirmation mismatch."
+one = "两次输入的密码不一致。"
+other = "两次输入的密码不一致。"
+
+[SetupAlreadyInitialized]
+description = "Initial setup has already been completed."
+one = "初始化已完成。"
+other = "初始化已完成。"
+
 [UsernameOrPasswordError]
 description = "Username or password error."
 one = "用户名或密码错误。"

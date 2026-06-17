@@ -34,6 +34,11 @@ interface OidcStart {
   code: string;
   url: string;
 }
+interface SetupStatus {
+  initialized: boolean;
+  can_initialize: boolean;
+  title?: string;
+}
 
 type SignalIcon = ComponentType<{
   size?: number;
@@ -113,6 +118,13 @@ export function LoginPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState(locationState?.message ?? "");
   const [loading, setLoading] = useState(false);
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [setupMode, setSetupMode] = useState(false);
+  const [setupUsername, setSetupUsername] = useState("admin");
+  const [setupNickname, setSetupNickname] = useState("");
+  const [setupEmail, setSetupEmail] = useState("");
+  const [setupPassword, setSetupPassword] = useState("");
+  const [setupConfirmPassword, setSetupConfirmPassword] = useState("");
 
   const passwordEnabled = !options.disable_pwd;
   const oidcEnabled = options.ops.length > 0;
@@ -198,12 +210,33 @@ export function LoginPage() {
   };
 
   useEffect(() => {
-    const code = getOidcCode();
-    if (code) {
-      void queryOidc(code);
-      return;
-    }
-    void loadOptions();
+    let mounted = true;
+    const boot = async () => {
+      const code = getOidcCode();
+      try {
+        const setup = await apiGet<SetupStatus>("/api/admin/setup/status");
+        if (!mounted) return;
+        if (setup.can_initialize) {
+          setSetupMode(true);
+          setSetupChecked(true);
+          return;
+        }
+      } catch {
+        /* older servers do not expose setup status */
+      }
+
+      if (code) {
+        await queryOidc(code);
+      } else {
+        await loadOptions();
+      }
+      if (mounted) setSetupChecked(true);
+    };
+
+    void boot();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const submit = async (e: React.FormEvent) => {
@@ -226,6 +259,37 @@ export function LoginPage() {
       if (ae.code === 110 || ae.code === 100) {
         await loadCaptcha();
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitSetup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    const nextUsername = setupUsername.trim();
+    if (nextUsername.length < 2 || setupPassword.length < 4) {
+      setError(t("setupValidationHint"));
+      return;
+    }
+    if (setupPassword !== setupConfirmPassword) {
+      setError(t("passwordMismatch"));
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await apiPost<LoginResult>("/api/admin/setup/initialize", {
+        username: nextUsername,
+        nickname: setupNickname.trim(),
+        email: setupEmail.trim(),
+        password: setupPassword,
+        confirmPassword: setupConfirmPassword,
+      });
+      finishLogin(res, "/overview");
+    } catch (err) {
+      const ae = err as ApiError;
+      setError(ae.message || t("operationFailed"));
     } finally {
       setLoading(false);
     }
@@ -259,45 +323,177 @@ export function LoginPage() {
                   value={t("available")}
                   active
                 />
-                <AuthSignal
-                  icon={ShieldCheck}
-                  label={t("passwordAuth")}
-                  value={passwordEnabled ? t("enabled") : t("disabled")}
-                  active={passwordEnabled}
-                />
-                <AuthSignal
-                  icon={Key}
-                  label={t("oauthAuth")}
-                  value={oidcEnabled ? t("available") : t("notAvailable")}
-                  active={oidcEnabled}
-                />
-                <AuthSignal
-                  icon={Monitor}
-                  label={t("captchaAuth")}
-                  value={captchaEnabled ? t("enabled") : t("disabled")}
-                  active={captchaEnabled}
-                />
+                {setupMode ? (
+                  <>
+                    <AuthSignal
+                      icon={ShieldCheck}
+                      label={t("initialSetup")}
+                      value={t("setupAdminHint")}
+                      active
+                    />
+                    <AuthSignal
+                      icon={Key}
+                      label={t("passwordAuth")}
+                      value={t("enabled")}
+                      active
+                    />
+                  </>
+                ) : (
+                  <>
+                    <AuthSignal
+                      icon={ShieldCheck}
+                      label={t("passwordAuth")}
+                      value={passwordEnabled ? t("enabled") : t("disabled")}
+                      active={passwordEnabled}
+                    />
+                    <AuthSignal
+                      icon={Key}
+                      label={t("oauthAuth")}
+                      value={oidcEnabled ? t("available") : t("notAvailable")}
+                      active={oidcEnabled}
+                    />
+                    <AuthSignal
+                      icon={Monitor}
+                      label={t("captchaAuth")}
+                      value={captchaEnabled ? t("enabled") : t("disabled")}
+                      active={captchaEnabled}
+                    />
+                  </>
+                )}
               </div>
             </div>
           </section>
 
           <form
-            onSubmit={submit}
+            onSubmit={setupMode ? submitSetup : submit}
             className="border-t border-kumo-line bg-kumo-base p-6 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
           >
             <div className="mb-8">
               <div className="flex min-h-6 items-center gap-2 text-xs font-semibold uppercase text-kumo-subtle">
                 <Key size={16} aria-hidden />
-                <span>{t("adminAccess")}</span>
+                <span>{setupMode ? t("setupWizardTag") : t("adminAccess")}</span>
               </div>
-              <h2 className="mt-3 text-2xl font-semibold">{t("login")}</h2>
+              <h2 className="mt-3 text-2xl font-semibold">
+                {setupMode ? t("initialSetup") : t("login")}
+              </h2>
               <p className="mt-2 text-sm text-kumo-subtle">
-                {t("loginFormSubtitle")}
+                {setupMode ? t("initialSetupSubtitle") : t("loginFormSubtitle")}
               </p>
             </div>
 
             <div className="space-y-4">
-              {!options.disable_pwd && (
+              {!setupChecked && (
+                <p className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm text-kumo-subtle">
+                  {t("setupChecking")}
+                </p>
+              )}
+              {setupChecked && setupMode && (
+                <>
+                  <p className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm leading-6 text-kumo-subtle">
+                    {t("setupAdminHint")}
+                  </p>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("username")}
+                    </span>
+                    <Input
+                      aria-label={t("username")}
+                      value={setupUsername}
+                      onChange={(e) => {
+                        setSetupUsername(e.target.value);
+                        setError("");
+                      }}
+                      autoComplete="username"
+                      autoFocus
+                      className="w-full"
+                    />
+                    <span className="mt-1.5 block text-xs text-kumo-subtle">
+                      {t("setupUsernameHint")}
+                    </span>
+                  </label>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1.5 block text-sm font-medium">
+                        {t("nickname")}{" "}
+                        <span className="font-normal text-kumo-subtle">
+                          {t("optionalField")}
+                        </span>
+                      </span>
+                      <Input
+                        aria-label={t("nickname")}
+                        value={setupNickname}
+                        onChange={(e) => setSetupNickname(e.target.value)}
+                        autoComplete="name"
+                        className="w-full"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 block text-sm font-medium">
+                        {t("email")}{" "}
+                        <span className="font-normal text-kumo-subtle">
+                          {t("optionalField")}
+                        </span>
+                      </span>
+                      <Input
+                        aria-label={t("email")}
+                        type="email"
+                        value={setupEmail}
+                        onChange={(e) => setSetupEmail(e.target.value)}
+                        autoComplete="email"
+                        className="w-full"
+                      />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("password")}
+                    </span>
+                    <Input
+                      aria-label={t("password")}
+                      type="password"
+                      value={setupPassword}
+                      onChange={(e) => {
+                        setSetupPassword(e.target.value);
+                        setError("");
+                      }}
+                      autoComplete="new-password"
+                      className="w-full"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("confirmPassword")}
+                    </span>
+                    <Input
+                      aria-label={t("confirmPassword")}
+                      type="password"
+                      value={setupConfirmPassword}
+                      onChange={(e) => {
+                        setSetupConfirmPassword(e.target.value);
+                        setError("");
+                      }}
+                      autoComplete="new-password"
+                      className="w-full"
+                    />
+                    <span className="mt-1.5 block text-xs text-kumo-subtle">
+                      {t("setupValidationHint")}
+                    </span>
+                  </label>
+                  {message && (
+                    <InlineMessage tone="success">{message}</InlineMessage>
+                  )}
+                  {error && <InlineMessage tone="error">{error}</InlineMessage>}
+                  <Button
+                    type="submit"
+                    className="w-full justify-center"
+                    disabled={loading}
+                    loading={loading}
+                  >
+                    {t("createAdmin")}
+                  </Button>
+                </>
+              )}
+              {setupChecked && !setupMode && !options.disable_pwd && (
                 <>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-medium">
@@ -327,7 +523,7 @@ export function LoginPage() {
                   </label>
                 </>
               )}
-              {!options.disable_pwd && captchaInfo && (
+              {setupChecked && !setupMode && !options.disable_pwd && captchaInfo && (
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-medium">
                     {t("captcha")}
@@ -354,46 +550,52 @@ export function LoginPage() {
                   </div>
                 </label>
               )}
-              {message && <InlineMessage tone="success">{message}</InlineMessage>}
-              {error && <InlineMessage tone="error">{error}</InlineMessage>}
-              {!options.disable_pwd && (
-                <Button
-                  type="submit"
-                  className="w-full justify-center"
-                  disabled={loading}
-                  loading={loading}
-                >
-                  {t("login")}
-                </Button>
+              {setupChecked && !setupMode && (
+                <>
+                  {message && (
+                    <InlineMessage tone="success">{message}</InlineMessage>
+                  )}
+                  {error && <InlineMessage tone="error">{error}</InlineMessage>}
+                  {!options.disable_pwd && (
+                    <Button
+                      type="submit"
+                      className="w-full justify-center"
+                      disabled={loading}
+                      loading={loading}
+                    >
+                      {t("login")}
+                    </Button>
+                  )}
+                  {options.register && (
+                    <Link
+                      to="/register"
+                      className="block rounded-lg px-3 py-2 text-center text-sm transition hover:bg-kumo-tint/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                    >
+                      {t("register")}
+                    </Link>
+                  )}
+                  {options.ops.length > 0 && !options.disable_pwd && (
+                    <div className="flex items-center gap-2 text-xs text-kumo-subtle">
+                      <span className="h-px flex-1 bg-kumo-line" />
+                      <span>{t("orLoginWith")}</span>
+                      <span className="h-px flex-1 bg-kumo-line" />
+                    </div>
+                  )}
+                  {options.ops.map((op) => (
+                    <Button
+                      key={op}
+                      type="button"
+                      variant="secondary"
+                      className="w-full justify-center"
+                      disabled={loading}
+                      loading={loading}
+                      onClick={() => void startOidc(op)}
+                    >
+                      {op}
+                    </Button>
+                  ))}
+                </>
               )}
-              {options.register && (
-                <Link
-                  to="/register"
-                  className="block rounded-lg px-3 py-2 text-center text-sm transition hover:bg-kumo-tint/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
-                >
-                  {t("register")}
-                </Link>
-              )}
-              {options.ops.length > 0 && !options.disable_pwd && (
-                <div className="flex items-center gap-2 text-xs text-kumo-subtle">
-                  <span className="h-px flex-1 bg-kumo-line" />
-                  <span>{t("orLoginWith")}</span>
-                  <span className="h-px flex-1 bg-kumo-line" />
-                </div>
-              )}
-              {options.ops.map((op) => (
-                <Button
-                  key={op}
-                  type="button"
-                  variant="secondary"
-                  className="w-full justify-center"
-                  disabled={loading}
-                  loading={loading}
-                  onClick={() => void startOidc(op)}
-                >
-                  {op}
-                </Button>
-              ))}
             </div>
           </form>
         </div>

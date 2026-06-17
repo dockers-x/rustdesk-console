@@ -26,7 +26,7 @@ use crate::support::jwt::Jwt;
 use crate::support::login_limiter::{LoginLimiter, SecurityPolicy};
 use crate::support::record_storage_config::RecordStorageConfigStore;
 use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
-use crate::support::{external_webclient::ExternalWebClient, password, random};
+use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
 pub const DATABASE_VERSION: i32 = 268;
@@ -281,19 +281,14 @@ async fn seed(
     services::group::create(db, &default_name, group::TYPE_DEFAULT).await?;
     services::group::create(db, &share_name, group::TYPE_SHARE).await?;
 
-    let configured_password = !config.admin.password.is_empty();
-    let pwd = if configured_password {
-        config.admin.password.clone()
-    } else {
-        random::random_string(8)
-    };
-    tracing::info!("Admin Username Is: {}", config.admin.username);
-    if configured_password {
-        tracing::info!("Admin password loaded from config/env.");
-    } else {
-        tracing::info!("Admin Password Is: {}", pwd);
+    if config.admin.password.is_empty() {
+        tracing::info!("Admin account not initialized. Complete setup from the web console.");
+        return Ok(());
     }
-    let hash = password::encrypt_password(&pwd)?;
+
+    tracing::info!("Admin Username Is: {}", config.admin.username);
+    tracing::info!("Admin password loaded from config/env.");
+    let hash = password::encrypt_password(&config.admin.password)?;
     let admin = user::ActiveModel {
         username: Set(config.admin.username.clone()),
         nickname: Set("Admin".to_string()),
@@ -350,4 +345,49 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
         start_time: Arc::new(start_time),
         version: Arc::new(version),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{Database, EntityTrait};
+
+    async fn memory_db() -> DatabaseConnection {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.sqlx_logging(false);
+        Database::connect(options).await.unwrap()
+    }
+
+    fn test_config(admin_password: &str) -> Config {
+        let mut cfg = Config::default();
+        cfg.admin.password = admin_password.to_string();
+        cfg.admin.init();
+        cfg
+    }
+
+    #[tokio::test]
+    async fn first_seed_without_admin_password_waits_for_web_setup() {
+        let db = memory_db().await;
+        let cfg = test_config("");
+        let i18n = I18n::load("en");
+
+        migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
+
+        assert_eq!(user::Entity::find().count(&db).await.unwrap(), 0);
+        assert_eq!(group::Entity::find().count(&db).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn first_seed_with_admin_password_creates_admin() {
+        let db = memory_db().await;
+        let cfg = test_config("change-me");
+        let i18n = I18n::load("en");
+
+        migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
+
+        let admin = user::Entity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(admin.username, "admin");
+        assert!(admin.is_admin());
+        assert!(crate::support::password::verify_password(&admin.password, "change-me").0);
+    }
 }

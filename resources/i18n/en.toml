@@ -43,6 +43,16 @@ description = "Password change required."
 one = "Please change your password before continuing."
 other = "Please change your password before continuing."
 
+[PasswordMismatch]
+description = "Password confirmation mismatch."
+one = "Passwords do not match."
+other = "Passwords do not match."
+
+[SetupAlreadyInitialized]
+description = "Initial setup has already been completed."
+one = "Initial setup has already been completed."
+other = "Initial setup has already been completed."
+
 [UsernameOrPasswordError]
 description = "Username or password error."
 one = "Username or password error."

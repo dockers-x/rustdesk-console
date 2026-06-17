@@ -13,7 +13,7 @@ app:
 admin:
   title: "RustDesk API Admin"
   username: "admin" # 首次初始化管理员用户名，可用 RUSTDESK_API_ADMIN_USERNAME 覆盖
-  password: "" # 首次初始化管理员密码；为空时随机生成并打印日志，可用 RUSTDESK_API_ADMIN_PASSWORD 覆盖
+  password: "" # 首次初始化管理员密码；为空时通过 Web 初始化向导创建，可用 RUSTDESK_API_ADMIN_PASSWORD 覆盖
   force-change-password: false # 首次初始化管理员登录后是否必须修改密码，可用 RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD 覆盖
   hello-file: "./conf/admin/hello.html"  #优先使用file
   hello: ""

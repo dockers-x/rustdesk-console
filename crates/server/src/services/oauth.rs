@@ -60,15 +60,28 @@ pub async fn get_oauth_providers(db: &DatabaseConnection) -> Result<Vec<String>,
 #[derive(Debug, Clone, Serialize)]
 pub struct LoginProvider {
     pub name: String,
+    pub oauth_type: String,
 }
 
-pub async fn get_login_providers(db: &DatabaseConnection) -> Result<Vec<LoginProvider>, DbErr> {
+pub async fn get_login_provider_configs(
+    db: &DatabaseConnection,
+) -> Result<Vec<oauth::Model>, DbErr> {
     Ok(oauth::Entity::find()
         .all(db)
         .await?
         .into_iter()
         .filter(is_login_provider_configured)
-        .map(|o| LoginProvider { name: o.op })
+        .collect())
+}
+
+pub async fn get_login_providers(db: &DatabaseConnection) -> Result<Vec<LoginProvider>, DbErr> {
+    Ok(get_login_provider_configs(db)
+        .await?
+        .into_iter()
+        .map(|o| LoginProvider {
+            name: o.op,
+            oauth_type: o.oauth_type,
+        })
         .collect())
 }
 

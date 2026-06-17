@@ -122,6 +122,8 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/captcha", get(admin::captcha))
         .route("/api/admin/logout", post(admin::logout))
         .route("/api/admin/login-options", get(admin::login_options))
+        .route("/api/admin/setup/status", get(admin::setup_status))
+        .route("/api/admin/setup/initialize", post(admin::setup_initialize))
         .route("/api/admin/oidc/auth", post(oauth::admin_oidc_auth))
         .route(
             "/api/admin/oidc/auth-query",

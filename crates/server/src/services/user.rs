@@ -281,11 +281,15 @@ pub async fn is_username_exists(db: &DatabaseConnection, username: &str) -> Resu
     Ok(info_by_username(db, username).await?.is_some())
 }
 
-async fn admin_user_count(db: &DatabaseConnection) -> Result<u64, DbErr> {
+pub async fn admin_user_count(db: &DatabaseConnection) -> Result<u64, DbErr> {
     user::Entity::find()
         .filter(user::Column::IsAdmin.eq(true))
         .count(db)
         .await
+}
+
+pub async fn has_admin(db: &DatabaseConnection) -> Result<bool, DbErr> {
+    Ok(admin_user_count(db).await? > 0)
 }
 
 /// Create a user (formats + dedups username, bcrypt-hashes the password).

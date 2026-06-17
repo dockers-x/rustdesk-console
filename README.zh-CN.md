@@ -64,28 +64,27 @@ cargo build --release
 
 ### 首次登录
 
-Web 后台没有固定默认密码。首次启动时服务会创建默认管理员账号：
+Web 后台没有固定默认密码。服务默认监听 `0.0.0.0:21114`，首次启动后打开
+`/_admin/`。
 
-- 用户名：`admin`
-- 密码：随机生成，只在服务启动日志里打印一次
-- 首次建库前可通过 `RUSTDESK_API_ADMIN_USERNAME`、`RUSTDESK_API_ADMIN_PASSWORD`
-  和 `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD` 自定义初始化管理员
+如果 `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD` 为空，登录页会显示初始化向导，
+在页面里创建第一个本地管理员。
 
-```text
-INFO rustdesk-console: Admin Password Is: <随机密码>
-```
+如果首次建库前设置了 `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD`，服务会自动创建
+初始化管理员：
 
-服务默认监听 `0.0.0.0:21114`，在 `/_admin/` 登录。如果启动日志已经找不到，可以随时重置密码：
+- 用户名：默认 `admin`，可用 `RUSTDESK_API_ADMIN_USERNAME` 覆盖
+- 密码：配置的 `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD`
+
+后续如果需要恢复访问，可以随时重置密码：
 
 ```bash
 rustdesk-console reset-admin-pwd <新密码>
 ```
 
-当 `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD` 为空时，服务会生成随机初始密码并写入日志；
-当它有值时，会使用该配置密码，但不会把密码打印到日志里。这些初始化管理员配置只在数据库首次
-初始化时生效，后续重启不会覆盖已有管理员。设置
-`admin.force-change-password` / `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD=true`
-后，初始化管理员首次登录后必须先修改密码。
+这些初始化管理员配置只在数据库首次初始化时生效，后续重启不会覆盖已有管理员。设置
+`admin.force-change-password` / `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD=true` 后，
+通过环境变量创建的初始化管理员首次登录后必须先修改密码。
 
 ## 配置
 

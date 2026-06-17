@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -6,9 +6,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
-import { Table } from "@cloudflare/kumo/components/table";
 import { cn } from "@cloudflare/kumo/utils";
 import {
+  ArrowClockwise,
   CheckCircle,
   EnvelopeSimple,
   IdentificationBadge,
@@ -45,7 +45,14 @@ interface AdminConfig {
 
 interface OAuthStatus {
   op: string;
+  oauth_type?: string;
   status: number;
+  name?: string;
+  username?: string;
+  email?: string;
+  verified_email?: boolean;
+  picture?: string;
+  created_at?: string;
 }
 
 interface BindStart {
@@ -64,7 +71,9 @@ export function MyProfilePage() {
   const [pwdError, setPwdError] = useState("");
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [oauthError, setOauthError] = useState("");
+  const [oauthMessage, setOauthMessage] = useState("");
   const [bindingTarget, setBindingTarget] = useState("");
+  const [refreshOnFocus, setRefreshOnFocus] = useState(false);
   const [unbindTarget, setUnbindTarget] = useState("");
 
   const user = useQuery({
@@ -106,10 +115,13 @@ export function MyProfilePage() {
 
   const bindOauth = async (op: string) => {
     setOauthError("");
+    setOauthMessage("");
     setBindingTarget(op);
     try {
       const res = await apiPost<BindStart>("/api/admin/oauth/bind", { op });
       window.open(res.url, "_blank", "noopener,noreferrer");
+      setOauthMessage(t("oauthBindReturnHint"));
+      setRefreshOnFocus(true);
     } catch (err) {
       setOauthError((err as ApiError).message || t("operationFailed"));
     } finally {
@@ -121,9 +133,20 @@ export function MyProfilePage() {
     mutationFn: (op: string) => apiPost("/api/admin/oauth/unbind", { op }),
     onSuccess: () => {
       setUnbindTarget("");
+      setOauthMessage("");
       void qc.invalidateQueries({ queryKey: ["my-oauth"] });
     },
   });
+
+  useEffect(() => {
+    if (!refreshOnFocus) return;
+    const refresh = () => {
+      setRefreshOnFocus(false);
+      void qc.invalidateQueries({ queryKey: ["my-oauth"] });
+    };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [qc, refreshOnFocus]);
 
   const submitPassword = (e: React.FormEvent) => {
     e.preventDefault();
@@ -224,7 +247,7 @@ export function MyProfilePage() {
             />
             <ProfileField
               icon={<ShieldCheck size={18} />}
-              label={t("oauthBinding")}
+              label={t("loginMethods")}
               value={t("boundSummary", {
                 bound: boundCount,
                 total: oauth.data?.length ?? 0,
@@ -237,88 +260,60 @@ export function MyProfilePage() {
         <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-base font-semibold">{t("oauthBinding")}</h2>
+              <h2 className="text-base font-semibold">{t("loginMethods")}</h2>
               <p className="mt-1 text-sm text-kumo-subtle">
-                {t("oauthBindingHint")}
+                {t("loginMethodsHint")}
               </p>
             </div>
-            <StatusChip>
-              {t("boundSummary", {
-                bound: boundCount,
-                total: oauth.data?.length ?? 0,
-              })}
-            </StatusChip>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <StatusChip>
+                {t("boundSummary", {
+                  bound: boundCount,
+                  total: oauth.data?.length ?? 0,
+                })}
+              </StatusChip>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setOauthMessage("");
+                  void qc.invalidateQueries({ queryKey: ["my-oauth"] });
+                }}
+              >
+                <ArrowClockwise size={16} />
+                {t("refreshBindings")}
+              </Button>
+            </div>
           </div>
+          <p className="mb-3 rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm leading-6 text-kumo-subtle">
+            {t("oauthBindingHint")}
+          </p>
+          {oauthMessage && (
+            <InlineMessage tone="success" className="mb-3">
+              {oauthMessage}
+            </InlineMessage>
+          )}
           {oauthError && (
             <InlineMessage tone="error" className="mb-3">
               {oauthError}
             </InlineMessage>
           )}
-          <div className="overflow-x-auto rounded-lg border border-kumo-line">
-            <Table>
-              <Table.Header>
-                <Table.Row>
-                  <Table.Head>{t("op")}</Table.Head>
-                  <Table.Head>{t("status")}</Table.Head>
-                  <Table.Head>{t("actions")}</Table.Head>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {(oauth.data ?? []).map((row) => (
-                  <Table.Row key={row.op}>
-                    <Table.Cell>
-                      <div className="flex min-w-36 items-center gap-2">
-                        <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-kumo-line bg-kumo-base text-kumo-subtle">
-                          <LinkSimple size={16} />
-                        </div>
-                        <span className="font-medium">{row.op}</span>
-                      </div>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <span
-                        className={cn(
-                          "inline-flex min-h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium",
-                          row.status === 1
-                            ? "border-kumo-success/25 bg-kumo-success-tint/60 text-kumo-success"
-                            : "border-kumo-line bg-kumo-base text-kumo-subtle",
-                        )}
-                      >
-                        {row.status === 1 ? (
-                          <CheckCircle size={14} weight="fill" />
-                        ) : (
-                          <WarningCircle size={14} />
-                        )}
-                        {row.status === 1 ? t("hasBind") : t("noBind")}
-                      </span>
-                    </Table.Cell>
-                    <Table.Cell>
-                      {row.status === 1 ? (
-                        <Button
-                          size="sm"
-                          variant="secondary-destructive"
-                          onClick={() => {
-                            unbind.reset();
-                            setUnbindTarget(row.op);
-                          }}
-                        >
-                          {t("unbind")}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          loading={bindingTarget === row.op}
-                          disabled={Boolean(bindingTarget)}
-                          onClick={() => void bindOauth(row.op)}
-                        >
-                          {t("toBind")}
-                        </Button>
-                      )}
-                    </Table.Cell>
-                  </Table.Row>
-                ))}
-              </Table.Body>
-            </Table>
+          <div className="rounded-lg border border-kumo-line bg-kumo-base">
+            <div className="grid gap-0 divide-y divide-kumo-line">
+              {(oauth.data ?? []).map((row) => (
+                <OAuthMethodRow
+                  key={row.op}
+                  row={row}
+                  bindingTarget={bindingTarget}
+                  unbindPending={unbind.isPending && unbindTarget === row.op}
+                  onBind={() => void bindOauth(row.op)}
+                  onUnbind={() => {
+                    unbind.reset();
+                    setUnbindTarget(row.op);
+                  }}
+                />
+              ))}
+            </div>
             {oauth.isLoading && (
               <TableState tone="loading">{t("loading")}</TableState>
             )}
@@ -499,6 +494,111 @@ function ProfileField({
       <dd className="mt-2 min-h-5 break-words text-sm font-medium">
         {loading ? "…" : value || "—"}
       </dd>
+    </div>
+  );
+}
+
+function OAuthMethodRow({
+  row,
+  bindingTarget,
+  unbindPending,
+  onBind,
+  onUnbind,
+}: {
+  row: OAuthStatus;
+  bindingTarget: string;
+  unbindPending: boolean;
+  onBind: () => void;
+  onUnbind: () => void;
+}) {
+  const { t } = useTranslation();
+  const isBound = row.status === 1;
+  const identity = row.name || row.username || row.email || row.op;
+  const secondary = isBound
+    ? t("oauthBoundIdentity", { identity })
+    : t("oauthUnboundHint");
+
+  return (
+    <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 gap-3">
+        <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-kumo-line bg-kumo-elevated text-kumo-subtle">
+          {row.picture ? (
+            <img
+              src={row.picture}
+              alt=""
+              className="size-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <LinkSimple size={18} />
+          )}
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="break-all text-sm font-semibold">{row.op}</h3>
+            <StatusChip>{(row.oauth_type || "oauth").toUpperCase()}</StatusChip>
+            <span
+              className={cn(
+                "inline-flex min-h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium",
+                isBound
+                  ? "border-kumo-success/25 bg-kumo-success-tint/60 text-kumo-success"
+                  : "border-kumo-line bg-kumo-elevated text-kumo-subtle",
+              )}
+            >
+              {isBound ? (
+                <CheckCircle size={14} weight="fill" />
+              ) : (
+                <WarningCircle size={14} />
+              )}
+              {isBound ? t("hasBind") : t("noBind")}
+            </span>
+          </div>
+          <p className="mt-1 break-words text-sm text-kumo-subtle">
+            {secondary}
+          </p>
+          {isBound && (row.email || row.username) && (
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-kumo-subtle">
+              {row.email && (
+                <span className="inline-flex min-h-7 items-center rounded-md border border-kumo-line bg-kumo-elevated px-2">
+                  {row.email}
+                </span>
+              )}
+              {row.username && row.username !== row.email && (
+                <span className="inline-flex min-h-7 items-center rounded-md border border-kumo-line bg-kumo-elevated px-2">
+                  {row.username}
+                </span>
+              )}
+              {row.email && (
+                <span className="inline-flex min-h-7 items-center rounded-md border border-kumo-line bg-kumo-elevated px-2">
+                  {row.verified_email ? t("verifiedEmail") : t("unverifiedEmail")}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="flex shrink-0 sm:justify-end">
+        {isBound ? (
+          <Button
+            size="sm"
+            variant="secondary-destructive"
+            disabled={unbindPending}
+            onClick={onUnbind}
+          >
+            {t("unbind")}
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={bindingTarget === row.op}
+            disabled={Boolean(bindingTarget)}
+            onClick={onBind}
+          >
+            {t("toBind")}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

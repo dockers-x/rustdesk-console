@@ -68,32 +68,29 @@ cargo build --release
 
 ### First login
 
-There is no fixed default password. On first start the server creates the default
-administrator account:
+There is no fixed default password. The server listens on `0.0.0.0:21114`; open
+`/_admin/` after the first start.
 
-- Username: `admin`
-- Password: random, printed once in the server log
-- The generated account can be customized before the first database seed with
-  `RUSTDESK_API_ADMIN_USERNAME`, `RUSTDESK_API_ADMIN_PASSWORD`, and
-  `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD`
+If `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD` is empty, the login page shows
+an initial setup wizard. Create the first local administrator there.
 
-```text
-INFO rustdesk-console: Admin Password Is: <random>
-```
+If `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD` is set before the first
+database seed, the server creates the initial administrator automatically:
 
-The server listens on `0.0.0.0:21114`. Sign in at `/_admin/`. If the initial log
-line is no longer available, reset the password any time:
+- Username: `admin` by default, or `RUSTDESK_API_ADMIN_USERNAME`
+- Password: the configured `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD`
+
+If you need to recover access later, reset the password any time:
 
 ```bash
 rustdesk-console reset-admin-pwd <newpassword>
 ```
 
-When `admin.password` / `RUSTDESK_API_ADMIN_PASSWORD` is empty, the server generates
-and logs a random initial password. When it is set, that configured password is used
-but is not printed in logs. These initial admin settings are applied only when the
-database is first initialized; later restarts never overwrite an existing admin user.
-Set `admin.force-change-password` / `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD=true`
-to require that initial admin user to change the password after the first sign-in.
+These initial admin settings are applied only when the database is first
+initialized; later restarts never overwrite an existing admin user. Set
+`admin.force-change-password` / `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD=true` to
+require the environment-created initial admin user to change the password after
+the first sign-in.
 
 ## Configuration
 

@@ -294,6 +294,7 @@ pub async fn login_options(State(state): State<AppState>) -> Response {
     if state.config.app.web_sso {
         ops.push(services::oauth::LoginProvider {
             name: "webauth".to_string(),
+            oauth_type: entity::oauth::TYPE_WEBAUTH.to_string(),
         });
     }
     let oidc_items: Vec<Map<String, Value>> = ops

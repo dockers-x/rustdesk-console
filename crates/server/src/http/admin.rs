@@ -164,6 +164,86 @@ pub async fn login_options(
     }))
 }
 
+pub async fn setup_status(State(state): State<AppState>) -> Response {
+    let initialized = services::user::has_admin(&state.db).await.unwrap_or(true);
+    resp::success(json!({
+        "initialized": initialized,
+        "can_initialize": !initialized,
+        "title": state.config.admin.title,
+    }))
+}
+
+#[derive(Deserialize, Default)]
+pub struct SetupInitializeForm {
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default, rename = "confirmPassword")]
+    pub confirm_password: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub nickname: String,
+}
+
+pub async fn setup_initialize(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    ClientIp(ip): ClientIp,
+    Json(f): Json<SetupInitializeForm>,
+) -> Response {
+    if services::user::has_admin(&state.db).await.unwrap_or(true) {
+        return resp::fail(101, state.tr(&lang, "SetupAlreadyInitialized"));
+    }
+    let username = f.username.trim();
+    if username.len() < 2 || f.password.len() < 4 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    if f.password != f.confirm_password {
+        return resp::fail(101, state.tr(&lang, "PasswordMismatch"));
+    }
+    let model = user::Model {
+        id: 0,
+        username: username.to_string(),
+        email: f.email.trim().to_string(),
+        password: f.password,
+        nickname: f.nickname.trim().to_string(),
+        avatar: String::new(),
+        group_id: 1,
+        is_admin: Some(true),
+        status: user::STATUS_ENABLE,
+        must_change_password: false,
+        remark: String::new(),
+        created_at: None,
+        updated_at: None,
+    };
+    let user = match services::user::create(&state.db, model).await {
+        Ok(user) => user,
+        Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    };
+    let ut = match services::user::login(
+        &state.db,
+        &state.jwt,
+        &state.config,
+        &user,
+        services::user::LoginEvent {
+            client: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
+            device_id: String::new(),
+            uuid: String::new(),
+            ip,
+            login_type: entity::login_log::TYPE_ACCOUNT.to_string(),
+            platform: "webadmin".to_string(),
+        },
+    )
+    .await
+    {
+        Ok(ut) => ut,
+        Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    };
+    resp::success(AdminLoginPayload::from_user(&user, ut.token))
+}
+
 // ---------- config ----------
 
 pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUser>) -> Response {
@@ -1104,18 +1184,32 @@ pub async fn oauth_test(
 
 /// Replaces the earlier stub: real list of providers + bind status.
 pub async fn user_my_oauth_real(State(state): State<AppState>, user: BackendUser) -> Response {
-    let providers = services::oauth::get_login_providers(&state.db)
+    let providers = services::oauth::get_login_provider_configs(&state.db)
         .await
         .unwrap_or_default();
     let thirds = services::oauth::user_thirds_by_user_id(&state.db, user.user.id)
         .await
         .unwrap_or_default();
-    let bound: std::collections::HashSet<String> = thirds.into_iter().map(|t| t.op).collect();
+    let bound: std::collections::HashMap<String, entity::user_third::Model> =
+        thirds.into_iter().map(|t| (t.op.clone(), t)).collect();
     let res: Vec<Value> = providers
         .into_iter()
         .map(|o| {
-            let op = o.name;
-            json!({ "op": op, "status": if bound.contains(&op) { 1 } else { 0 } })
+            let op = o.op;
+            let binding = bound.get(&op);
+            json!({
+                "op": op,
+                "oauth_type": o.oauth_type,
+                "status": if binding.is_some() { 1 } else { 0 },
+                "name": binding.map(|t| t.name.as_str()).unwrap_or(""),
+                "username": binding.map(|t| t.username.as_str()).unwrap_or(""),
+                "email": binding.map(|t| t.email.as_str()).unwrap_or(""),
+                "verified_email": binding.map(|t| t.verified_email).unwrap_or(false),
+                "picture": binding.map(|t| t.picture.as_str()).unwrap_or(""),
+                "created_at": binding
+                    .and_then(|t| t.created_at.map(|dt| dt.to_string()))
+                    .unwrap_or_default(),
+            })
         })
         .collect();
     resp::success(res)
