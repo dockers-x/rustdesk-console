@@ -577,7 +577,7 @@ pub async fn user_create(
     if !user.user.is_admin() {
         return resp::error("Permission denied");
     }
-    if f.name.trim().is_empty() || f.email.trim().is_empty() {
+    if !valid_user_create_form(&f) {
         return resp::error("ParamsError");
     }
     let group_id = if f.group_name.trim().is_empty() {
@@ -613,6 +613,10 @@ pub async fn user_create(
         }
         Err(e) => resp::error(e),
     }
+}
+
+fn valid_user_create_form(f: &UserCreateForm) -> bool {
+    !f.name.trim().is_empty() && !f.password.trim().is_empty()
 }
 
 #[derive(Deserialize, Default)]
@@ -1095,5 +1099,30 @@ mod tests {
         assert_eq!(q.page, Some(2));
         assert_eq!(q.page_size, Some(25));
         assert_eq!(q.group_name.as_deref(), Some("ops"));
+    }
+
+    #[test]
+    fn pro_user_create_accepts_official_script_payload_without_email() {
+        let f: UserCreateForm = serde_json::from_value(json!({
+            "name": "script-user",
+            "password": "secret",
+            "group_name": "ops",
+            "note": "created by users.py"
+        }))
+        .unwrap();
+
+        assert!(valid_user_create_form(&f));
+        assert!(f.email.is_empty());
+    }
+
+    #[test]
+    fn pro_user_create_rejects_missing_password() {
+        let f: UserCreateForm = serde_json::from_value(json!({
+            "name": "script-user",
+            "group_name": "ops"
+        }))
+        .unwrap();
+
+        assert!(!valid_user_create_form(&f));
     }
 }
