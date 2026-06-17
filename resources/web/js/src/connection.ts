@@ -16,6 +16,10 @@ const HOSTS = [
 let HOST = localStorage.getItem("rendezvous-server") || HOSTS[0];
 //根据协议设置为ws或wss
 const SCHEMA=location.protocol=="https:"?"wss://":"ws://";
+const WS_HOST_PATHS = {
+  rendezvous: "/ws/id",
+  relay: "/ws/relay",
+};
 
 type MsgboxCallback = (type: string, title: string, text: string) => void;
 type DrawCallback = (data: Uint8Array) => void;
@@ -135,10 +139,11 @@ export default class Connection {
 
   async connectRelay(rr: rendezvous.RelayResponse) {
     const pk = rr.pk;
-    let uri = rr.relay_server;
-    if (uri) {
+    let uri = getConfiguredWsUri(true);
+    if (!uri && rr.relay_server) {
+      uri = rr.relay_server;
       uri = getrUriFromRs(uri, true, 2);
-    } else {
+    } else if (!uri) {
       uri = getDefaultUri(true);
     }
     const uuid = rr.uuid;
@@ -750,8 +755,22 @@ function testDelay() {
 testDelay();
 
 function getDefaultUri(isRelay: Boolean = false): string {
+  const wsUri = getConfiguredWsUri(isRelay);
+  if (wsUri) return wsUri;
   const host = localStorage.getItem("custom-rendezvous-server");
   return getrUriFromRs(host || HOST, isRelay);
+}
+
+function getConfiguredWsUri(isRelay: Boolean = false): string {
+  const configured = (window as any).ws_host;
+  if (typeof configured !== "string") return "";
+  let base = configured.trim();
+  if (!base) return "";
+  base = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
+  if (!/^wss?:\/\//i.test(base)) {
+    base = SCHEMA + base.replace(/^\/+/, "");
+  }
+  return base.replace(/\/+$/, "") + (isRelay ? WS_HOST_PATHS.relay : WS_HOST_PATHS.rendezvous);
 }
 /*
 function isHttps() {

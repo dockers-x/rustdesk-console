@@ -189,6 +189,27 @@ pub async fn config_app(State(state): State<AppState>, _user: BackendUser) -> Re
     resp::success(json!({ "web_client": state.config.app.web_client }))
 }
 
+pub async fn overview(State(state): State<AppState>, _user: BackendUser) -> Response {
+    match services::overview::load(&state.db, state.version.as_str(), state.start_time.as_str()).await
+    {
+        Ok(v) => resp::success(v),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn diagnostics_run(State(state): State<AppState>, _user: AdminUser) -> Response {
+    let webclient = state.webclient_config.get().await;
+    let report = services::diagnostics::run(
+        &state.db,
+        &state.config,
+        &webclient,
+        state.version.as_str(),
+        state.start_time.as_str(),
+    )
+    .await;
+    resp::success(report)
+}
+
 // ---------- shared query/forms ----------
 
 #[derive(Deserialize, Default)]
@@ -1936,6 +1957,73 @@ pub async fn rustdesk_send_cmd(
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     };
     match services::server_cmd::send_cmd(port as u16, &f.cmd, &f.option).await {
+        Ok(r) => resp::success(r),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+pub async fn rustdesk_status(State(state): State<AppState>, _user: AdminUser) -> Response {
+    resp::success(services::server_cmd::structured_status(&state.config).await)
+}
+
+#[derive(Deserialize, Default)]
+pub struct RelayServersForm {
+    #[serde(default)]
+    pub value: String,
+}
+
+pub async fn rustdesk_update_relay_servers(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Json(f): Json<RelayServersForm>,
+) -> Response {
+    match services::server_cmd::send_target_cmd(
+        &state.config,
+        entity::server_cmd::TARGET_ID_SERVER,
+        "relay-servers",
+        &f.value,
+    )
+    .await
+    {
+        Ok(r) => resp::success(r),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct ToggleForm {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+pub async fn rustdesk_update_always_use_relay(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Json(f): Json<ToggleForm>,
+) -> Response {
+    let value = if f.enabled { "Y" } else { "N" };
+    match services::server_cmd::send_target_cmd(
+        &state.config,
+        entity::server_cmd::TARGET_ID_SERVER,
+        "always-use-relay",
+        value,
+    )
+    .await
+    {
+        Ok(r) => resp::success(r),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+pub async fn rustdesk_ip_blocker(State(state): State<AppState>, _user: AdminUser) -> Response {
+    match services::server_cmd::send_target_cmd(
+        &state.config,
+        entity::server_cmd::TARGET_ID_SERVER,
+        "ip-blocker",
+        "",
+    )
+    .await
+    {
         Ok(r) => resp::success(r),
         Err(e) => resp::fail(101, e),
     }

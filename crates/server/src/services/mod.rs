@@ -5,10 +5,12 @@
 pub mod active_connection;
 pub mod address_book;
 pub mod audit;
+pub mod diagnostics;
 pub mod group;
 pub mod ldap;
 pub mod login_log;
 pub mod oauth;
+pub mod overview;
 pub mod peer;
 pub mod server_cmd;
 pub mod share_record;

@@ -14,7 +14,7 @@ import {
   dialogPanelClass,
 } from "../components/DialogLayout";
 import { TableState } from "../components/TableState";
-import { apiGet, apiPost, ApiError } from "../lib/api";
+import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 
 const ID_TARGET = "21115";
 const RELAY_TARGET = "21117";
@@ -31,6 +31,18 @@ interface ServerCommand {
   option: string;
   explain: string;
   target: string;
+}
+
+interface RustdeskStatus {
+  targets: {
+    target: string;
+    label: string;
+    port?: number | null;
+    available: boolean;
+    message: string;
+  }[];
+  relay_servers?: string | null;
+  always_use_relay?: string | null;
 }
 
 interface CommandForm {
@@ -56,6 +68,11 @@ function targetLabel(target: string) {
   return target || "—";
 }
 
+function parseAlwaysUseRelay(value?: string | null) {
+  const normalized = (value ?? "").toLowerCase();
+  return normalized.includes("true") || normalized.includes("y");
+}
+
 export function ServerCommandsPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -66,6 +83,10 @@ export function ServerCommandsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ServerCommand | null>(null);
   const [sendResult, setSendResult] = useState("");
   const [sendError, setSendError] = useState("");
+  const [relayServers, setRelayServers] = useState("");
+  const [alwaysUseRelay, setAlwaysUseRelay] = useState(false);
+  const [controlMessage, setControlMessage] = useState("");
+  const [controlError, setControlError] = useState("");
   const [status, setStatus] = useState<Record<string, boolean | null>>({
     [ID_TARGET]: null,
     [RELAY_TARGET]: null,
@@ -80,24 +101,24 @@ export function ServerCommandsPage() {
       }),
   });
 
-  const refreshStatus = async (target: string) => {
-    setStatus((s) => ({ ...s, [target]: null }));
-    try {
-      await apiPost<string>("/api/admin/rustdesk/sendCmd", {
-        cmd: "h",
-        option: "",
-        target,
-      });
-      setStatus((s) => ({ ...s, [target]: true }));
-    } catch {
-      setStatus((s) => ({ ...s, [target]: false }));
-    }
-  };
+  const structured = useQuery({
+    queryKey: ["rustdesk-status"],
+    queryFn: () => apiGet<RustdeskStatus>("/api/admin/rustdesk/status"),
+  });
 
   useEffect(() => {
-    void refreshStatus(ID_TARGET);
-    void refreshStatus(RELAY_TARGET);
-  }, []);
+    if (!structured.data) return;
+    const next: Record<string, boolean | null> = {
+      [ID_TARGET]: null,
+      [RELAY_TARGET]: null,
+    };
+    for (const target of structured.data.targets) {
+      next[target.target] = target.available;
+    }
+    setStatus(next);
+    setRelayServers(structured.data.relay_servers ?? "");
+    setAlwaysUseRelay(parseAlwaysUseRelay(structured.data.always_use_relay));
+  }, [structured.data]);
 
   const save = useMutation({
     mutationFn: () =>
@@ -136,6 +157,50 @@ export function ServerCommandsPage() {
     },
   });
 
+  const updateRelayServers = useMutation({
+    mutationFn: () =>
+      apiPatch<string>("/api/admin/rustdesk/relayServers", {
+        value: relayServers,
+      }),
+    onSuccess: (res) => {
+      setControlError("");
+      setControlMessage(res || t("operationSuccess"));
+      void structured.refetch();
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setControlError(ae.message || t("operationFailed"));
+    },
+  });
+
+  const updateAlwaysUseRelay = useMutation({
+    mutationFn: () =>
+      apiPatch<string>("/api/admin/rustdesk/alwaysUseRelay", {
+        enabled: alwaysUseRelay,
+      }),
+    onSuccess: (res) => {
+      setControlError("");
+      setControlMessage(res || t("operationSuccess"));
+      void structured.refetch();
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setControlError(ae.message || t("operationFailed"));
+    },
+  });
+
+  const queryIpBlocker = useMutation({
+    mutationFn: () => apiGet<string>("/api/admin/rustdesk/ipBlocker"),
+    onSuccess: (res) => {
+      setControlError("");
+      setControlMessage(res || t("emptyResult"));
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setControlError(ae.message || t("operationFailed"));
+    },
+  });
+
   const openCreate = () => {
     setForm(emptyForm);
     setFormOpen(true);
@@ -170,12 +235,12 @@ export function ServerCommandsPage() {
           <ServerStatus
             label="ID"
             value={status[ID_TARGET]}
-            onRefresh={() => void refreshStatus(ID_TARGET)}
+            onRefresh={() => void structured.refetch()}
           />
           <ServerStatus
             label="RELAY"
             value={status[RELAY_TARGET]}
-            onRefresh={() => void refreshStatus(RELAY_TARGET)}
+            onRefresh={() => void structured.refetch()}
           />
           <Button onClick={openCreate}>{t("create")}</Button>
           <Button
@@ -196,6 +261,87 @@ export function ServerCommandsPage() {
           </Button>
         </div>
       </div>
+
+      <section className="mb-4 rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold">{t("structuredControls")}</h2>
+            <p className="mt-1 text-sm text-kumo-subtle">
+              {t("structuredControlsHint")}
+            </p>
+          </div>
+          <Button
+            variant="secondary"
+            onClick={() => void structured.refetch()}
+            loading={structured.isFetching}
+          >
+            {t("queryServerState")}
+          </Button>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-sm">{t("relayServersValue")}</span>
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <Input
+                  aria-label={t("relayServersValue")}
+                  value={relayServers}
+                  onChange={(e) => {
+                    setRelayServers(e.target.value);
+                    setControlError("");
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  disabled={!status[ID_TARGET]}
+                  loading={updateRelayServers.isPending}
+                  onClick={() => updateRelayServers.mutate()}
+                >
+                  {t("applyRelayServers")}
+                </Button>
+              </div>
+            </label>
+            <div className="grid gap-2">
+              <span className="text-sm">{t("alwaysUseRelay")}</span>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={alwaysUseRelay}
+                    onChange={(e) => {
+                      setAlwaysUseRelay(e.target.checked);
+                      setControlError("");
+                    }}
+                  />
+                  {alwaysUseRelay ? t("enabled") : t("disabled")}
+                </label>
+                <Button
+                  variant="secondary"
+                  disabled={!status[ID_TARGET]}
+                  loading={updateAlwaysUseRelay.isPending}
+                  onClick={() => updateAlwaysUseRelay.mutate()}
+                >
+                  {t("applyAlwaysUseRelay")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={!status[ID_TARGET]}
+                  loading={queryIpBlocker.isPending}
+                  onClick={() => queryIpBlocker.mutate()}
+                >
+                  {t("ipBlockerSnapshot")}
+                </Button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <span className="mb-1 block text-sm">{t("result")}</span>
+            <pre className="max-h-56 min-h-24 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-kumo-line bg-kumo-base p-3 text-xs text-kumo-default">
+              {controlError || controlMessage || "—"}
+            </pre>
+          </div>
+        </div>
+      </section>
 
       <div className="overflow-x-auto rounded-lg border border-kumo-line">
         <Table>

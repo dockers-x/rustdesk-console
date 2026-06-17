@@ -1,16 +1,18 @@
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { isLoggedIn, mustChangePassword } from "./lib/auth";
 import { AppShell } from "./components/AppShell";
+import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { AppTitleController } from "./lib/adminTitle";
 import { ForceChangePasswordPage } from "./pages/ForceChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MyProfilePage } from "./pages/MyProfilePage";
 import { OAuthActionPage } from "./pages/OAuthActionPage";
+import { OverviewPage } from "./pages/OverviewPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ServerCommandsPage } from "./pages/ServerCommandsPage";
 import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { ResourcePage } from "./resource/ResourcePage";
-import { ALL_RESOURCES, RESOURCES, resourcePath } from "./resource/registry";
+import { ALL_RESOURCES, resourcePath } from "./resource/registry";
 
 function RequireAuth({
   children,
@@ -26,7 +28,7 @@ function RequireAuth({
   return <>{children}</>;
 }
 
-const HOME = `/${RESOURCES[0].name}`;
+const HOME = "/overview";
 
 export default function App() {
   return (
@@ -51,6 +53,8 @@ export default function App() {
           }
         >
           <Route path="/" element={<Navigate to={HOME} replace />} />
+          <Route path="/overview" element={<OverviewPage />} />
+          <Route path="/diagnostics" element={<DiagnosticsPage />} />
           <Route path="/my" element={<MyProfilePage />} />
           <Route path="/serverCmd" element={<ServerCommandsPage />} />
           <Route path="/webclient-settings" element={<WebClientSettingsPage />} />

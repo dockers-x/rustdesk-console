@@ -37,7 +37,7 @@ export function ForceChangePasswordPage() {
       const required = Boolean(user.data.must_change_password);
       setMustChangePassword(required);
       if (!required) {
-        navigate("/users", { replace: true });
+        navigate("/overview", { replace: true });
       }
     }
   }, [navigate, user.data]);

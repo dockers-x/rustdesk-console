@@ -1,6 +1,6 @@
 //! Route table, ports of `http/router/{api,admin,router}.go`.
 
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
@@ -111,6 +111,9 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/oidc/auth", post(oauth::admin_oidc_auth))
         .route("/api/admin/oidc/auth-query", get(oauth::admin_oidc_auth_query))
         .route("/api/admin/user/register", post(admin::user_register))
+        // overview / diagnostics
+        .route("/api/admin/overview", get(admin::overview))
+        .route("/api/admin/diagnostics/run", post(admin::diagnostics_run))
         // config
         .route("/api/admin/config/admin", get(admin::config_admin))
         .route(
@@ -212,6 +215,16 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/address_book_collection_rule/update", post(admin::rule_update))
         .route("/api/admin/address_book_collection_rule/delete", post(admin::rule_delete))
         // rustdesk server commands
+        .route("/api/admin/rustdesk/status", get(admin::rustdesk_status))
+        .route(
+            "/api/admin/rustdesk/relayServers",
+            patch(admin::rustdesk_update_relay_servers),
+        )
+        .route(
+            "/api/admin/rustdesk/alwaysUseRelay",
+            patch(admin::rustdesk_update_always_use_relay),
+        )
+        .route("/api/admin/rustdesk/ipBlocker", get(admin::rustdesk_ip_blocker))
         .route("/api/admin/rustdesk/cmdList", get(admin::rustdesk_cmd_list))
         .route("/api/admin/rustdesk/cmdCreate", post(admin::rustdesk_cmd_create))
         .route("/api/admin/rustdesk/cmdUpdate", post(admin::rustdesk_cmd_update))

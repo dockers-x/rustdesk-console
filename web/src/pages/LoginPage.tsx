@@ -211,7 +211,7 @@ export function LoginPage() {
         captcha,
         captchaId: captchaInfo?.id ?? "",
       });
-      finishLogin(res, "/users");
+      finishLogin(res, "/overview");
     } catch (err) {
       const ae = err as ApiError;
       setError(ae.message || t("loginFailed"));

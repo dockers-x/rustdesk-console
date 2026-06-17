@@ -107,6 +107,7 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 | `rustdesk.id-server` | `RUSTDESK_API_RUSTDESK_ID_SERVER` |
 | `rustdesk.relay-server` | `RUSTDESK_API_RUSTDESK_RELAY_SERVER` |
 | `rustdesk.api-server` | `RUSTDESK_API_RUSTDESK_API_SERVER` |
+| `rustdesk.ws-host` | `RUSTDESK_API_RUSTDESK_WS_HOST` |
 | `rustdesk.key` | `RUSTDESK_API_RUSTDESK_KEY` |
 | `admin.title` | `RUSTDESK_API_ADMIN_TITLE` |
 | `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
@@ -126,6 +127,12 @@ override it with the standard `TZ` environment variable. Set it to your IANA tim
 zone, for example `TZ=Europe/Berlin`, if you do not want Asia/Shanghai local time.
 Business timestamps remain stored in UTC; `TZ` is used for server-local logs/start
 time and for the admin UI's local-time display.
+
+The embedded WebClient derives `21118` from `rustdesk.id-server` and `21119`
+from `rustdesk.relay-server` by default. When `rustdesk.ws-host` is set, it uses
+`<ws-host>/ws/id` and `<ws-host>/ws/relay` instead, which fits Cloudflare Tunnel
+or other HTTPS reverse proxy deployments. Leaving it empty preserves the old
+behavior.
 
 ## Observability
 

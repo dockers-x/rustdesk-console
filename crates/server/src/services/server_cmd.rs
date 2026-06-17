@@ -4,11 +4,13 @@
 use std::time::Duration;
 
 use sea_orm::*;
+use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use ::entity::server_cmd;
 
+use crate::config::Config;
 use crate::services::{now, paginate};
 
 pub struct ServerCmdListResult {
@@ -128,6 +130,114 @@ pub fn system_commands() -> Vec<server_cmd::Model> {
     ]
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RustdeskTargetStatus {
+    pub target: String,
+    pub label: String,
+    pub port: Option<u16>,
+    pub available: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RustdeskStructuredStatus {
+    pub targets: Vec<RustdeskTargetStatus>,
+    pub relay_servers: Option<String>,
+    pub always_use_relay: Option<String>,
+}
+
+pub fn target_port(config: &Config, target: &str) -> Option<u16> {
+    let port = if target == server_cmd::TARGET_ID_SERVER {
+        config.admin.id_server_port - 1
+    } else if target == server_cmd::TARGET_RELAY_SERVER {
+        config.admin.relay_server_port
+    } else {
+        return None;
+    };
+
+    if (1..=u16::MAX as i32).contains(&port) {
+        Some(port as u16)
+    } else {
+        None
+    }
+}
+
+pub fn target_label(target: &str) -> &'static str {
+    if target == server_cmd::TARGET_ID_SERVER {
+        "ID"
+    } else if target == server_cmd::TARGET_RELAY_SERVER {
+        "Relay"
+    } else {
+        "Unknown"
+    }
+}
+
+pub async fn structured_status(config: &Config) -> RustdeskStructuredStatus {
+    let targets = vec![
+        target_status(config, server_cmd::TARGET_ID_SERVER).await,
+        target_status(config, server_cmd::TARGET_RELAY_SERVER).await,
+    ];
+    let relay_servers = send_target_cmd(config, server_cmd::TARGET_ID_SERVER, "relay-servers", "")
+        .await
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let always_use_relay =
+        send_target_cmd(config, server_cmd::TARGET_ID_SERVER, "always-use-relay", "")
+            .await
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
+    RustdeskStructuredStatus {
+        targets,
+        relay_servers,
+        always_use_relay,
+    }
+}
+
+async fn target_status(config: &Config, target: &str) -> RustdeskTargetStatus {
+    let port = target_port(config, target);
+    let Some(port) = port else {
+        return RustdeskTargetStatus {
+            target: target.to_string(),
+            label: target_label(target).to_string(),
+            port,
+            available: false,
+            message: "port is not configured".to_string(),
+        };
+    };
+
+    match send_cmd(port, "h", "").await {
+        Ok(_) => RustdeskTargetStatus {
+            target: target.to_string(),
+            label: target_label(target).to_string(),
+            port: Some(port),
+            available: true,
+            message: "command endpoint is available".to_string(),
+        },
+        Err(e) => RustdeskTargetStatus {
+            target: target.to_string(),
+            label: target_label(target).to_string(),
+            port: Some(port),
+            available: false,
+            message: e,
+        },
+    }
+}
+
+pub async fn send_target_cmd(
+    config: &Config,
+    target: &str,
+    cmd: &str,
+    arg: &str,
+) -> Result<String, String> {
+    let Some(port) = target_port(config, target) else {
+        return Err("target port is not configured".to_string());
+    };
+    send_cmd(port, cmd, arg).await
+}
+
 /// Send a command to the local id/relay server, trying IPv6 then IPv4
 /// (mirrors `SendCmd` / `SendSocketCmd`).
 pub async fn send_cmd(port: u16, cmd: &str, arg: &str) -> Result<String, String> {
@@ -154,4 +264,16 @@ async fn send_socket_cmd(addr: &str, port: u16, cmd: &str) -> Result<String, Str
         Err(_) => 0, // timeout: treat as empty response
     };
     Ok(String::from_utf8_lossy(&buf[..n]).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_label_maps_known_targets() {
+        assert_eq!(target_label(server_cmd::TARGET_ID_SERVER), "ID");
+        assert_eq!(target_label(server_cmd::TARGET_RELAY_SERVER), "Relay");
+        assert_eq!(target_label("x"), "Unknown");
+    }
 }

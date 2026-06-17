@@ -6,6 +6,7 @@ import { Button } from "@cloudflare/kumo/components/button";
 import { cn } from "@cloudflare/kumo/utils";
 import {
   BookBookmark,
+  ChartBar,
   ClockCounterClockwise,
   Desktop,
   FileText,
@@ -27,6 +28,7 @@ import {
   Ticket,
   SignIn,
   PlugsConnected,
+  Pulse,
   User,
   Users,
   UsersThree,
@@ -46,6 +48,7 @@ type IconType = ComponentType<{ size?: number; weight?: "regular" | "fill" }>;
 /// Sidebar icon per nav key (titleKey). Every configured route should have
 /// a real icon so collapsed navigation remains recognizable.
 const NAV_ICONS: Record<string, IconType> = {
+  overview: ChartBar,
   myInfo: User,
   myPeers: Desktop,
   myAddressBook: AddressBook,
@@ -70,6 +73,7 @@ const NAV_ICONS: Record<string, IconType> = {
   auditConn: PlugsConnected,
   auditFile: FileText,
   serverCommands: Terminal,
+  diagnostics: Pulse,
   webClientSettings: SlidersHorizontal,
 };
 
@@ -81,6 +85,13 @@ interface NavItem {
 }
 
 const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
+  {
+    key: "workspace",
+    items: [
+      { to: "/overview", key: "overview" },
+      { to: "/diagnostics", key: "diagnostics" },
+    ],
+  },
   {
     key: "personal",
     items: [
@@ -160,6 +171,14 @@ export function AppShell() {
       >
         {t("skipToContent")}
       </a>
+      {!collapsed && (
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          aria-label={t("collapseSidebar")}
+          onClick={() => setCollapsed(true)}
+        />
+      )}
       <aside
         className={cn(
           "flex shrink-0 flex-col border-r border-kumo-line bg-kumo-elevated transition-[width] duration-150",

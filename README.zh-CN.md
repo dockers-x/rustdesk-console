@@ -97,6 +97,7 @@ rustdesk-console reset-admin-pwd <新密码>
 | `rustdesk.id-server` | `RUSTDESK_API_RUSTDESK_ID_SERVER` |
 | `rustdesk.relay-server` | `RUSTDESK_API_RUSTDESK_RELAY_SERVER` |
 | `rustdesk.api-server` | `RUSTDESK_API_RUSTDESK_API_SERVER` |
+| `rustdesk.ws-host` | `RUSTDESK_API_RUSTDESK_WS_HOST` |
 | `rustdesk.key` | `RUSTDESK_API_RUSTDESK_KEY` |
 | `admin.title` | `RUSTDESK_API_ADMIN_TITLE` |
 | `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
@@ -114,6 +115,11 @@ rustdesk-console reset-admin-pwd <新密码>
 容器镜像默认设置 `TZ=Asia/Shanghai`，`docker-compose.yaml` 也支持用标准 `TZ`
 环境变量覆盖。非中国时区部署时可改成对应 IANA 时区，例如 `TZ=Europe/Berlin`。
 业务时间戳仍按 UTC 保存；`TZ` 用于服务端本地日志/启动时间，以及管理后台界面的本地时间显示。
+
+内嵌 WebClient 默认从 `rustdesk.id-server` 推导 `21118`，从
+`rustdesk.relay-server` 推导 `21119`。设置 `rustdesk.ws-host` 后，WebClient 会改用
+`<ws-host>/ws/id` 和 `<ws-host>/ws/relay`，适合 Cloudflare Tunnel 或其它 HTTPS
+反向代理场景；未设置时保持旧逻辑。
 
 ## 可观测性
 
