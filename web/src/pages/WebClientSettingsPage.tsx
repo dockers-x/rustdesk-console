@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input, Textarea } from "@cloudflare/kumo/components/input";
 import { Radio } from "@cloudflare/kumo/components/radio";
+import { Tabs } from "@cloudflare/kumo/components/tabs";
 import { cn } from "@cloudflare/kumo/utils";
 import {
   CloudArrowUp,
@@ -18,6 +19,8 @@ import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 
 type SaveTarget = "local" | "server";
 type WsMode = "auto" | "proxy" | "custom";
+type SettingsTab = "webclient" | "rustdesk";
+type DeploymentPlatform = keyof DeploymentCommandSet;
 
 interface WebClientConfig {
   id_server: string;
@@ -139,6 +142,28 @@ function detectWsMode(config: WebClientConfig): WsMode {
   return "auto";
 }
 
+function configForWsMode(config: WebClientConfig, mode: WsMode): WebClientConfig {
+  if (mode === "auto") {
+    return {
+      ...config,
+      ws_host: "",
+      ws_id_host: "",
+      ws_relay_host: "",
+    };
+  }
+  if (mode === "proxy") {
+    return {
+      ...config,
+      ws_id_host: "",
+      ws_relay_host: "",
+    };
+  }
+  return {
+    ...config,
+    ws_host: "",
+  };
+}
+
 export function WebClientSettingsPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -149,6 +174,10 @@ export function WebClientSettingsPage() {
   const [localActive, setLocalActive] = useState(false);
   const [message, setMessage] = useState("");
   const [localError, setLocalError] = useState("");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("webclient");
+  const [deploymentPlatform, setDeploymentPlatform] =
+    useState<DeploymentPlatform>("linux");
+  const previewConfig = configForWsMode(form, wsMode);
 
   const serverConfig = useQuery({
     queryKey: ["webclient-server-config"],
@@ -156,9 +185,9 @@ export function WebClientSettingsPage() {
   });
 
   const deploymentPreview = useQuery({
-    queryKey: ["webclient-deployment-preview", form],
+    queryKey: ["webclient-deployment-preview", previewConfig],
     queryFn: () =>
-      apiPost<DeploymentConfig>("/api/admin/config/deployment", form),
+      apiPost<DeploymentConfig>("/api/admin/config/deployment", previewConfig),
     enabled: formReady,
   });
 
@@ -198,17 +227,18 @@ export function WebClientSettingsPage() {
     setLocalError("");
   };
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const saveConfig = () => {
     setMessage("");
     setLocalError("");
+    const payload = configForWsMode(form, wsMode);
     if (saveTarget === "local") {
-      writeWebClientOptions(form, true);
+      writeWebClientOptions(payload, true);
+      setForm(payload);
       setLocalActive(true);
       setMessage(t("localOverrideSaved"));
       return;
     }
-    saveServer.mutate(form);
+    saveServer.mutate(payload);
   };
 
   const resetLocalOverride = () => {
@@ -229,6 +259,10 @@ export function WebClientSettingsPage() {
       : serverConfig.data
         ? normalizeConfig(serverConfig.data)
         : undefined;
+  const deploymentLoading =
+    serverConfig.isLoading ||
+    !formReady ||
+    (deploymentPreview.isPending && deploymentPreview.fetchStatus !== "idle");
 
   return (
     <div className="space-y-5">
@@ -253,15 +287,12 @@ export function WebClientSettingsPage() {
         </Button>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <form
-          onSubmit={submit}
-          className="rounded-lg border border-kumo-line bg-kumo-elevated"
-        >
+      <div className="space-y-4">
+        <section className="rounded-lg border border-kumo-line bg-kumo-elevated">
           <FormSection
             icon={<PlugsConnected size={18} />}
-            title={t("connectionEndpoints")}
-            description={t("connectionEndpointsHint")}
+            title={t("clientBaseConfig")}
+            description={t("clientBaseConfigHint")}
           >
             <div className="grid gap-4 lg:grid-cols-3">
               <ConfigField
@@ -289,20 +320,6 @@ export function WebClientSettingsPage() {
           </FormSection>
 
           <FormSection
-            icon={<GlobeHemisphereWest size={18} />}
-            title={t("webSocketRoutes")}
-            description={t("webSocketRoutesHint")}
-          >
-            <WebSocketRouteEditor
-              config={form}
-              mode={wsMode}
-              setMode={setWsMode}
-              updateField={updateField}
-              routes={deploymentPreview.data?.webclient_ws_routes}
-            />
-          </FormSection>
-
-          <FormSection
             icon={<Key size={18} />}
             title={t("publicKey")}
             description={t("publicKeyHint")}
@@ -312,7 +329,7 @@ export function WebClientSettingsPage() {
                 aria-label={t("publicKey")}
                 value={form.key}
                 onChange={(e) => updateField("key", e.target.value)}
-                className="min-h-28 font-mono text-xs"
+                className="min-h-24 font-mono text-xs"
                 spellCheck={false}
                 placeholder="OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="
               />
@@ -346,95 +363,98 @@ export function WebClientSettingsPage() {
               />
             </Radio.Group>
           </FormSection>
+        </section>
 
-          {(message || localError || serverConfig.error) && (
-            <div className="px-5 pb-5">
-              {message && (
-                <InlineMessage tone="success">{message}</InlineMessage>
-              )}
-              {(localError || serverConfig.error) && (
-                <InlineMessage tone="error">
-                  {localError ||
-                    (serverConfig.error as Error).message ||
-                    t("operationFailed")}
-                </InlineMessage>
-              )}
-            </div>
-          )}
-
-          <div className="flex flex-wrap justify-end gap-2 border-t border-kumo-line bg-kumo-recessed px-5 py-4">
-            {localActive && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={resetLocalOverride}
-                disabled={!serverConfig.data}
-              >
-                {t("resetLocalOverride")}
-              </Button>
-            )}
-            <Button
-              type="submit"
-              disabled={saveServer.isPending || serverConfig.isLoading}
-              loading={saveServer.isPending}
-            >
-              {saveTarget === "local"
-                ? t("writeLocalStorage")
-                : t("writeServerConfig")}
-            </Button>
-          </div>
-        </form>
-
-        <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
-          <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
-            <div className="flex items-start gap-3">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
-                <GlobeHemisphereWest size={18} />
-              </div>
-              <div>
-                <h2 className="text-base font-semibold">
-                  {t("webClientRuntime")}
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-kumo-subtle">
-                  {t("webClientRuntimeHint")}
-                </p>
-              </div>
-            </div>
-            <dl className="mt-4 grid gap-3 text-sm">
-              <SummaryRow
-                label={t("browserOverride")}
-                value={localActive ? t("active") : t("inactive")}
-              />
-              <SummaryRow
-                label={t("serverDefaults")}
-                value={
-                  serverConfig.error
-                    ? t("operationFailed")
-                    : serverConfig.isLoading
-                      ? t("loading")
-                      : t("loaded")
-                }
-              />
-            </dl>
-          </section>
-
-          <ConfigSummary
-            title={t("currentEffectiveConfig")}
-            config={effectiveConfig ?? emptyConfig}
-            emptyLabel={t("emptyValue")}
+        <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-2">
+          <Tabs
+            variant="segmented"
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as SettingsTab)}
+            tabs={[
+              { value: "webclient", label: t("webClientSettingsTab") },
+              { value: "rustdesk", label: t("rustDeskDeployment") },
+            ]}
           />
+        </div>
 
+        {activeTab === "webclient" && (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <section className="rounded-lg border border-kumo-line bg-kumo-elevated">
+              <FormSection
+                icon={<GlobeHemisphereWest size={18} />}
+                title={t("webSocketRoutes")}
+                description={t("webSocketRoutesHint")}
+              >
+                <WebSocketRouteEditor
+                  config={form}
+                  mode={wsMode}
+                  setMode={setWsMode}
+                  updateField={updateField}
+                  routes={deploymentPreview.data?.webclient_ws_routes}
+                />
+              </FormSection>
+            </section>
+
+            <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+              <RuntimeSummary
+                localActive={localActive}
+                serverLoading={serverConfig.isLoading}
+                serverError={Boolean(serverConfig.error)}
+              />
+              <ConfigSummary
+                title={t("currentEffectiveConfig")}
+                config={effectiveConfig ?? emptyConfig}
+                emptyLabel={t("emptyValue")}
+              />
+            </aside>
+          </div>
+        )}
+
+        {activeTab === "rustdesk" && (
           <DeploymentPreview
             deployment={deploymentPreview.data}
-            loading={
-              serverConfig.isLoading ||
-              !formReady ||
-              (deploymentPreview.isPending &&
-                deploymentPreview.fetchStatus !== "idle")
-            }
+            loading={deploymentLoading}
             error={deploymentPreview.error as Error | null}
+            platform={deploymentPlatform}
+            setPlatform={setDeploymentPlatform}
           />
-        </aside>
+        )}
+
+        {(message || localError || serverConfig.error) && (
+          <div className="grid gap-2">
+            {message && <InlineMessage tone="success">{message}</InlineMessage>}
+            {(localError || serverConfig.error) && (
+              <InlineMessage tone="error">
+                {localError ||
+                  (serverConfig.error as Error).message ||
+                  t("operationFailed")}
+              </InlineMessage>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap justify-end gap-2 rounded-lg border border-kumo-line bg-kumo-recessed px-5 py-4">
+          {localActive && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={resetLocalOverride}
+              disabled={!serverConfig.data}
+            >
+              {t("resetLocalOverride")}
+            </Button>
+          )}
+          <Button
+            type="button"
+            onClick={saveConfig}
+            disabled={saveServer.isPending || serverConfig.isLoading}
+            loading={saveServer.isPending}
+          >
+            {saveTarget === "local"
+              ? t("writeLocalStorage")
+              : t("writeServerConfig")}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -550,6 +570,49 @@ function ConfigSummary({
   );
 }
 
+function RuntimeSummary({
+  localActive,
+  serverLoading,
+  serverError,
+}: {
+  localActive: boolean;
+  serverLoading: boolean;
+  serverError: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+      <div className="flex items-start gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
+          <GlobeHemisphereWest size={18} />
+        </div>
+        <div>
+          <h2 className="text-base font-semibold">{t("webClientRuntime")}</h2>
+          <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+            {t("webClientRuntimeHint")}
+          </p>
+        </div>
+      </div>
+      <dl className="mt-4 grid gap-3 text-sm">
+        <SummaryRow
+          label={t("browserOverride")}
+          value={localActive ? t("active") : t("inactive")}
+        />
+        <SummaryRow
+          label={t("serverDefaults")}
+          value={
+            serverError
+              ? t("operationFailed")
+              : serverLoading
+                ? t("loading")
+                : t("loaded")
+          }
+        />
+      </dl>
+    </section>
+  );
+}
+
 function WebSocketRouteEditor({
   config,
   mode,
@@ -566,18 +629,6 @@ function WebSocketRouteEditor({
   const { t } = useTranslation();
   const changeMode = (next: WsMode) => {
     setMode(next);
-    if (next === "auto") {
-      updateField("ws_host", "");
-      updateField("ws_id_host", "");
-      updateField("ws_relay_host", "");
-      return;
-    }
-    if (next === "proxy") {
-      updateField("ws_id_host", "");
-      updateField("ws_relay_host", "");
-      return;
-    }
-    updateField("ws_host", "");
   };
   return (
     <div className="grid gap-4">
@@ -672,10 +723,14 @@ function DeploymentPreview({
   deployment,
   loading,
   error,
+  platform,
+  setPlatform,
 }: {
   deployment?: DeploymentConfig;
   loading: boolean;
   error?: Error | null;
+  platform: DeploymentPlatform;
+  setPlatform: (platform: DeploymentPlatform) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -713,56 +768,133 @@ function DeploymentPreview({
         </p>
       )}
       {deployment && (
-        <div className="mt-4 grid gap-3">
-          <CopyField
-            label={t("idWebSocket")}
-            value={deployment.webclient_ws_routes.id}
-          />
-          <CopyField
-            label={t("relayWebSocket")}
-            value={deployment.webclient_ws_routes.relay}
-          />
-          <CopyField
-            label={t("encodedConfig")}
-            value={deployment.encoded_config}
-          />
-          <CopyField
-            label={t("filenameHint")}
-            value={deployment.filename_hint}
-          />
-          <CommandBlock
-            title={t("configCommand")}
-            commands={deployment.config_command}
-          />
-          <CommandBlock
-            title={t("optionCommands")}
-            commands={deployment.option_commands}
-          />
+        <div className="mt-4 grid gap-4">
+          <DeploymentUsage />
+          <div className="grid gap-3 lg:grid-cols-2">
+            <CopyField
+              label={t("idWebSocket")}
+              description={t("idWebSocketDeploymentHint")}
+              value={deployment.webclient_ws_routes.id}
+            />
+            <CopyField
+              label={t("relayWebSocket")}
+              description={t("relayWebSocketDeploymentHint")}
+              value={deployment.webclient_ws_routes.relay}
+            />
+          </div>
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <CopyField
+              label={t("encodedConfig")}
+              description={t("encodedConfigHint")}
+              value={deployment.encoded_config}
+            />
+            <CopyField
+              label={t("filenameHint")}
+              description={t("filenameHintHint")}
+              value={deployment.filename_hint}
+            />
+          </div>
+          <div className="rounded-md border border-kumo-line bg-kumo-base p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">
+                  {t("deploymentCommands")}
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-kumo-subtle">
+                  {t("deploymentCommandsHint")}
+                </p>
+              </div>
+              <Tabs
+                variant="segmented"
+                size="sm"
+                value={platform}
+                onValueChange={(value) =>
+                  setPlatform(value as DeploymentPlatform)
+                }
+                tabs={[
+                  { value: "linux", label: t("linux") },
+                  { value: "macos", label: t("macos") },
+                  { value: "windows", label: t("windows") },
+                ]}
+              />
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <CommandBlock
+                title={t("configCommand")}
+                description={t("configCommandHint")}
+                commands={deployment.config_command[platform]}
+              />
+              <CommandBlock
+                title={t("optionCommands")}
+                description={t("optionCommandsHint")}
+                commands={deployment.option_commands[platform]}
+              />
+            </div>
+          </div>
         </div>
       )}
     </section>
   );
 }
 
-function CommandBlock({
-  title,
-  commands,
-}: {
-  title: string;
-  commands: DeploymentCommandSet;
-}) {
+function DeploymentUsage() {
   const { t } = useTranslation();
+  const steps = [
+    t("deploymentUsageStepSave"),
+    t("deploymentUsageStepPlatform"),
+    t("deploymentUsageStepChoose"),
+  ];
   return (
-    <div className="grid gap-2">
-      <p className="text-xs font-medium text-kumo-subtle">{title}</p>
-      <CopyField label={t("linux")} value={commands.linux.join("\n")} />
-      <CopyField label={t("macos")} value={commands.macos.join("\n")} />
-      <CopyField label={t("windows")} value={commands.windows.join("\n")} />
+    <div className="rounded-md border border-kumo-line bg-kumo-base p-3">
+      <h3 className="text-sm font-semibold">{t("deploymentUsage")}</h3>
+      <ol className="mt-3 grid gap-2 md:grid-cols-3">
+        {steps.map((step, index) => (
+          <li
+            key={step}
+            className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2 text-sm leading-6"
+          >
+            <span className="flex size-6 items-center justify-center rounded border border-kumo-line bg-kumo-elevated font-mono text-xs">
+              {index + 1}
+            </span>
+            <span className="text-kumo-subtle">{step}</span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
 
-function CopyField({ label, value }: { label: string; value: string }) {
+function CommandBlock({
+  title,
+  description,
+  commands,
+}: {
+  title: string;
+  description: string;
+  commands: string[];
+}) {
+  return (
+    <div className="grid gap-2">
+      <div>
+        <p className="text-xs font-medium text-kumo-subtle">{title}</p>
+        <p className="mt-1 text-xs leading-5 text-kumo-subtle">
+          {description}
+        </p>
+      </div>
+      <CopyField label={title} value={commands.join("\n")} />
+    </div>
+  );
+}
+
+function CopyField({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description?: string;
+}) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const display = value || t("emptyValue");
@@ -775,9 +907,16 @@ function CopyField({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-kumo-line bg-kumo-base p-2.5">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <span className="min-w-0 break-all text-xs font-medium text-kumo-subtle">
-          {label}
-        </span>
+        <div className="min-w-0">
+          <span className="block break-all text-xs font-medium text-kumo-subtle">
+            {label}
+          </span>
+          {description && (
+            <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
+              {description}
+            </span>
+          )}
+        </div>
         <Button
           type="button"
           size="sm"

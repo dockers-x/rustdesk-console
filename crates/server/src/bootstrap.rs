@@ -275,10 +275,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
         ban_duration: Duration::from_secs(30 * 60),
     });
 
-    let version = crate::assets::Resources::read_string("version")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
     let start_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     Ok(AppState {
