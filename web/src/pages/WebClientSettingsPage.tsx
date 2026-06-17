@@ -189,6 +189,18 @@ function normalizeRecordStorageConfig(config: Partial<RecordStorageConfig>): Rec
   };
 }
 
+function storedConfigValues(field: keyof WebClientConfig) {
+  const key = STORAGE_KEYS[field];
+  return [localStorage.getItem(key), localStorage.getItem(`wc-${key}`)];
+}
+
+function readStoredConfigValue(field: keyof WebClientConfig, serverValue: string) {
+  const [primary, secondary] = storedConfigValues(field);
+  if (primary !== null && primary !== serverValue) return primary;
+  if (secondary !== null && secondary !== serverValue) return secondary;
+  return primary ?? secondary;
+}
+
 function hasLocalOverride() {
   return localStorage.getItem(LOCAL_OVERRIDE_KEY) === "1";
 }
@@ -197,18 +209,24 @@ function readLocalConfig(server: WebClientConfig): WebClientConfig {
   const normalized = normalizeConfig(server);
   return {
     id_server:
-      localStorage.getItem(STORAGE_KEYS.id_server) ?? normalized.id_server,
+      readStoredConfigValue("id_server", normalized.id_server) ??
+      normalized.id_server,
     relay_server:
-      localStorage.getItem(STORAGE_KEYS.relay_server) ?? normalized.relay_server,
+      readStoredConfigValue("relay_server", normalized.relay_server) ??
+      normalized.relay_server,
     api_server:
-      localStorage.getItem(STORAGE_KEYS.api_server) ?? normalized.api_server,
-    ws_host: localStorage.getItem(STORAGE_KEYS.ws_host) ?? normalized.ws_host,
+      readStoredConfigValue("api_server", normalized.api_server) ??
+      normalized.api_server,
+    ws_host:
+      readStoredConfigValue("ws_host", normalized.ws_host) ??
+      normalized.ws_host,
     ws_id_host:
-      localStorage.getItem(STORAGE_KEYS.ws_id_host) ?? normalized.ws_id_host,
+      readStoredConfigValue("ws_id_host", normalized.ws_id_host) ??
+      normalized.ws_id_host,
     ws_relay_host:
-      localStorage.getItem(STORAGE_KEYS.ws_relay_host) ??
+      readStoredConfigValue("ws_relay_host", normalized.ws_relay_host) ??
       normalized.ws_relay_host,
-    key: localStorage.getItem(STORAGE_KEYS.key) ?? normalized.key,
+    key: readStoredConfigValue("key", normalized.key) ?? normalized.key,
   };
 }
 
@@ -286,12 +304,16 @@ export function WebClientSettingsPage() {
   const serverConfig = useQuery({
     queryKey: ["webclient-server-config"],
     queryFn: () => apiGet<WebClientConfig>("/api/admin/config/server"),
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const recordStorageConfig = useQuery({
     queryKey: ["record-storage-config"],
     queryFn: () =>
       apiGet<RecordStorageConfig>("/api/admin/config/record-storage"),
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const deploymentPreview = useQuery({
@@ -371,6 +393,27 @@ export function WebClientSettingsPage() {
     setRecordStorageForm(next);
     setMessage("");
     setLocalError("");
+  };
+
+  const handleSaveTargetChange = (target: SaveTarget) => {
+    setSaveTarget(target);
+    setMessage("");
+    setLocalError("");
+    if (!serverConfig.data) return;
+
+    const normalized = normalizeConfig(serverConfig.data);
+    if (target === "server") {
+      localStorage.removeItem(LOCAL_OVERRIDE_KEY);
+      setForm(normalized);
+      setWsMode(detectWsMode(normalized));
+      setLocalActive(false);
+      return;
+    }
+
+    const localConfig = readLocalConfig(normalized);
+    setForm(localConfig);
+    setWsMode(detectWsMode(localConfig));
+    setLocalActive(hasLocalOverride());
   };
 
   const saveConfig = () => {
@@ -494,7 +537,7 @@ export function WebClientSettingsPage() {
               localActive={localActive}
               serverConfigLoaded={Boolean(serverConfig.data)}
               saveTarget={saveTarget}
-              setSaveTarget={setSaveTarget}
+              setSaveTarget={handleSaveTargetChange}
               saving={saveServer.isPending}
               disabled={saveServer.isPending || serverConfig.isLoading}
               onResetLocal={resetLocalOverride}
