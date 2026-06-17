@@ -1,17 +1,26 @@
 import axios, { type AxiosInstance } from "axios";
+import i18n from "../i18n";
 import { getToken, clearToken, setMustChangePassword } from "./auth";
 
 /// Shared axios client. Sends the `api-token` header and unwraps the
 /// `{ code, message, data }` envelope used by the admin API.
 export const http: AxiosInstance = axios.create({ baseURL: "" });
 
+function currentLanguage() {
+  return (
+    localStorage.getItem("lang") ||
+    i18n.resolvedLanguage ||
+    i18n.language ||
+    "zh-CN"
+  );
+}
+
 http.interceptors.request.use((config) => {
   const token = getToken();
   if (token) {
     config.headers["api-token"] = token;
   }
-  const lang = localStorage.getItem("lang");
-  if (lang) config.headers["Accept-Language"] = lang;
+  config.headers["Accept-Language"] = currentLanguage();
   return config;
 });
 

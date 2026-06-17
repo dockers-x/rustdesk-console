@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.6-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.9-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
@@ -50,7 +50,7 @@ docker run -d --name rustdesk-console -p 21114:21114 \
   ghcr.io/dockers-x/rustdesk-console:latest
 ```
 
-每次发布都会同时推送到 **GHCR**（`ghcr.io/dockers-x/rustdesk-console`）和 **Docker Hub**。
+发布 tag 会构建并推送 **GHCR** 镜像（`ghcr.io/dockers-x/rustdesk-console`）。
 
 ### 源码编译
 
@@ -90,7 +90,7 @@ rustdesk-console reset-admin-pwd <新密码>
 ## 配置
 
 配置在 `conf/config.yaml`。**任意**配置项都可以用环境变量 `RUSTDESK_API_<键路径>` 覆盖：
-键路径大写、用 `_` 连接、`-` 改成 `_`。与原版完全一致。
+键路径大写、用 `_` 连接、`-` 改成 `_`。
 
 | 配置项 | 环境变量 |
 | --- | --- |
@@ -105,7 +105,8 @@ rustdesk-console reset-admin-pwd <新密码>
 | `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
 | `admin.password` | `RUSTDESK_API_ADMIN_PASSWORD` |
 | `admin.force-change-password` | `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD` |
-| `gorm.type` | `RUSTDESK_API_GORM_TYPE`（`sqlite` / `mysql` / `postgresql`） |
+| `db.type` | `RUSTDESK_API_DB_TYPE`（`sqlite` / `mysql` / `postgresql`；默认 `sqlite`） |
+| `db.max-idle-conns` / `db.max-open-conns` | `RUSTDESK_API_DB_MAX_IDLE_CONNS` / `RUSTDESK_API_DB_MAX_OPEN_CONNS` |
 | `mysql.addr` / `mysql.dbname` / … | `RUSTDESK_API_MYSQL_ADDR` / `RUSTDESK_API_MYSQL_DBNAME` / … |
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
 | `app.register` | `RUSTDESK_API_APP_REGISTER` |
@@ -117,7 +118,8 @@ rustdesk-console reset-admin-pwd <新密码>
 | `record-storage.webdav.url` / `username` / `password` | `RUSTDESK_API_RECORD_STORAGE_WEBDAV_URL` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_USERNAME` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_PASSWORD` |
 | `logger.path` / `logger.level` | `RUSTDESK_API_LOGGER_PATH` / `RUSTDESK_API_LOGGER_LEVEL` |
 
-数据库默认是 **SQLite**，文件 `./data/rustdeskapi.db`。日志写入 `logger.path`
+数据库默认是 **SQLite**，文件 `./data/rustdeskapi.db`，通常不需要设置
+`RUSTDESK_API_DB_TYPE`。日志写入 `logger.path`
 （默认 `./runtime/log.txt`），级别为 `logger.level`；路径为空则输出到控制台。
 容器镜像默认设置 `TZ=Asia/Shanghai`，`docker-compose.yaml` 也支持用标准 `TZ`
 环境变量覆盖。非中国时区部署时可改成对应 IANA 时区，例如 `TZ=Europe/Berlin`。
@@ -134,6 +136,11 @@ rustdesk-console reset-admin-pwd <新密码>
   `rustdesk.ws-id-host` 和 `rustdesk.ws-relay-host`，例如
   `wss://rd.example.com:21118` 和 `wss://rd.example.com:21119`。显式端点优先于
   `rustdesk.ws-host`。
+
+如需覆盖内置 WebClient，在 `./data/web.zip` 放一个 zip 文件并重启服务即可。
+服务启动时会把它解压到临时目录，`/webclient/` 和 `/webclient2/` 会优先读取该目录；
+文件不存在或无效时自动回退到内置资源。zip 根目录必须包含 `index.html`，服务不会把它
+解压到持久化的 `data` 目录。
 
 ## 录像存储
 
@@ -214,4 +221,4 @@ Vite · TanStack Query。
 ## 致谢
 
 本项目是 [`lejianwen/rustdesk-api`](https://github.com/lejianwen/rustdesk-api)（作者：乐见文）
-的 Rust 移植版，管理后台为自研重写。以 Apache-2.0 协议开源。
+的 Rust 移植版，管理后台为自研重写。以 MIT 协议开源。

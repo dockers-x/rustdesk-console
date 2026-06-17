@@ -3,9 +3,9 @@ resolver = "2"
 members = ["crates/entity", "crates/server"]
 
 [workspace.package]
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/czyt/rustdesk-console"
 description = "RustDesk API server, rewritten in Rust (axum + SeaORM)"
 

@@ -1,7 +1,7 @@
 //! Configuration, ported from the Go `config/*.go` structs and `conf/config.yaml`.
 //!
-//! Loading mirrors viper's behaviour: the YAML file is read first, then every
-//! known key can be overridden by an environment variable named
+//! Loading is YAML first, then every known key can be overridden by an
+//! environment variable named
 //! `RUSTDESK_API_<PATH>` where `<PATH>` is the upper-cased key path joined by
 //! `_` (and `-` replaced by `_`). For example `app.web-client` is overridden by
 //! `RUSTDESK_API_APP_WEB_CLIENT`.
@@ -26,7 +26,7 @@ pub struct Config {
     pub lang: String,
     pub app: App,
     pub admin: Admin,
-    pub gorm: Gorm,
+    pub db: Db,
     pub mysql: Mysql,
     pub postgresql: Postgresql,
     pub gin: Gin,
@@ -105,7 +105,7 @@ impl Admin {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
-pub struct Gorm {
+pub struct Db {
     pub r#type: String,
     #[serde(rename = "max-idle-conns")]
     pub max_idle_conns: u32,
@@ -394,7 +394,7 @@ pub struct LdapUser {
 ///
 /// Env overrides are applied against the *full* config schema (defaults merged
 /// with the file), so every field can be set by `RUSTDESK_API_*` even when it is
-/// absent from the YAML — matching viper's `AutomaticEnv` on the Go side.
+/// absent from the YAML.
 pub fn init(path: &str) -> anyhow::Result<Config> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("Fatal error config file {}: {}", path, e))?;
@@ -453,7 +453,7 @@ fn apply_env_overrides(value: &mut Value, prefix: &str) {
             _ => {
                 let env_name = path.replace('-', "_").to_uppercase();
                 if let Ok(raw) = std::env::var(&env_name) {
-                    *value = coerce_scalar(&raw);
+                    *value = coerce_scalar_for_target(value, &raw);
                 }
             }
         }
@@ -466,15 +466,31 @@ fn apply_env_overrides(value: &mut Value, prefix: &str) {
     }
 }
 
-/// Coerce an env-var string into a bool/number/string, like viper.
-fn coerce_scalar(raw: &str) -> Value {
-    if let Ok(b) = raw.parse::<bool>() {
-        return Value::Bool(b);
+/// Coerce an env-var string to the type of the config field it overrides.
+fn coerce_scalar_for_target(target: &Value, raw: &str) -> Value {
+    match target {
+        Value::Bool(_) => raw
+            .parse::<bool>()
+            .map(Value::Bool)
+            .unwrap_or_else(|_| Value::String(raw.to_string())),
+        Value::Number(_) => coerce_number(raw).unwrap_or_else(|| Value::String(raw.to_string())),
+        Value::String(_) => Value::String(raw.to_string()),
+        Value::Null => Value::String(raw.to_string()),
+        Value::Array(_) | Value::Object(_) => Value::String(raw.to_string()),
     }
+}
+
+fn coerce_number(raw: &str) -> Option<Value> {
     if let Ok(i) = raw.parse::<i64>() {
-        return Value::Number(i.into());
+        return Some(Value::Number(i.into()));
     }
-    Value::String(raw.to_string())
+    if let Ok(u) = raw.parse::<u64>() {
+        return Some(Value::Number(u.into()));
+    }
+    raw.parse::<f64>()
+        .ok()
+        .and_then(serde_json::Number::from_f64)
+        .map(Value::Number)
 }
 
 /// Parse a Go `time.Duration` string such as `168h`, `30m`, `604800s`.
@@ -551,8 +567,8 @@ mod tests {
     #[test]
     fn env_overrides_apply_to_schema_keys_absent_from_file() {
         let _guard = env_lock();
-        // cache/redis/oss are not in conf/config.yaml, but viper (and now we)
-        // still bind them from the env via the full default schema.
+        // cache/redis/oss are not in conf/config.yaml, but they still bind
+        // from the env via the full default schema.
         std::env::set_var("RUSTDESK_API_CACHE_TYPE", "redis");
         std::env::set_var("RUSTDESK_API_REDIS_DB", "3");
         std::env::set_var("RUSTDESK_API_OSS_HOST", "https://oss.example.com");
@@ -565,6 +581,27 @@ mod tests {
         assert_eq!(cfg.cache.r#type, "redis");
         assert_eq!(cfg.redis.db, 3);
         assert_eq!(cfg.oss.host, "https://oss.example.com");
+    }
+
+    #[test]
+    fn env_overrides_database_type() {
+        let _guard = env_lock();
+        std::env::set_var("RUSTDESK_API_DB_TYPE", "mysql");
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        apply_env_overrides(&mut value, "RUSTDESK_API");
+        let cfg: Config = serde_json::from_value(value).unwrap();
+        std::env::remove_var("RUSTDESK_API_DB_TYPE");
+        assert_eq!(cfg.db.r#type, "mysql");
+    }
+
+    #[test]
+    fn legacy_gorm_type_is_ignored() {
+        let value = serde_json::json!({
+            "gorm": { "type": "mysql" },
+            "db": { "type": "sqlite" }
+        });
+        let cfg: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(cfg.db.r#type, "sqlite");
     }
 
     #[test]
@@ -583,6 +620,24 @@ mod tests {
         assert_eq!(cfg.admin.username, "root");
         assert_eq!(cfg.admin.password, "change-me");
         assert!(cfg.admin.force_change_password);
+    }
+
+    #[test]
+    fn env_overrides_numeric_admin_credentials_as_strings() {
+        let _guard = env_lock();
+        std::env::set_var("RUSTDESK_API_ADMIN_USERNAME", "12345");
+        std::env::set_var("RUSTDESK_API_ADMIN_PASSWORD", "117799");
+        std::env::set_var("RUSTDESK_API_APP_WEB_CLIENT", "0");
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        apply_env_overrides(&mut value, "RUSTDESK_API");
+        let mut cfg: Config = serde_json::from_value(value).unwrap();
+        cfg.admin.init();
+        std::env::remove_var("RUSTDESK_API_ADMIN_USERNAME");
+        std::env::remove_var("RUSTDESK_API_ADMIN_PASSWORD");
+        std::env::remove_var("RUSTDESK_API_APP_WEB_CLIENT");
+        assert_eq!(cfg.admin.username, "12345");
+        assert_eq!(cfg.admin.password, "117799");
+        assert_eq!(cfg.app.web_client, 0);
     }
 
     #[test]

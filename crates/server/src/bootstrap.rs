@@ -1,5 +1,5 @@
-//! Bootstrap: build the database connection, run the AutoMigrate-equivalent
-//! schema sync + seed, and assemble the shared [`AppState`]. Mirrors the Go
+//! Bootstrap: build the database connection, run schema sync + seed, and
+//! assemble the shared [`AppState`]. Mirrors the Go
 //! `InitGlobal` / `DatabaseAutoUpdate` / `Migrate` flow.
 
 use std::path::PathBuf;
@@ -33,7 +33,7 @@ pub const DATABASE_VERSION: i32 = 268;
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
-    let url = match config.gorm.r#type.as_str() {
+    let url = match config.db.r#type.as_str() {
         config::DB_TYPE_MYSQL => format!(
             "mysql://{}:{}@{}/{}",
             config.mysql.username, config.mysql.password, config.mysql.addr, config.mysql.dbname
@@ -52,25 +52,25 @@ pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
             },
         ),
         _ => {
-            // sqlite, matching the Go default ./data/rustdeskapi.db
+            // SQLite is the default and stores its data under ./data.
             std::fs::create_dir_all("./data").ok();
             "sqlite://./data/rustdeskapi.db?mode=rwc".to_string()
         }
     };
 
     let mut opt = ConnectOptions::new(url);
-    if config.gorm.max_open_conns > 0 {
-        opt.max_connections(config.gorm.max_open_conns);
+    if config.db.max_open_conns > 0 {
+        opt.max_connections(config.db.max_open_conns);
     }
-    if config.gorm.max_idle_conns > 0 {
-        opt.min_connections(config.gorm.max_idle_conns);
+    if config.db.max_idle_conns > 0 {
+        opt.min_connections(config.db.max_idle_conns);
     }
     opt.connect_timeout(Duration::from_secs(10));
     let db = Database::connect(opt).await?;
     Ok(db)
 }
 
-/// Create any missing tables (≈ GORM AutoMigrate) and return whether the
+/// Create any missing tables and return whether the
 /// `versions` table existed beforehand.
 async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Result<()> {
     let backend = db.get_database_backend();

@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.6-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.9-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
@@ -54,8 +54,7 @@ docker run -d --name rustdesk-console -p 21114:21114 \
   ghcr.io/dockers-x/rustdesk-console:latest
 ```
 
-Images are published to both **GHCR** (`ghcr.io/dockers-x/rustdesk-console`) and
-**Docker Hub** on each release.
+Release tags build images for **GHCR** (`ghcr.io/dockers-x/rustdesk-console`).
 
 ### From source
 
@@ -100,7 +99,7 @@ to require that initial admin user to change the password after the first sign-i
 
 Settings live in `conf/config.yaml`. **Every** setting can also be provided via an
 environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, join with
-`_`, and replace `-` with `_`. This matches the original server exactly.
+`_`, and replace `-` with `_`.
 
 | Setting | Environment variable |
 | --- | --- |
@@ -115,7 +114,8 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 | `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
 | `admin.password` | `RUSTDESK_API_ADMIN_PASSWORD` |
 | `admin.force-change-password` | `RUSTDESK_API_ADMIN_FORCE_CHANGE_PASSWORD` |
-| `gorm.type` | `RUSTDESK_API_GORM_TYPE` (`sqlite` / `mysql` / `postgresql`) |
+| `db.type` | `RUSTDESK_API_DB_TYPE` (`sqlite` / `mysql` / `postgresql`; default `sqlite`) |
+| `db.max-idle-conns` / `db.max-open-conns` | `RUSTDESK_API_DB_MAX_IDLE_CONNS` / `RUSTDESK_API_DB_MAX_OPEN_CONNS` |
 | `mysql.addr` / `mysql.dbname` / … | `RUSTDESK_API_MYSQL_ADDR` / `RUSTDESK_API_MYSQL_DBNAME` / … |
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
 | `app.register` | `RUSTDESK_API_APP_REGISTER` |
@@ -127,7 +127,8 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 | `record-storage.webdav.url` / `username` / `password` | `RUSTDESK_API_RECORD_STORAGE_WEBDAV_URL` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_USERNAME` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_PASSWORD` |
 | `logger.path` / `logger.level` | `RUSTDESK_API_LOGGER_PATH` / `RUSTDESK_API_LOGGER_LEVEL` |
 
-Database default is **SQLite** at `./data/rustdeskapi.db`. Logs go to `logger.path`
+Database default is **SQLite** at `./data/rustdeskapi.db`, so `RUSTDESK_API_DB_TYPE`
+is normally not needed. Logs go to `logger.path`
 (default `./runtime/log.txt`) at `logger.level`, or to stdout if the path is empty.
 Container images default to `TZ=Asia/Shanghai`, and `docker-compose.yaml` lets you
 override it with the standard `TZ` environment variable. Set it to your IANA time
@@ -146,6 +147,12 @@ The embedded WebClient supports three WebSocket modes:
   WebSocket services are exposed as separate endpoints or ports, for example
   `wss://rd.example.com:21118` and `wss://rd.example.com:21119`. Explicit
   endpoints take precedence over `rustdesk.ws-host`.
+
+To override the embedded WebClient, put a single `web.zip` at `./data/web.zip` and
+restart the service. The server extracts it into a temporary directory at startup,
+serves `/webclient/` and `/webclient2/` from that directory first, and falls back to
+the embedded resources if the file is missing or invalid. The zip must contain a
+root `index.html`; it is not unpacked into the persistent `data` directory.
 
 ## Recording storage
 
@@ -229,4 +236,4 @@ Vite · TanStack Query.
 ## Acknowledgements
 
 This project is a Rust port of [`lejianwen/rustdesk-api`](https://github.com/lejianwen/rustdesk-api)
-by 乐见文. The admin web UI is our own rewrite. Licensed under Apache-2.0.
+by 乐见文. The admin web UI is our own rewrite. Licensed under MIT.
