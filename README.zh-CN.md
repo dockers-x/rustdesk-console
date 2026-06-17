@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.4-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.5-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
@@ -98,6 +98,8 @@ rustdesk-console reset-admin-pwd <新密码>
 | `rustdesk.relay-server` | `RUSTDESK_API_RUSTDESK_RELAY_SERVER` |
 | `rustdesk.api-server` | `RUSTDESK_API_RUSTDESK_API_SERVER` |
 | `rustdesk.ws-host` | `RUSTDESK_API_RUSTDESK_WS_HOST` |
+| `rustdesk.ws-id-host` | `RUSTDESK_API_RUSTDESK_WS_ID_HOST` |
+| `rustdesk.ws-relay-host` | `RUSTDESK_API_RUSTDESK_WS_RELAY_HOST` |
 | `rustdesk.key` | `RUSTDESK_API_RUSTDESK_KEY` |
 | `admin.title` | `RUSTDESK_API_ADMIN_TITLE` |
 | `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
@@ -116,10 +118,17 @@ rustdesk-console reset-admin-pwd <新密码>
 环境变量覆盖。非中国时区部署时可改成对应 IANA 时区，例如 `TZ=Europe/Berlin`。
 业务时间戳仍按 UTC 保存；`TZ` 用于服务端本地日志/启动时间，以及管理后台界面的本地时间显示。
 
-内嵌 WebClient 默认从 `rustdesk.id-server` 推导 `21118`，从
-`rustdesk.relay-server` 推导 `21119`。设置 `rustdesk.ws-host` 后，WebClient 会改用
-`<ws-host>/ws/id` 和 `<ws-host>/ws/relay`，适合 Cloudflare Tunnel 或其它 HTTPS
-反向代理场景；未设置时保持旧逻辑。
+内嵌 WebClient 支持三种 WebSocket 配置方式：
+
+- `rustdesk.ws-host`、`rustdesk.ws-id-host`、`rustdesk.ws-relay-host` 都留空时，
+  保持原有行为：从 `rustdesk.id-server` 推导 `21118`，从
+  `rustdesk.relay-server` 推导 `21119`。
+- 设置 `rustdesk.ws-host` 时，适合基于路径的 HTTPS/WSS 反向代理。WebClient 会使用
+  `<ws-host>/ws/id` 和 `<ws-host>/ws/relay`。
+- 当 ID 和 Relay WebSocket 通过不同端口或不同端点暴露时，设置
+  `rustdesk.ws-id-host` 和 `rustdesk.ws-relay-host`，例如
+  `wss://rd.example.com:21118` 和 `wss://rd.example.com:21119`。显式端点优先于
+  `rustdesk.ws-host`。
 
 ## 可观测性
 

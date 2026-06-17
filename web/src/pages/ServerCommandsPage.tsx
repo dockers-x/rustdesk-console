@@ -215,7 +215,7 @@ export function ServerCommandsPage() {
     setSendForm({
       cmd: row.cmd,
       alias: "",
-      option: "",
+      option: row.option,
       explain: row.option ? `${row.cmd} ${row.option}` : row.cmd,
       target: row.target,
     });
@@ -368,7 +368,7 @@ export function ServerCommandsPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!status[row.target]}
+                      disabled={!status[row.target] || row.cmd.trim() === ""}
                       onClick={() => openSend(row)}
                     >
                       {t("send")}
@@ -434,7 +434,11 @@ export function ServerCommandsPage() {
             <Button variant="secondary" onClick={() => setFormOpen(false)}>
               {t("cancel")}
             </Button>
-            <Button onClick={() => save.mutate()} loading={save.isPending}>
+            <Button
+              onClick={() => save.mutate()}
+              loading={save.isPending}
+              disabled={save.isPending || form.cmd.trim() === ""}
+            >
               {t("save")}
             </Button>
           </DialogFooter>
@@ -488,7 +492,11 @@ export function ServerCommandsPage() {
             <Button variant="secondary" onClick={() => setSendOpen(false)}>
               {t("close")}
             </Button>
-            <Button onClick={() => send.mutate()} loading={send.isPending}>
+            <Button
+              onClick={() => send.mutate()}
+              loading={send.isPending}
+              disabled={send.isPending || sendForm.cmd.trim() === ""}
+            >
               {t("send")}
             </Button>
           </DialogFooter>

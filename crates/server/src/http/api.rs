@@ -1,5 +1,6 @@
 //! RustDesk PC-client API (`/api/*`), ports of `http/controller/api/*.go`.
 
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -7,6 +8,8 @@ use chrono::{Duration, Utc};
 use sea_orm::Set;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use entity::{address_book, audit_file, group, login_log, peer};
 
@@ -38,10 +41,16 @@ pub struct HeartbeatForm {
     pub ver: i64,
     #[serde(default)]
     pub conns: Option<Vec<i64>>,
+    #[serde(default)]
+    pub modified_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct HeartbeatStrategy {
+    #[serde(default)]
+    config_options: HashMap<String, String>,
+    #[serde(default)]
+    extra: HashMap<String, String>,
     translate_mode: bool,
 }
 
@@ -72,11 +81,13 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
         {
             tracing::warn!("failed to sync active connections: {e}");
         }
-        state.disconnect_store.remove_disconnected(&disconnect_key, conns);
+        state
+            .disconnect_store
+            .remove_disconnected(&disconnect_key, conns);
     }
 
     let mut res = json!({
-        "modified_at": Utc::now().timestamp(),
+        "modified_at": info.modified_at,
         "strategy": resolve_capability(&normalize_reported_version(&info.version, info.ver)),
     });
     let disconnect = state.disconnect_store.pending(&disconnect_key);
@@ -113,8 +124,13 @@ fn normalize_reported_version(version: &str, ver: i64) -> String {
 }
 
 fn resolve_capability(version: &str) -> HeartbeatStrategy {
+    let translate_mode = version_gte(version, "1.4.6");
+    let mut extra = HashMap::new();
+    extra.insert("translate_mode".to_string(), translate_mode.to_string());
     HeartbeatStrategy {
-        translate_mode: version_gte(version, "1.4.6"),
+        config_options: HashMap::new(),
+        extra,
+        translate_mode,
     }
 }
 
@@ -339,10 +355,9 @@ pub async fn sysinfo(
     };
     match existing {
         None => {
-            let user_id =
-                services::user::find_latest_user_id_by_uuid(&state.db, &f.uuid, &f.id)
-                    .await
-                    .unwrap_or(0);
+            let user_id = services::user::find_latest_user_id_by_uuid(&state.db, &f.uuid, &f.id)
+                .await
+                .unwrap_or(0);
             let am = peer::ActiveModel {
                 id: Set(f.id.clone()),
                 cpu: Set(f.cpu),
@@ -503,6 +518,279 @@ pub async fn device_group_accessible(
     resp::data_response(0, dgroups)
 }
 
+// ---------- device deployment / CLI assignment ----------
+
+#[derive(Deserialize, Default)]
+pub struct DeviceDeployForm {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub pk: String,
+}
+
+pub async fn device_deploy(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<DeviceDeployForm>,
+) -> Response {
+    let _ = f.pk.trim();
+    if f.id.trim().is_empty() || f.uuid.trim().is_empty() {
+        return Json(json!({ "result": "INVALID_INPUT" })).into_response();
+    }
+    match upsert_deployed_peer(&state, &user.user, &f.id, &f.uuid, None).await {
+        Ok(_) => Json(json!({ "result": "OK" })).into_response(),
+        Err(DeviceDeployError::IdTaken) => Json(json!({ "result": "ID_TAKEN" })).into_response(),
+        Err(DeviceDeployError::InvalidInput) => {
+            Json(json!({ "result": "INVALID_INPUT" })).into_response()
+        }
+        Err(DeviceDeployError::Other(e)) => Json(json!({ "error": e })).into_response(),
+    }
+}
+
+#[derive(Debug)]
+enum DeviceDeployError {
+    InvalidInput,
+    IdTaken,
+    Other(String),
+}
+
+#[derive(Deserialize, Default)]
+pub struct DeviceCliForm {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub user_name: Option<String>,
+    #[serde(default)]
+    pub strategy_name: Option<String>,
+    #[serde(default)]
+    pub address_book_name: Option<String>,
+    #[serde(default)]
+    pub address_book_tag: Option<String>,
+    #[serde(default)]
+    pub address_book_alias: Option<String>,
+    #[serde(default)]
+    pub address_book_password: Option<String>,
+    #[serde(default)]
+    pub address_book_note: Option<String>,
+    #[serde(default)]
+    pub device_group_name: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub device_username: Option<String>,
+    #[serde(default)]
+    pub device_name: Option<String>,
+}
+
+pub async fn device_cli(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Json(f): Json<DeviceCliForm>,
+) -> Response {
+    match apply_device_cli_assignment(&state, &user.user, f).await {
+        Ok(message) => message.into_response(),
+        Err(message) => message.into_response(),
+    }
+}
+
+async fn apply_device_cli_assignment(
+    state: &AppState,
+    token_user: &entity::user::Model,
+    f: DeviceCliForm,
+) -> Result<String, String> {
+    if f.id.trim().is_empty() || f.uuid.trim().is_empty() {
+        return Err("INVALID_INPUT".to_string());
+    }
+    let target_user = match option_text(&f.user_name) {
+        Some(name) => services::user::info_by_username(&state.db, &name)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("User not found: {name}"))?,
+        None => token_user.clone(),
+    };
+    let device_group_id = match option_text(&f.device_group_name) {
+        Some(name) => Some(
+            services::group::device_group_info_by_name(&state.db, &name)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Device group not found: {name}"))?
+                .id,
+        ),
+        None => None,
+    };
+    let mut peer = upsert_deployed_peer(state, &target_user, &f.id, &f.uuid, device_group_id)
+        .await
+        .map_err(|e| match e {
+            DeviceDeployError::InvalidInput => "INVALID_INPUT".to_string(),
+            DeviceDeployError::IdTaken => "ID_TAKEN".to_string(),
+            DeviceDeployError::Other(e) => e,
+        })?;
+
+    let mut changed_peer = false;
+    if let Some(name) = option_text(&f.device_username) {
+        peer.username = name;
+        changed_peer = true;
+    }
+    if let Some(name) = option_text(&f.device_name) {
+        peer.hostname = name;
+        changed_peer = true;
+    }
+    if let Some(note) = option_text(&f.note) {
+        peer.alias = note;
+        changed_peer = true;
+    }
+    if changed_peer {
+        let am = peer::ActiveModel {
+            row_id: Set(peer.row_id),
+            id: Set(peer.id.clone()),
+            uuid: Set(peer.uuid.clone()),
+            username: Set(peer.username.clone()),
+            hostname: Set(peer.hostname.clone()),
+            alias: Set(peer.alias.clone()),
+            user_id: Set(peer.user_id),
+            group_id: Set(peer.group_id),
+            ..Default::default()
+        };
+        services::peer::update(&state.db, am)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    if let Some(address_book_name) = option_text(&f.address_book_name) {
+        assign_peer_to_address_book(state, &target_user, &peer, &address_book_name, &f).await?;
+    }
+
+    let _ = option_text(&f.strategy_name);
+    Ok(String::new())
+}
+
+async fn upsert_deployed_peer(
+    state: &AppState,
+    user: &entity::user::Model,
+    id: &str,
+    uuid: &str,
+    device_group_id: Option<i32>,
+) -> Result<peer::Model, DeviceDeployError> {
+    let id = id.trim();
+    let uuid = uuid.trim();
+    if id.is_empty() || uuid.is_empty() {
+        return Err(DeviceDeployError::InvalidInput);
+    }
+    let group_id = device_group_id.unwrap_or(0);
+    let existing = services::peer::find_by_id(&state.db, id)
+        .await
+        .map_err(|e| DeviceDeployError::Other(e.to_string()))?;
+    match existing {
+        Some(mut p) => {
+            if !p.uuid.is_empty() && p.uuid != uuid {
+                return Err(DeviceDeployError::IdTaken);
+            }
+            p.uuid = uuid.to_string();
+            p.user_id = user.id;
+            if device_group_id.is_some() {
+                p.group_id = group_id;
+            }
+            let am = peer::ActiveModel {
+                row_id: Set(p.row_id),
+                id: Set(p.id.clone()),
+                uuid: Set(p.uuid.clone()),
+                user_id: Set(p.user_id),
+                group_id: Set(p.group_id),
+                ..Default::default()
+            };
+            services::peer::update(&state.db, am)
+                .await
+                .map_err(|e| DeviceDeployError::Other(e.to_string()))?;
+            Ok(p)
+        }
+        None => {
+            let p = peer::ActiveModel {
+                id: Set(id.to_string()),
+                uuid: Set(uuid.to_string()),
+                user_id: Set(user.id),
+                group_id: Set(group_id),
+                ..Default::default()
+            };
+            services::peer::create(&state.db, p)
+                .await
+                .map_err(|e| DeviceDeployError::Other(e.to_string()))
+        }
+    }
+}
+
+async fn assign_peer_to_address_book(
+    state: &AppState,
+    user: &entity::user::Model,
+    peer: &peer::Model,
+    collection_name: &str,
+    f: &DeviceCliForm,
+) -> Result<(), String> {
+    let collection = match services::address_book::collection_info_by_user_and_name(
+        &state.db,
+        user.id,
+        collection_name,
+    )
+    .await
+    .map_err(|e| e.to_string())?
+    {
+        Some(collection) => collection,
+        None => services::address_book::create_collection(&state.db, user.id, collection_name)
+            .await
+            .map_err(|e| e.to_string())?,
+    };
+
+    let tags = option_text(&f.address_book_tag)
+        .map(|tag| json!([tag]))
+        .unwrap_or_else(|| Value::Array(vec![]));
+    let mut ab = services::address_book::from_peer(peer);
+    ab.user_id = user.id;
+    ab.collection_id = collection.id;
+    ab.tags = tags;
+    if let Some(alias) = option_text(&f.address_book_alias) {
+        ab.alias = alias;
+    }
+    if let Some(password) = option_text(&f.address_book_password) {
+        ab.password = password;
+    }
+    if ab.alias.is_empty() {
+        if let Some(note) = option_text(&f.address_book_note) {
+            ab.alias = note;
+        }
+    }
+
+    if let Some(existing) = services::address_book::info_by_user_id_and_id_and_cid(
+        &state.db,
+        user.id,
+        &ab.id,
+        collection.id,
+    )
+    .await
+    .map_err(|e| e.to_string())?
+    {
+        ab.row_id = existing.row_id;
+        services::address_book::update_all(&state.db, ab)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        services::address_book::create(&state.db, ab)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn option_text(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 // ---------- web client ----------
 
 pub async fn server_config(State(state): State<AppState>, user: RustClientUser) -> Response {
@@ -516,7 +804,10 @@ pub async fn server_config(State(state): State<AppState>, user: RustClientUser) 
     let mut peers = Map::new();
     for ab in &abs {
         let pp = WebClientPeerPayload::from_address_book(ab, tm);
-        peers.insert(ab.id.clone(), serde_json::to_value(pp).unwrap_or(Value::Null));
+        peers.insert(
+            ab.id.clone(),
+            serde_json::to_value(pp).unwrap_or(Value::Null),
+        );
     }
     resp::success(json!({
         "id_server": cfg.id_server,
@@ -558,12 +849,13 @@ pub async fn shared_peer(State(state): State<AppState>, Json(body): Json<Value>)
             }
         }
     }
-    let ab = match services::address_book::info_by_user_id_and_id(&state.db, sr.user_id, &sr.peer_id)
-        .await
-    {
-        Ok(Some(ab)) => ab,
-        _ => return resp::fail(101, "peer not found"),
-    };
+    let ab =
+        match services::address_book::info_by_user_id_and_id(&state.db, sr.user_id, &sr.peer_id)
+            .await
+        {
+            Ok(Some(ab)) => ab,
+            _ => return resp::fail(101, "peer not found"),
+        };
     let tm = Utc::now().timestamp_nanos_opt().unwrap_or(0);
     let mut pp = WebClientPeerPayload::from_share_record(&sr, tm);
     pp.info.username = ab.username.clone();
@@ -586,8 +878,41 @@ pub async fn audit_conn(State(state): State<AppState>, Json(body): Json<Value>) 
     Json(Value::Null).into_response()
 }
 
+#[derive(Deserialize, Default)]
+pub struct AuditConnActiveQuery {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub conn_type: Option<i32>,
+}
+
+pub async fn audit_conn_active(
+    State(state): State<AppState>,
+    _user: RustClientUser,
+    Query(q): Query<AuditConnActiveQuery>,
+) -> Response {
+    if q.id.is_empty() || q.session_id.is_empty() {
+        return Json(String::new()).into_response();
+    }
+    match services::audit::active_conn_guid(&state.db, &q.id, &q.session_id, q.conn_type).await {
+        Ok(Some(guid)) => Json(guid).into_response(),
+        Ok(None) => Json(String::new()).into_response(),
+        Err(e) => {
+            tracing::warn!("failed to query active audit conn: {e}");
+            Json(String::new()).into_response()
+        }
+    }
+}
+
 pub async fn audit_file(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
-    let g = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let g = |k: &str| {
+        body.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let gi = |k: &str| body.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
     let gb = |k: &str| body.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
     let am = audit_file::ActiveModel {
@@ -608,6 +933,177 @@ pub async fn audit_file(State(state): State<AppState>, Json(body): Json<Value>) 
     use sea_orm::ActiveModelTrait;
     let _ = am.insert(&state.db).await;
     Json(Value::Null).into_response()
+}
+
+pub async fn audit_alarm(Json(body): Json<Value>) -> Response {
+    tracing::warn!("received rustdesk alarm audit event: {}", body);
+    Json(Value::Null).into_response()
+}
+
+#[derive(Deserialize, Default)]
+pub struct AuditNoteForm {
+    #[serde(default)]
+    pub guid: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+pub async fn audit_update(
+    State(state): State<AppState>,
+    _user: RustClientUser,
+    Json(form): Json<AuditNoteForm>,
+) -> Response {
+    if form.guid.is_empty() {
+        return resp::error("missing guid");
+    }
+    if let Err(e) =
+        services::audit::update_conn_note_by_guid(&state.db, &form.guid, &form.note).await
+    {
+        tracing::warn!("failed to update audit note: {e}");
+        return resp::error("failed to update audit note");
+    }
+    Json(Value::Null).into_response()
+}
+
+// ---------- recording upload ----------
+
+#[derive(Deserialize, Default)]
+pub struct RecordQuery {
+    #[serde(default, rename = "type")]
+    pub record_type: String,
+    #[serde(default)]
+    pub file: String,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub length: Option<usize>,
+}
+
+pub async fn record(
+    State(state): State<AppState>,
+    Query(q): Query<RecordQuery>,
+    body: Bytes,
+) -> Response {
+    let filename = match services::record_file::sanitize_filename(&q.file) {
+        Ok(filename) => filename,
+        Err(e) => return resp::error(e),
+    };
+    let path = services::record_file::record_root(&state.config.gin.resources_path).join(&filename);
+    let result = match q.record_type.as_str() {
+        "new" => record_new(&state, &filename, &path).await,
+        "part" => record_write(&state, &filename, &path, q.offset, q.length, body, false).await,
+        "tail" => record_write(&state, &filename, &path, q.offset, q.length, body, true).await,
+        "remove" => record_remove(&state, &filename, &path).await,
+        "" => Err("missing record type".to_string()),
+        _ => Err("invalid record type".to_string()),
+    };
+
+    match result {
+        Ok(()) => Json(json!({})).into_response(),
+        Err(e) => resp::error(e),
+    }
+}
+
+async fn record_new(
+    state: &AppState,
+    filename: &str,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    tokio::fs::create_dir_all(services::record_file::record_root(
+        &state.config.gin.resources_path,
+    ))
+    .await
+    .map_err(|_| "failed to create record directory".to_string())?;
+    tokio::fs::File::create(path)
+        .await
+        .map_err(|_| "failed to create record file".to_string())?;
+    if let Err(e) = services::record_file::start_upload(&state.db, filename).await {
+        tracing::warn!("failed to create record file row: {e}");
+    }
+    Ok(())
+}
+
+async fn record_write(
+    state: &AppState,
+    filename: &str,
+    path: &std::path::Path,
+    offset: Option<u64>,
+    length: Option<usize>,
+    body: Bytes,
+    complete: bool,
+) -> Result<(), String> {
+    let offset = offset.ok_or_else(|| "missing offset".to_string())?;
+    if let Some(length) = length {
+        if length != body.len() {
+            return Err("record length mismatch".to_string());
+        }
+    }
+    tokio::fs::create_dir_all(services::record_file::record_root(
+        &state.config.gin.resources_path,
+    ))
+    .await
+    .map_err(|_| "failed to create record directory".to_string())?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(path)
+        .await
+        .map_err(|_| "failed to open record file".to_string())?;
+    file.seek(std::io::SeekFrom::Start(offset))
+        .await
+        .map_err(|_| "failed to seek record file".to_string())?;
+    file.write_all(&body)
+        .await
+        .map_err(|_| "failed to write record file".to_string())?;
+    let size = services::record_file::file_size(path).await;
+    let result = if complete {
+        services::record_file::complete_upload(&state.db, filename, size).await
+    } else {
+        services::record_file::mark_uploading(&state.db, filename, size).await
+    };
+    if let Err(e) = result {
+        tracing::warn!("failed to update record file row: {e}");
+    }
+    Ok(())
+}
+
+async fn record_remove(
+    state: &AppState,
+    filename: &str,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    if let Err(e) = services::record_file::delete_by_filename(&state.db, filename).await {
+        tracing::warn!("failed to delete record file row: {e}");
+    }
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("failed to remove record file".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+
+    #[test]
+    fn record_filename_accepts_client_generated_names() {
+        assert_eq!(
+            services::record_file::sanitize_filename(
+                "incoming_123456__20260617123345001_display0_vp9.webm"
+            )
+            .unwrap(),
+            "incoming_123456__20260617123345001_display0_vp9.webm"
+        );
+    }
+
+    #[test]
+    fn record_filename_rejects_path_traversal() {
+        assert!(services::record_file::sanitize_filename("../x.webm").is_err());
+        assert!(services::record_file::sanitize_filename("dir/x.webm").is_err());
+        assert!(services::record_file::sanitize_filename(r"dir\x.webm").is_err());
+        assert!(services::record_file::sanitize_filename(".").is_err());
+    }
 }
 
 // ---------- address book (legacy /ab) ----------
@@ -861,7 +1357,12 @@ pub async fn ab_peer_add(
         Ok(true) => {}
         _ => return resp::error("NoAccess"),
     }
-    let g = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let g = |k: &str| {
+        body.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let mut platform = g("platform");
     let mut username = g("username");
     let mut hostname = g("hostname");
@@ -1032,12 +1533,11 @@ pub async fn ab_tag_rename(
         Ok(true) => {}
         _ => return resp::error("NoAccess"),
     }
-    let mut tag = match services::tag::info_by_user_name_collection(&state.db, uid, &t.old, cid)
-        .await
-    {
-        Ok(Some(tag)) => tag,
-        _ => return resp::error(state.tr(&lang, "ItemNotFound")),
-    };
+    let mut tag =
+        match services::tag::info_by_user_name_collection(&state.db, uid, &t.old, cid).await {
+            Ok(Some(tag)) => tag,
+            _ => return resp::error(state.tr(&lang, "ItemNotFound")),
+        };
     if let Ok(Some(_)) =
         services::tag::info_by_user_name_collection(&state.db, uid, &t.new, cid).await
     {
@@ -1074,12 +1574,11 @@ pub async fn ab_tag_update(
         Ok(true) => {}
         _ => return resp::error("NoAccess"),
     }
-    let mut tag = match services::tag::info_by_user_name_collection(&state.db, uid, &t.name, cid)
-        .await
-    {
-        Ok(Some(tag)) => tag,
-        _ => return resp::error(state.tr(&lang, "ItemNotFound")),
-    };
+    let mut tag =
+        match services::tag::info_by_user_name_collection(&state.db, uid, &t.name, cid).await {
+            Ok(Some(tag)) => tag,
+            _ => return resp::error(state.tr(&lang, "ItemNotFound")),
+        };
     tag.color = t.color;
     if let Err(e) = services::tag::update(&state.db, &tag).await {
         return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));

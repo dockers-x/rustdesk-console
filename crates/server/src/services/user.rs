@@ -153,7 +153,10 @@ pub async fn logout(db: &DatabaseConnection, user_id: i32, token: &str) -> Resul
         .filter(user_token::Column::Token.eq(token))
         .one(db)
         .await?;
-    let uuid = ut.as_ref().map(|t| t.device_uuid.clone()).unwrap_or_default();
+    let uuid = ut
+        .as_ref()
+        .map(|t| t.device_uuid.clone())
+        .unwrap_or_default();
     user_token::Entity::delete_many()
         .filter(user_token::Column::UserId.eq(user_id))
         .filter(user_token::Column::Token.eq(token))
@@ -260,10 +263,7 @@ pub async fn list_id_and_name_by_group_id(
         .await
 }
 
-pub async fn list_by_ids(
-    db: &DatabaseConnection,
-    ids: &[i32],
-) -> Result<Vec<user::Model>, DbErr> {
+pub async fn list_by_ids(db: &DatabaseConnection, ids: &[i32]) -> Result<Vec<user::Model>, DbErr> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
@@ -289,7 +289,10 @@ async fn admin_user_count(db: &DatabaseConnection) -> Result<u64, DbErr> {
 }
 
 /// Create a user (formats + dedups username, bcrypt-hashes the password).
-pub async fn create(db: &DatabaseConnection, mut model: user::Model) -> Result<user::Model, String> {
+pub async fn create(
+    db: &DatabaseConnection,
+    mut model: user::Model,
+) -> Result<user::Model, String> {
     if is_username_exists(db, &model.username)
         .await
         .map_err(|e| e.to_string())?
@@ -304,7 +307,11 @@ pub async fn create(db: &DatabaseConnection, mut model: user::Model) -> Result<u
         password: Set(model.password),
         nickname: Set(model.nickname),
         avatar: Set(model.avatar),
-        group_id: Set(if model.group_id == 0 { 1 } else { model.group_id }),
+        group_id: Set(if model.group_id == 0 {
+            1
+        } else {
+            model.group_id
+        }),
         is_admin: Set(model.is_admin),
         status: Set(if model.status == 0 {
             user::STATUS_ENABLE

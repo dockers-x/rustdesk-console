@@ -10,8 +10,11 @@ use entity::{address_book, peer, share_record, user};
 #[derive(Debug, Serialize)]
 pub struct UserPayload {
     pub name: String,
+    pub display_name: String,
+    pub avatar: String,
     pub email: String,
     pub note: String,
+    pub verifier: Option<String>,
     pub is_admin: Option<bool>,
     pub status: i32,
     pub info: Map<String, Value>,
@@ -21,8 +24,11 @@ impl UserPayload {
     pub fn from_user(u: &user::Model) -> Self {
         UserPayload {
             name: u.username.clone(),
+            display_name: u.nickname.clone(),
+            avatar: u.avatar.clone(),
             email: u.email.clone(),
             note: String::new(),
+            verifier: None,
             is_admin: u.is_admin,
             status: u.status,
             info: Map::new(),

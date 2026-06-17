@@ -58,7 +58,10 @@ pub async fn get_oauth_providers(db: &DatabaseConnection) -> Result<Vec<String>,
 
 pub fn validate_oauth_type(t: &str) -> Result<(), String> {
     match t {
-        oauth::TYPE_GITHUB | oauth::TYPE_GOOGLE | oauth::TYPE_OIDC | oauth::TYPE_WEBAUTH
+        oauth::TYPE_GITHUB
+        | oauth::TYPE_GOOGLE
+        | oauth::TYPE_OIDC
+        | oauth::TYPE_WEBAUTH
         | oauth::TYPE_LINUXDO => Ok(()),
         _ => Err("invalid Oauth type".to_string()),
     }
@@ -223,8 +226,15 @@ fn redirect_url(cfg: &Config) -> String {
 
 fn split_scopes(scopes: &str) -> Vec<String> {
     let s = scopes.trim();
-    let s = if s.is_empty() { oauth::OIDC_DEFAULT_SCOPES } else { s };
-    s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+    let s = if s.is_empty() {
+        oauth::OIDC_DEFAULT_SCOPES
+    } else {
+        s
+    };
+    s.split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
 }
 
 async fn endpoints(client: &reqwest::Client, info: &oauth::Model) -> Result<Endpoints, String> {
@@ -253,7 +263,12 @@ async fn endpoints(client: &reqwest::Client, info: &oauth::Model) -> Result<Endp
                 .json()
                 .await
                 .map_err(|e| format!("OIDC discovery parse failed: {e}"))?;
-            let s = |k: &str| doc.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let s = |k: &str| {
+                doc.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
             Ok(Endpoints {
                 auth_url: s("authorization_endpoint"),
                 token_url: s("token_endpoint"),
@@ -373,7 +388,13 @@ pub async fn callback(
         .await
         .map_err(|e| format!("DecodeOauthUserInfoError: {e}"))?;
 
-    let s = |k: &str| info_resp.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let s = |k: &str| {
+        info_resp
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let oauth_user = match info.oauth_type.as_str() {
         oauth::TYPE_GITHUB => {
             let id = info_resp.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -393,7 +414,11 @@ pub async fn callback(
                                 if e.get("primary").and_then(|v| v.as_bool()).unwrap_or(false)
                                     && e.get("verified").and_then(|v| v.as_bool()).unwrap_or(false)
                                 {
-                                    email = e.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    email = e
+                                        .get("email")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
                                     break;
                                 }
                             }
@@ -425,13 +450,20 @@ pub async fn callback(
             // oidc / google
             let preferred = s("preferred_username");
             let email = s("email");
-            let username = if !preferred.is_empty() { preferred } else { email.to_lowercase() };
+            let username = if !preferred.is_empty() {
+                preferred
+            } else {
+                email.to_lowercase()
+            };
             OauthUser {
                 open_id: s("sub"),
                 name: s("name"),
                 username,
                 email,
-                verified_email: info_resp.get("email_verified").and_then(|v| v.as_bool()).unwrap_or(false),
+                verified_email: info_resp
+                    .get("email_verified")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 picture: s("picture"),
             }
         }
@@ -465,7 +497,9 @@ pub async fn register_or_login(
             .one(db)
             .await
         {
-            bind_user(db, u.id, ou, &oauth_type, op).await.map_err(|e| e.to_string())?;
+            bind_user(db, u.id, ou, &oauth_type, op)
+                .await
+                .map_err(|e| e.to_string())?;
             return Ok(u);
         }
     }
@@ -483,8 +517,13 @@ pub async fn register_or_login(
         updated_at: Set(now()),
         ..Default::default()
     };
-    let created = am.insert(db).await.map_err(|e| format!("OauthRegisterFailed: {e}"))?;
-    bind_user(db, created.id, ou, &oauth_type, op).await.map_err(|e| e.to_string())?;
+    let created = am
+        .insert(db)
+        .await
+        .map_err(|e| format!("OauthRegisterFailed: {e}"))?;
+    bind_user(db, created.id, ou, &oauth_type, op)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(created)
 }
 
@@ -495,7 +534,11 @@ async fn generate_unique_username(db: &DatabaseConnection, base: &str) -> String
     }
     let mut suffix = 0;
     loop {
-        let candidate = if suffix == 0 { name.clone() } else { format!("{name}{suffix}") };
+        let candidate = if suffix == 0 {
+            name.clone()
+        } else {
+            format!("{name}{suffix}")
+        };
         let exists = user::Entity::find()
             .filter(user::Column::Username.eq(&candidate))
             .one(db)

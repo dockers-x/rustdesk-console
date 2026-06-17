@@ -3,10 +3,15 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect,
+};
 use serde::Serialize;
 
-use entity::{active_connection, address_book, audit_conn, audit_file, login_log, peer, share_record, user};
+use entity::{
+    active_connection, address_book, audit_conn, audit_file, login_log, peer, share_record, user,
+};
 
 const ONLINE_WINDOW_SECONDS: i64 = 90;
 const RECENT_LIMIT: u64 = 6;

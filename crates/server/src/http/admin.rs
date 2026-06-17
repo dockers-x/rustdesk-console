@@ -2,7 +2,9 @@
 //! Phase 1 implements auth, config and full CRUD for user/group/tag/peer/
 //! device_group. Remaining admin areas return a clear "not implemented" code.
 
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
 use sea_orm::Set;
@@ -18,7 +20,12 @@ use crate::services;
 use crate::state::AppState;
 use crate::support::webclient_config::WebClientConfig;
 
-pub fn list_json<T: serde::Serialize>(list: Vec<T>, page: i64, total: i64, page_size: i64) -> Response {
+pub fn list_json<T: serde::Serialize>(
+    list: Vec<T>,
+    page: i64,
+    total: i64,
+    page_size: i64,
+) -> Response {
     resp::success(json!({
         "list": list,
         "page": page,
@@ -66,8 +73,13 @@ pub async fn login(
         return resp::fail(101, state.tr(&lang, "CaptchaError"));
     }
 
-    let user = match services::user::info_by_username_password(&state.db, &state.config, &f.username, &f.password)
-        .await
+    let user = match services::user::info_by_username_password(
+        &state.db,
+        &state.config,
+        &f.username,
+        &f.password,
+    )
+    .await
     {
         Ok(Some(u)) => u,
         _ => {
@@ -104,7 +116,11 @@ pub async fn login(
     resp::success(AdminLoginPayload::from_user(&user, ut.token))
 }
 
-pub async fn captcha(State(state): State<AppState>, ClientIp(ip): ClientIp, AcceptLang(lang): AcceptLang) -> Response {
+pub async fn captcha(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    AcceptLang(lang): AcceptLang,
+) -> Response {
     let (banned, need_captcha) = state.limiter.check_security_status(&ip);
     if banned {
         return resp::fail(101, state.tr(&lang, "LoginBanned"));
@@ -123,7 +139,11 @@ pub async fn logout(State(state): State<AppState>, user: BackendUser) -> Respons
     resp::success(Value::Null)
 }
 
-pub async fn login_options(State(state): State<AppState>, ClientIp(ip): ClientIp, AcceptLang(lang): AcceptLang) -> Response {
+pub async fn login_options(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    AcceptLang(lang): AcceptLang,
+) -> Response {
     let (banned, need_captcha) = state.limiter.check_security_status(&ip);
     if banned {
         return resp::fail(101, state.tr(&lang, "LoginBanned"));
@@ -178,11 +198,20 @@ pub async fn config_server_update(
 ) -> Response {
     match state.webclient_config.update(f).await {
         Ok(cfg) => resp::success(cfg),
-        Err(e) => resp::fail(
-            101,
-            format!("{}{}", state.tr(&lang, "OperationFailed"), e),
-        ),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
+}
+
+pub async fn config_deployment(State(state): State<AppState>, _user: BackendUser) -> Response {
+    let cfg = state.webclient_config.get().await;
+    resp::success(crate::support::deployment_config::build(&cfg))
+}
+
+pub async fn config_deployment_preview(
+    _user: BackendUser,
+    Json(f): Json<WebClientConfig>,
+) -> Response {
+    resp::success(crate::support::deployment_config::build(&f))
 }
 
 pub async fn config_app(State(state): State<AppState>, _user: BackendUser) -> Response {
@@ -190,7 +219,8 @@ pub async fn config_app(State(state): State<AppState>, _user: BackendUser) -> Re
 }
 
 pub async fn overview(State(state): State<AppState>, _user: BackendUser) -> Response {
-    match services::overview::load(&state.db, state.version.as_str(), state.start_time.as_str()).await
+    match services::overview::load(&state.db, state.version.as_str(), state.start_time.as_str())
+        .await
     {
         Ok(v) => resp::success(v),
         Err(e) => resp::fail(101, e.to_string()),
@@ -405,7 +435,8 @@ pub async fn user_change_cur_pwd(
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
     if !services::user::is_password_empty(&user.user) {
-        let (ok, _) = crate::support::password::verify_password(&user.user.password, &f.old_password);
+        let (ok, _) =
+            crate::support::password::verify_password(&user.user.password, &f.old_password);
         if !ok {
             return resp::fail(101, state.tr(&lang, "OldPasswordError"));
         }
@@ -474,7 +505,11 @@ pub async fn group_create(
     _user: AdminUser,
     Json(f): Json<GroupForm>,
 ) -> Response {
-    let t = if f.r#type == 0 { group::TYPE_DEFAULT } else { f.r#type };
+    let t = if f.r#type == 0 {
+        group::TYPE_DEFAULT
+    } else {
+        f.r#type
+    };
     match services::group::create(&state.db, &f.name, t).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
@@ -512,8 +547,12 @@ pub async fn device_group_list(
     _user: AdminUser,
     Query(q): Query<PageQuery>,
 ) -> Response {
-    match services::group::device_group_list(&state.db, q.page.unwrap_or(0), q.page_size.unwrap_or(0))
-        .await
+    match services::group::device_group_list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+    )
+    .await
     {
         Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
         Err(e) => resp::fail(101, e.to_string()),
@@ -863,8 +902,13 @@ pub async fn login_log_list(
     _user: AdminUser,
     Query(q): Query<PageQuery>,
 ) -> Response {
-    match services::login_log::list(&state.db, q.page.unwrap_or(0), q.page_size.unwrap_or(0), None)
-        .await
+    match services::login_log::list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        None,
+    )
+    .await
     {
         Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
         Err(e) => resp::fail(101, e.to_string()),
@@ -1148,6 +1192,107 @@ pub async fn audit_file_batch_delete(
 }
 
 // ===========================================================================
+// recording files
+// ===========================================================================
+
+#[derive(Deserialize, Default)]
+pub struct RecordFileQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub peer_id: Option<String>,
+}
+
+pub async fn record_file_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<RecordFileQuery>,
+) -> Response {
+    match services::record_file::list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.filename,
+        q.peer_id,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn record_file_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    let row = services::record_file::info_by_id(&state.db, f.id)
+        .await
+        .ok()
+        .flatten();
+    let Some(row) = row else {
+        return resp::fail(101, state.tr(&lang, "ItemNotFound"));
+    };
+    if let Ok(path) =
+        services::record_file::record_path(&state.config.gin.resources_path, &row.filename)
+    {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("failed to remove record file: {e}"),
+        }
+    }
+    match services::record_file::delete(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn record_file_download(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Path(id): Path<i32>,
+) -> Response {
+    let row = services::record_file::info_by_id(&state.db, id)
+        .await
+        .ok()
+        .flatten();
+    let Some(row) = row else {
+        return resp::fail(101, state.tr(&lang, "ItemNotFound"));
+    };
+    let path =
+        match services::record_file::record_path(&state.config.gin.resources_path, &row.filename) {
+            Ok(path) => path,
+            Err(e) => return resp::fail(101, e),
+        };
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let mut response = Response::new(Body::from(bytes));
+            *response.status_mut() = StatusCode::OK;
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            let disposition = format!("attachment; filename=\"{}\"", row.filename);
+            if let Ok(value) = HeaderValue::from_str(&disposition) {
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_DISPOSITION, value);
+            }
+            response
+        }
+        Err(_) => resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    }
+}
+
+// ===========================================================================
 // share records
 // ===========================================================================
 
@@ -1233,7 +1378,10 @@ pub async fn user_token_delete(
     user: BackendUser,
     Json(f): Json<IdForm>,
 ) -> Response {
-    let t = services::user::token_info_by_id(&state.db, f.id).await.ok().flatten();
+    let t = services::user::token_info_by_id(&state.db, f.id)
+        .await
+        .ok()
+        .flatten();
     let Some(t) = t else {
         return resp::fail(101, state.tr(&lang, "ItemNotFound"));
     };
@@ -1339,8 +1487,13 @@ pub async fn address_book_list(
         hostname: q.hostname,
         collection_id: q.collection_id,
     };
-    match services::address_book::admin_list(&state.db, q.page.unwrap_or(0), q.page_size.unwrap_or(0), f)
-        .await
+    match services::address_book::admin_list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        f,
+    )
+    .await
     {
         Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
         Err(e) => resp::fail(101, e.to_string()),
@@ -1750,7 +1903,10 @@ pub async fn rule_detail(
 }
 
 /// Shared validation for rule create/update (≈ `CheckForm`).
-async fn check_rule(state: &AppState, t: &entity::address_book_collection_rule::Model) -> Result<(), String> {
+async fn check_rule(
+    state: &AppState,
+    t: &entity::address_book_collection_rule::Model,
+) -> Result<(), String> {
     use entity::address_book_collection_rule as r;
     if t.user_id == 0 {
         return Err("ParamsError".into());
@@ -1766,19 +1922,33 @@ async fn check_rule(state: &AppState, t: &entity::address_book_collection_rule::
         if t.to_id == t.user_id {
             return Err("CannotShareToSelf".into());
         }
-        if services::user::info_by_id(&state.db, t.to_id).await.ok().flatten().is_none() {
+        if services::user::info_by_id(&state.db, t.to_id)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+        {
             return Err("ItemNotFound".into());
         }
     } else if t.r#type == r::RULE_TYPE_GROUP {
-        if services::group::info_by_id(&state.db, t.to_id).await.ok().flatten().is_none() {
+        if services::group::info_by_id(&state.db, t.to_id)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+        {
             return Err("ItemNotFound".into());
         }
     } else {
         return Err("ParamsError".into());
     }
-    if let Ok(Some(ex)) =
-        services::address_book::rule_info_by_type_to_cid(&state.db, t.r#type, t.to_id, t.collection_id)
-            .await
+    if let Ok(Some(ex)) = services::address_book::rule_info_by_type_to_cid(
+        &state.db,
+        t.r#type,
+        t.to_id,
+        t.collection_id,
+    )
+    .await
     {
         if t.id == 0 || t.id != ex.id {
             return Err("ItemExists".into());
@@ -1878,8 +2048,10 @@ pub async fn rustdesk_cmd_create(
     _user: AdminUser,
     Json(f): Json<ServerCmdForm>,
 ) -> Response {
-    match services::server_cmd::create(&state.db, &f.cmd, &f.alias, &f.option, &f.explain, &f.target)
-        .await
+    match services::server_cmd::create(
+        &state.db, &f.cmd, &f.alias, &f.option, &f.explain, &f.target,
+    )
+    .await
     {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
@@ -1896,13 +2068,7 @@ pub async fn rustdesk_cmd_update(
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
     match services::server_cmd::update(
-        &state.db,
-        f.id,
-        &f.cmd,
-        &f.alias,
-        &f.option,
-        &f.explain,
-        &f.target,
+        &state.db, f.id, &f.cmd, &f.alias, &f.option, &f.explain, &f.target,
     )
     .await
     {

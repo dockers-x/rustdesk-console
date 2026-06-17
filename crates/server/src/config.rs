@@ -226,6 +226,10 @@ pub struct Rustdesk {
     pub webclient_magic_queryonline: i32,
     #[serde(rename = "ws-host")]
     pub ws_host: String,
+    #[serde(rename = "ws-id-host")]
+    pub ws_id_host: String,
+    #[serde(rename = "ws-relay-host")]
+    pub ws_relay_host: String,
 }
 
 impl Rustdesk {

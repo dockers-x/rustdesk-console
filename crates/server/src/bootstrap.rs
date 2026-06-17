@@ -14,8 +14,8 @@ use sea_orm::{
 
 use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
-    audit_conn, audit_file, device_group, group, login_log, oauth, peer, server_cmd, share_record,
-    tag, user, user_third, user_token, version,
+    audit_conn, audit_file, device_group, group, login_log, oauth, peer, record_file, server_cmd,
+    share_record, tag, user, user_third, user_token, version,
 };
 
 use crate::config::{self, Config};
@@ -77,7 +77,10 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
 
     macro_rules! create {
         ($ent:expr) => {{
-            let stmt = schema.create_table_from_entity($ent).if_not_exists().to_owned();
+            let stmt = schema
+                .create_table_from_entity($ent)
+                .if_not_exists()
+                .to_owned();
             db.execute(backend.build(&stmt)).await?;
         }};
     }
@@ -95,6 +98,7 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(share_record::Entity);
     create!(audit_conn::Entity);
     create!(audit_file::Entity);
+    create!(record_file::Entity);
     create!(address_book_collection::Entity);
     create!(address_book_collection_rule::Entity);
     create!(server_cmd::Entity);
@@ -165,7 +169,12 @@ async fn column_exists(
 }
 
 /// Run schema sync + version bookkeeping + first-run seed.
-pub async fn migrate_and_seed(db: &DatabaseConnection, config: &Config, i18n: &I18n, lang: &str) -> anyhow::Result<()> {
+pub async fn migrate_and_seed(
+    db: &DatabaseConnection,
+    config: &Config,
+    i18n: &I18n,
+    lang: &str,
+) -> anyhow::Result<()> {
     let had_versions = version::Entity::find().count(db).await.unwrap_or(0) > 0;
 
     create_tables(db).await?;
@@ -200,7 +209,12 @@ pub async fn migrate_and_seed(db: &DatabaseConnection, config: &Config, i18n: &I
     Ok(())
 }
 
-async fn seed(db: &DatabaseConnection, config: &Config, i18n: &I18n, lang: &str) -> anyhow::Result<()> {
+async fn seed(
+    db: &DatabaseConnection,
+    config: &Config,
+    i18n: &I18n,
+    lang: &str,
+) -> anyhow::Result<()> {
     // default + share groups
     let default_name = i18n.translate(lang, "DefaultGroup");
     let default_name = if default_name == "DefaultGroup" {

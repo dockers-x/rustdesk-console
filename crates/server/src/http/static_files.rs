@@ -24,6 +24,8 @@ pub async fn config_js(State(state): State<AppState>) -> Response {
     'custom-rendezvous-server': {id_server},\n\
     'relay-server': {relay_server},\n\
     'ws-host': {ws},\n\
+    'ws-id-host': {ws_id},\n\
+    'ws-relay-host': {ws_relay},\n\
     'key': {key},\n\
   }};\n\
   const localOverrideKey = 'rustdesk-console.webclient.local-override';\n\
@@ -40,6 +42,8 @@ pub async fn config_js(State(state): State<AppState>) -> Response {
   }}\n\
   window.webclient_magic_queryonline = {magic};\n\
   window.ws_host = localStorage.getItem('ws-host') || '';\n\
+  window.ws_id_host = localStorage.getItem('ws-id-host') || '';\n\
+  window.ws_relay_host = localStorage.getItem('ws-relay-host') || '';\n\
 }})();\n",
         api = js_string(&cfg.api_server),
         id_server = js_string(&cfg.id_server),
@@ -47,6 +51,8 @@ pub async fn config_js(State(state): State<AppState>) -> Response {
         key = js_string(&cfg.key),
         magic = rd.webclient_magic_queryonline,
         ws = js_string(&cfg.ws_host),
+        ws_id = js_string(&cfg.ws_id_host),
+        ws_relay = js_string(&cfg.ws_relay_host),
     );
     ([(header::CONTENT_TYPE, "application/javascript")], body).into_response()
 }

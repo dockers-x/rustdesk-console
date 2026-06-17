@@ -89,8 +89,13 @@ pub async fn address_book_list(
         hostname: q.hostname,
         collection_id: q.collection_id,
     };
-    match services::address_book::admin_list(&state.db, q.page.unwrap_or(0), q.page_size.unwrap_or(0), f)
-        .await
+    match services::address_book::admin_list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        f,
+    )
+    .await
     {
         Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
         Err(e) => resp::fail(101, e.to_string()),
@@ -111,9 +116,13 @@ pub async fn address_book_create(
     {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
-    if let Ok(Some(_)) =
-        services::address_book::info_by_user_id_and_id_and_cid(&state.db, uid, &f.id, f.collection_id)
-            .await
+    if let Ok(Some(_)) = services::address_book::info_by_user_id_and_id_and_cid(
+        &state.db,
+        uid,
+        &f.id,
+        f.collection_id,
+    )
+    .await
     {
         return resp::fail(101, state.tr(&lang, "ItemExists"));
     }
@@ -244,7 +253,8 @@ pub async fn address_book_batch_update_tags(
     Json(f): Json<MyBatchUpdateTagsForm>,
 ) -> Response {
     let tags = serde_json::to_value(&f.tags).unwrap_or(Value::Array(vec![]));
-    match services::address_book::batch_update_tags(&state.db, user.user.id, &f.row_ids, &tags).await
+    match services::address_book::batch_update_tags(&state.db, user.user.id, &f.row_ids, &tags)
+        .await
     {
         Ok(0) => resp::fail(101, state.tr(&lang, "ItemNotFound")),
         Ok(_) => resp::success(Value::Null),
@@ -456,19 +466,33 @@ async fn check_my_rule(
         if t.to_id == t.user_id {
             return Err("CannotShareToSelf".into());
         }
-        if services::user::info_by_id(&state.db, t.to_id).await.ok().flatten().is_none() {
+        if services::user::info_by_id(&state.db, t.to_id)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+        {
             return Err("ItemNotFound".into());
         }
     } else if t.r#type == r::RULE_TYPE_GROUP {
-        if services::group::info_by_id(&state.db, t.to_id).await.ok().flatten().is_none() {
+        if services::group::info_by_id(&state.db, t.to_id)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+        {
             return Err("ItemNotFound".into());
         }
     } else {
         return Err("ParamsError".into());
     }
-    if let Ok(Some(ex)) =
-        services::address_book::rule_info_by_type_to_cid(&state.db, t.r#type, t.to_id, t.collection_id)
-            .await
+    if let Ok(Some(ex)) = services::address_book::rule_info_by_type_to_cid(
+        &state.db,
+        t.r#type,
+        t.to_id,
+        t.collection_id,
+    )
+    .await
     {
         if t.id == 0 || t.id != ex.id {
             return Err("ItemExists".into());

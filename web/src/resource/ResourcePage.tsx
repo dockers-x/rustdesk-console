@@ -16,6 +16,10 @@ import {
 import { TableState } from "../components/TableState";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiGet, apiPost } from "../lib/api";
+import {
+  formatDateTime,
+  formatUnixSeconds,
+} from "../lib/dateFormat";
 import type { FieldDef, ResourceConfig } from "./types";
 
 interface ListResult {
@@ -105,7 +109,8 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
   const rows = data?.list ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const showActions = cfg.canEdit !== false || cfg.canDelete !== false;
+  const showActions =
+    cfg.rowActions || cfg.canEdit !== false || cfg.canDelete !== false;
 
   return (
     <div>
@@ -152,7 +157,13 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                 ))}
                 {showActions && (
                   <Table.Cell>
-                    <div className="flex gap-1">
+                    <div className="flex flex-wrap items-start gap-1">
+                      {cfg.rowActions?.(row, t, {
+                        openDelete: (target) => {
+                          remove.reset();
+                          setDeleteTarget(target);
+                        },
+                      })}
                       {cfg.canEdit !== false && (
                         <Button
                           size="sm"
@@ -290,7 +301,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
 function asText(v: unknown, key = "", timeZone?: string): string {
   if (v === null || v === undefined) return "";
   if (isDateTimeKey(key)) {
-    return formatUtcDateTime(v, timeZone);
+    return formatDateTime(v, timeZone);
   }
   if (key === "expired_at") {
     return formatUnixSeconds(v, timeZone);
@@ -301,53 +312,6 @@ function asText(v: unknown, key = "", timeZone?: string): string {
 
 function isDateTimeKey(key: string) {
   return key === "created_at" || key === "updated_at";
-}
-
-function formatUtcDateTime(value: unknown, timeZone?: string) {
-  if (typeof value !== "string" || value.trim() === "") return asText(value);
-  const iso = value.includes("T")
-    ? value
-    : value.trim().replace(" ", "T") + "Z";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return value;
-  return formatDate(date, timeZone);
-}
-
-function formatUnixSeconds(value: unknown, timeZone?: string) {
-  const seconds =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number(value)
-        : Number.NaN;
-  if (!Number.isFinite(seconds) || seconds <= 0) return asText(value);
-  return formatDate(new Date(seconds * 1000), timeZone);
-}
-
-function formatDate(date: Date, timeZone?: string) {
-  const options: Intl.DateTimeFormatOptions = {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-    ...(timeZone ? { timeZone } : {}),
-  };
-  try {
-    return formatDateParts(date, options);
-  } catch {
-    const { timeZone: _timeZone, ...fallback } = options;
-    return formatDateParts(date, fallback);
-  }
-}
-
-function formatDateParts(date: Date, options: Intl.DateTimeFormatOptions) {
-  const parts = new Intl.DateTimeFormat("en-US", options).formatToParts(date);
-  const get = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 function FieldInput({

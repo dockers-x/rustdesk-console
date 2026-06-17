@@ -1,6 +1,7 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
 import { PeerQuickActions } from "../components/PeerQuickActions";
+import { RecordFileActions } from "../components/RecordFileActions";
 import { WebClientActions } from "../components/WebClientActions";
 import type { ResourceConfig } from "./types";
 
@@ -65,7 +66,6 @@ const activeConnectionActionsCol = {
     />
   ),
 };
-
 const RULE_OPTIONS = [
   { label: "ruleRead", value: 1 },
   { label: "ruleReadWrite", value: 2 },
@@ -419,6 +419,40 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "created_at", label: "createdAt" },
     ],
     fields: [],
+  },
+  {
+    name: "record_file",
+    titleKey: "recordFiles",
+    api: "/api/admin/record_file",
+    canCreate: false,
+    canEdit: false,
+    filters: [
+      { name: "filename", label: "filename" },
+      { name: "peer_id", label: "deviceId" },
+    ],
+    columns: [
+      { key: "id", label: "id" },
+      monoCol("filename", "filename", "max-w-80"),
+      monoCol("peer_id", "deviceId", "max-w-28"),
+      { key: "direction", label: "direction" },
+      { key: "size", label: "sizeBytes" },
+      {
+        key: "status",
+        label: "status",
+        render: (r, t) =>
+          Number(r.status ?? 0) === 1
+            ? t("recordStatusComplete")
+            : t("recordStatusUploading"),
+      },
+      { key: "created_at", label: "createdAt" },
+    ],
+    fields: [],
+    rowActions: (r) => (
+      <RecordFileActions
+        id={Number(r.id ?? 0)}
+        filename={String(r.filename ?? "")}
+      />
+    ),
   },
 ];
 

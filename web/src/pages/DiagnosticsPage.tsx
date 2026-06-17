@@ -11,7 +11,9 @@ import {
 import { useTranslation } from "react-i18next";
 import { cn } from "@cloudflare/kumo/utils";
 import { TableState } from "../components/TableState";
+import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiPost } from "../lib/api";
+import { formatDateTime } from "../lib/dateFormat";
 
 type DiagnosticStatus = "ok" | "warning" | "error";
 
@@ -33,6 +35,8 @@ interface DiagnosticsReport {
 
 export function DiagnosticsPage() {
   const { t } = useTranslation();
+  const adminConfig = usePublicAdminConfig();
+  const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
   const diagnostics = useMutation({
     mutationFn: () => apiPost<DiagnosticsReport>("/api/admin/diagnostics/run"),
   });
@@ -66,7 +70,7 @@ export function DiagnosticsPage() {
               <p className="mt-1 text-sm text-kumo-subtle">
                 {data
                   ? t("diagnosticsGenerated", {
-                      value: new Date(data.generated_at).toLocaleString(),
+                      value: formatDateTime(data.generated_at, displayTimeZone),
                     })
                   : t("diagnosticsEmptyHint")}
               </p>

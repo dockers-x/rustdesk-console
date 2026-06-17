@@ -37,11 +37,7 @@ pub struct OidcAuthRequest {
     pub device_info: DeviceInfo,
 }
 
-async fn begin(
-    state: &AppState,
-    f: &OidcAuthRequest,
-    device_type: &str,
-) -> Response {
+async fn begin(state: &AppState, f: &OidcAuthRequest, device_type: &str) -> Response {
     match begin_value(state, f, device_type).await {
         Ok(v) => Json(v).into_response(),
         Err(r) => r,
@@ -107,7 +103,11 @@ async fn auth_query_pre(
         }))
         .into_response());
     }
-    let Some(u) = services::user::info_by_id(&state.db, v.user_id).await.ok().flatten() else {
+    let Some(u) = services::user::info_by_id(&state.db, v.user_id)
+        .await
+        .ok()
+        .flatten()
+    else {
         return Err(resp::error(state.tr(lang, "UserNotFound")));
     };
     state.oauth_cache.delete(code);
@@ -177,22 +177,33 @@ pub async fn oauth_callback(
     let Some(mut cache) = state.oauth_cache.get(&q.state) else {
         return render_template(&state, "oauth_fail.html", "OauthExpired", "");
     };
-    let oauth_user =
-        match services::oauth::callback(&state.config, &state.db, &q.code, &cache.verifier, &cache.op)
-            .await
-        {
-            Ok(u) => u,
-            Err(e) => return render_template(&state, "oauth_fail.html", "OauthFailed", &e),
-        };
+    let oauth_user = match services::oauth::callback(
+        &state.config,
+        &state.db,
+        &q.code,
+        &cache.verifier,
+        &cache.op,
+    )
+    .await
+    {
+        Ok(u) => u,
+        Err(e) => return render_template(&state, "oauth_fail.html", "OauthFailed", &e),
+    };
     let openid = oauth_user.open_id.clone();
 
     if cache.action == ACTION_BIND {
-        if let Ok(Some(ut)) = services::oauth::user_third_info(&state.db, &cache.op, &openid).await {
+        if let Ok(Some(ut)) = services::oauth::user_third_info(&state.db, &cache.op, &openid).await
+        {
             if ut.user_id > 0 {
                 return render_template(&state, "oauth_fail.html", "OauthHasBindOtherUser", "");
             }
         }
-        if services::user::info_by_id(&state.db, cache.user_id).await.ok().flatten().is_none() {
+        if services::user::info_by_id(&state.db, cache.user_id)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+        {
             return render_template(&state, "oauth_fail.html", "ItemNotFound", "");
         }
         let oauth_type = services::oauth::info_by_op(&state.db, &cache.op)
@@ -201,9 +212,15 @@ pub async fn oauth_callback(
             .flatten()
             .map(|o| o.oauth_type)
             .unwrap_or_else(|| cache.op.clone());
-        if services::oauth::bind_user(&state.db, cache.user_id, &oauth_user, &oauth_type, &cache.op)
-            .await
-            .is_err()
+        if services::oauth::bind_user(
+            &state.db,
+            cache.user_id,
+            &oauth_user,
+            &oauth_type,
+            &cache.op,
+        )
+        .await
+        .is_err()
         {
             return render_template(&state, "oauth_fail.html", "BindFail", "");
         }
@@ -216,8 +233,12 @@ pub async fn oauth_callback(
         }
         // find existing bound user
         let mut user = None;
-        if let Ok(Some(ut)) = services::oauth::user_third_info(&state.db, &cache.op, &openid).await {
-            user = services::user::info_by_id(&state.db, ut.user_id).await.ok().flatten();
+        if let Ok(Some(ut)) = services::oauth::user_third_info(&state.db, &cache.op, &openid).await
+        {
+            user = services::user::info_by_id(&state.db, ut.user_id)
+                .await
+                .ok()
+                .flatten();
         }
         let user = match user {
             Some(u) => u,
@@ -284,7 +305,10 @@ pub async fn message(State(state): State<AppState>, Query(mp): Query<MessagePara
 
 // ---------- admin ----------
 
-pub async fn admin_oidc_auth(State(state): State<AppState>, Json(f): Json<OidcAuthRequest>) -> Response {
+pub async fn admin_oidc_auth(
+    State(state): State<AppState>,
+    Json(f): Json<OidcAuthRequest>,
+) -> Response {
     match begin_value(&state, &f, entity::login_log::CLIENT_WEB_ADMIN).await {
         Ok(v) => resp::success(v),
         Err(r) => r,

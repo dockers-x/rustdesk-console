@@ -87,6 +87,16 @@ pub async fn device_group_info_by_id(
     device_group::Entity::find_by_id(id).one(db).await
 }
 
+pub async fn device_group_info_by_name(
+    db: &DatabaseConnection,
+    name: &str,
+) -> Result<Option<device_group::Model>, DbErr> {
+    device_group::Entity::find()
+        .filter(device_group::Column::Name.eq(name))
+        .one(db)
+        .await
+}
+
 pub struct DeviceGroupListResult {
     pub list: Vec<device_group::Model>,
     pub page: i64,

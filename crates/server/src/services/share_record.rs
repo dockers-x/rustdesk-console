@@ -60,11 +60,7 @@ pub async fn batch_delete(db: &DatabaseConnection, ids: &[i32]) -> Result<(), Db
 }
 
 /// Count how many of `ids` belong to `user_id` (for ownership checks).
-pub async fn count_owned(
-    db: &DatabaseConnection,
-    user_id: i32,
-    ids: &[i32],
-) -> Result<i64, DbErr> {
+pub async fn count_owned(db: &DatabaseConnection, user_id: i32, ids: &[i32]) -> Result<i64, DbErr> {
     Ok(share_record::Entity::find()
         .filter(share_record::Column::UserId.eq(user_id))
         .filter(share_record::Column::Id.is_in(ids.to_vec()))

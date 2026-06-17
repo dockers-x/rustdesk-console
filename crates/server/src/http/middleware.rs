@@ -7,10 +7,10 @@
 
 use std::net::SocketAddr;
 
+use async_trait::async_trait;
 use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;
 use axum::response::Response;
-use async_trait::async_trait;
 
 use entity::{user, user_token};
 
@@ -50,7 +50,11 @@ impl FromRequestParts<AppState> for ClientIp {
 }
 
 pub fn extract_client_ip(parts: &Parts) -> String {
-    if let Some(xff) = parts.headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
+    if let Some(xff) = parts
+        .headers
+        .get("X-Forwarded-For")
+        .and_then(|v| v.to_str().ok())
+    {
         if let Some(first) = xff.split(',').next() {
             let ip = first.trim();
             if !ip.is_empty() {
@@ -131,10 +135,14 @@ impl FromRequestParts<AppState> for BackendUser {
             return Err(response::unauthorized());
         }
         if user.must_change_password && !password_change_allowed_path(parts.uri.path()) {
-            return Err(response::fail(112, state.tr(&lang, "PasswordChangeRequired")));
+            return Err(response::fail(
+                112,
+                state.tr(&lang, "PasswordChangeRequired"),
+            ));
         }
         // auto-refresh token if close to expiry
-        let _ = crate::services::user::auto_refresh_access_token(&state.db, &state.config, &ut).await;
+        let _ =
+            crate::services::user::auto_refresh_access_token(&state.db, &state.config, &ut).await;
         Ok(BackendUser {
             user,
             token,

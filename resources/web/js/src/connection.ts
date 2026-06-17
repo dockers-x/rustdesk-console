@@ -762,15 +762,33 @@ function getDefaultUri(isRelay: Boolean = false): string {
 }
 
 function getConfiguredWsUri(isRelay: Boolean = false): string {
-  const configured = (window as any).ws_host;
-  if (typeof configured !== "string") return "";
-  let base = configured.trim();
+  const explicit = getConfiguredString(isRelay ? "ws_relay_host" : "ws_id_host");
+  if (explicit) return normalizeWsUri(explicit);
+  const configured = getConfiguredString("ws_host");
+  if (!configured) return "";
+  return normalizeWsUri(configured, isRelay ? WS_HOST_PATHS.relay : WS_HOST_PATHS.rendezvous);
+}
+
+function getConfiguredString(name: string): string {
+  const configured = (window as any)[name];
+  if (typeof configured === "string" && configured.trim()) {
+    return configured.trim();
+  }
+  const key = name.replace(/_/g, "-");
+  return (localStorage.getItem(key) || "").trim();
+}
+
+function normalizeWsUri(value: string, path: string = ""): string {
+  let base = value.trim();
   if (!base) return "";
   base = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
+  if (base.startsWith("/")) {
+    base = SCHEMA + location.host + base;
+  }
   if (!/^wss?:\/\//i.test(base)) {
     base = SCHEMA + base.replace(/^\/+/, "");
   }
-  return base.replace(/\/+$/, "") + (isRelay ? WS_HOST_PATHS.relay : WS_HOST_PATHS.rendezvous);
+  return base.replace(/\/+$/, "") + path;
 }
 /*
 function isHttps() {

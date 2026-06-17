@@ -193,7 +193,21 @@ pub async fn collection_info_by_id(
     db: &DatabaseConnection,
     id: i32,
 ) -> Result<Option<address_book_collection::Model>, DbErr> {
-    address_book_collection::Entity::find_by_id(id).one(db).await
+    address_book_collection::Entity::find_by_id(id)
+        .one(db)
+        .await
+}
+
+pub async fn collection_info_by_user_and_name(
+    db: &DatabaseConnection,
+    user_id: i32,
+    name: &str,
+) -> Result<Option<address_book_collection::Model>, DbErr> {
+    address_book_collection::Entity::find()
+        .filter(address_book_collection::Column::UserId.eq(user_id))
+        .filter(address_book_collection::Column::Name.eq(name))
+        .one(db)
+        .await
 }
 
 pub async fn collection_list_by_user_id(
@@ -289,8 +303,10 @@ pub async fn can_read(
     uid: i32,
     cid: i32,
 ) -> Result<bool, DbErr> {
-    Ok(user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
-        >= address_book_collection_rule::RULE_READ)
+    Ok(
+        user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
+            >= address_book_collection_rule::RULE_READ,
+    )
 }
 
 pub async fn can_write(
@@ -300,8 +316,10 @@ pub async fn can_write(
     uid: i32,
     cid: i32,
 ) -> Result<bool, DbErr> {
-    Ok(user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
-        >= address_book_collection_rule::RULE_READ_WRITE)
+    Ok(
+        user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
+            >= address_book_collection_rule::RULE_READ_WRITE,
+    )
 }
 
 pub async fn can_full_control(
@@ -311,8 +329,10 @@ pub async fn can_full_control(
     uid: i32,
     cid: i32,
 ) -> Result<bool, DbErr> {
-    Ok(user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
-        >= address_book_collection_rule::RULE_FULL_CONTROL)
+    Ok(
+        user_max_rule(db, cur_user_id, cur_group_id, uid, cid).await?
+            >= address_book_collection_rule::RULE_FULL_CONTROL,
+    )
 }
 
 // --- sharing ---

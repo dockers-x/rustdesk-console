@@ -15,7 +15,9 @@ import {
 } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import { TableState } from "../components/TableState";
+import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiGet } from "../lib/api";
+import { formatDateTime } from "../lib/dateFormat";
 
 interface Overview {
   generated_at: string;
@@ -57,6 +59,8 @@ interface Overview {
 
 export function OverviewPage() {
   const { t } = useTranslation();
+  const adminConfig = usePublicAdminConfig();
+  const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
   const overview = useQuery({
     queryKey: ["overview"],
     queryFn: () => apiGet<Overview>("/api/admin/overview"),
@@ -196,7 +200,9 @@ export function OverviewPage() {
           icon={<ClockCounterClockwise size={20} />}
           label={t("uptime")}
           value={formatDuration(data.uptime_seconds)}
-          detail={t("startedAt", { value: formatDate(data.start_time) })}
+          detail={t("startedAt", {
+            value: formatDateTime(data.start_time, displayTimeZone),
+          })}
         />
       </div>
     </div>
@@ -284,12 +290,6 @@ function RecentConnectionTable({ rows }: { rows: Overview["recent_connections"] 
       {rows.length === 0 && <TableState tone="empty">{t("noData")}</TableState>}
     </div>
   );
-}
-
-function formatDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value || "—";
-  return date.toLocaleString();
 }
 
 function formatDuration(seconds: number) {

@@ -70,9 +70,7 @@ impl LoginLimiter {
             return;
         }
         let now = Instant::now();
-        let cutoff = now
-            .checked_sub(self.policy.attempts_window)
-            .unwrap_or(now);
+        let cutoff = now.checked_sub(self.policy.attempts_window).unwrap_or(now);
         let mut valid = Self::prune_attempts(&mut g, ip, cutoff);
         valid.push(now);
         g.attempts.insert(ip.to_string(), valid.clone());
@@ -96,9 +94,7 @@ impl LoginLimiter {
             return (true, false);
         }
         let now = Instant::now();
-        let cutoff = now
-            .checked_sub(self.policy.attempts_window)
-            .unwrap_or(now);
+        let cutoff = now.checked_sub(self.policy.attempts_window).unwrap_or(now);
         Self::prune_attempts(&mut g, ip, cutoff);
         let count = g.attempts.get(ip).map(|v| v.len()).unwrap_or(0) as i32;
         let captcha_required = count >= self.policy.captcha_threshold;
@@ -112,7 +108,9 @@ impl LoginLimiter {
             .apply_filter(captcha::filters::Noise::new(0.1))
             .view(150, 50);
         let answer = c.chars_as_string().to_lowercase();
-        let png = c.as_png().ok_or_else(|| "captcha render failed".to_string())?;
+        let png = c
+            .as_png()
+            .ok_or_else(|| "captcha render failed".to_string())?;
         let b64 = format!(
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(&png)

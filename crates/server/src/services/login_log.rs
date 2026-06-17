@@ -77,7 +77,10 @@ pub async fn batch_soft_delete(
     ids: &[i32],
 ) -> Result<(), DbErr> {
     login_log::Entity::update_many()
-        .col_expr(login_log::Column::IsDeleted, sea_orm::sea_query::Expr::value(1))
+        .col_expr(
+            login_log::Column::IsDeleted,
+            sea_orm::sea_query::Expr::value(1),
+        )
         .filter(login_log::Column::UserId.eq(user_id))
         .filter(login_log::Column::Id.is_in(ids.to_vec()))
         .exec(db)

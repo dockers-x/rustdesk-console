@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.4-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![release](https://img.shields.io/badge/release-v0.2.5-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
@@ -108,6 +108,8 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 | `rustdesk.relay-server` | `RUSTDESK_API_RUSTDESK_RELAY_SERVER` |
 | `rustdesk.api-server` | `RUSTDESK_API_RUSTDESK_API_SERVER` |
 | `rustdesk.ws-host` | `RUSTDESK_API_RUSTDESK_WS_HOST` |
+| `rustdesk.ws-id-host` | `RUSTDESK_API_RUSTDESK_WS_ID_HOST` |
+| `rustdesk.ws-relay-host` | `RUSTDESK_API_RUSTDESK_WS_RELAY_HOST` |
 | `rustdesk.key` | `RUSTDESK_API_RUSTDESK_KEY` |
 | `admin.title` | `RUSTDESK_API_ADMIN_TITLE` |
 | `admin.username` | `RUSTDESK_API_ADMIN_USERNAME` |
@@ -128,11 +130,17 @@ zone, for example `TZ=Europe/Berlin`, if you do not want Asia/Shanghai local tim
 Business timestamps remain stored in UTC; `TZ` is used for server-local logs/start
 time and for the admin UI's local-time display.
 
-The embedded WebClient derives `21118` from `rustdesk.id-server` and `21119`
-from `rustdesk.relay-server` by default. When `rustdesk.ws-host` is set, it uses
-`<ws-host>/ws/id` and `<ws-host>/ws/relay` instead, which fits Cloudflare Tunnel
-or other HTTPS reverse proxy deployments. Leaving it empty preserves the old
-behavior.
+The embedded WebClient supports three WebSocket modes:
+
+- Leave `rustdesk.ws-host`, `rustdesk.ws-id-host` and `rustdesk.ws-relay-host`
+  empty to preserve the original behavior: derive `21118` from
+  `rustdesk.id-server` and `21119` from `rustdesk.relay-server`.
+- Set `rustdesk.ws-host` for path-based HTTPS/WSS reverse proxy deployments.
+  WebClient will use `<ws-host>/ws/id` and `<ws-host>/ws/relay`.
+- Set `rustdesk.ws-id-host` and `rustdesk.ws-relay-host` when the ID and relay
+  WebSocket services are exposed as separate endpoints or ports, for example
+  `wss://rd.example.com:21118` and `wss://rd.example.com:21119`. Explicit
+  endpoints take precedence over `rustdesk.ws-host`.
 
 ## Observability
 

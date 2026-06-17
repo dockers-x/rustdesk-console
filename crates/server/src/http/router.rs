@@ -1,5 +1,6 @@
 //! Route table, ports of `http/router/{api,admin,router}.go`.
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
@@ -35,9 +36,21 @@ pub fn build(state: AppState) -> Router {
         .route("/api/sysinfo_ver", post(api::sysinfo_ver))
         .route("/api/users", get(api::group_users))
         .route("/api/peers", get(api::group_peers))
-        .route("/api/device-group/accessible", get(api::device_group_accessible))
+        .route(
+            "/api/device-group/accessible",
+            get(api::device_group_accessible),
+        )
         .route("/api/audit/conn", post(api::audit_conn))
+        .route("/api/audit/conn/active", get(api::audit_conn_active))
         .route("/api/audit/file", post(api::audit_file))
+        .route("/api/audit/alarm", post(api::audit_alarm))
+        .route("/api/audit", put(api::audit_update))
+        .route("/api/devices/deploy", post(api::device_deploy))
+        .route("/api/devices/cli", post(api::device_cli))
+        .route(
+            "/api/record",
+            post(api::record).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         // oauth / oidc login
         .route("/api/oidc/auth", post(oauth::oidc_auth))
         .route("/api/oidc/auth-query", get(oauth::oidc_auth_query))
@@ -49,6 +62,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/oauth/msg", get(oauth::message))
         // address book (legacy)
         .route("/api/ab", get(api::ab_get).post(api::ab_update))
+        .route("/api/ab/get", post(api::ab_get))
         // address book (personal)
         .route("/api/ab/personal", post(api::ab_personal))
         .route("/api/ab/settings", post(api::ab_settings))
@@ -109,7 +123,10 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/logout", post(admin::logout))
         .route("/api/admin/login-options", get(admin::login_options))
         .route("/api/admin/oidc/auth", post(oauth::admin_oidc_auth))
-        .route("/api/admin/oidc/auth-query", get(oauth::admin_oidc_auth_query))
+        .route(
+            "/api/admin/oidc/auth-query",
+            get(oauth::admin_oidc_auth_query),
+        )
         .route("/api/admin/user/register", post(admin::user_register))
         // overview / diagnostics
         .route("/api/admin/overview", get(admin::overview))
@@ -120,10 +137,17 @@ fn admin_routes() -> Router<AppState> {
             "/api/admin/config/server",
             get(admin::config_server).patch(admin::config_server_update),
         )
+        .route(
+            "/api/admin/config/deployment",
+            get(admin::config_deployment).post(admin::config_deployment_preview),
+        )
         .route("/api/admin/config/app", get(admin::config_app))
         // user
         .route("/api/admin/user/current", get(admin::user_current))
-        .route("/api/admin/user/changeCurPwd", post(admin::user_change_cur_pwd))
+        .route(
+            "/api/admin/user/changeCurPwd",
+            post(admin::user_change_cur_pwd),
+        )
         .route("/api/admin/user/myOauth", post(admin::user_my_oauth_real))
         .route("/api/admin/user/groupUsers", post(admin::user_group_users))
         .route("/api/admin/user/list", get(admin::user_list))
@@ -139,11 +163,26 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/group/update", post(admin::group_update))
         .route("/api/admin/group/delete", post(admin::group_delete))
         // device group
-        .route("/api/admin/device_group/list", get(admin::device_group_list))
-        .route("/api/admin/device_group/detail/:id", get(admin::device_group_detail))
-        .route("/api/admin/device_group/create", post(admin::device_group_create))
-        .route("/api/admin/device_group/update", post(admin::device_group_update))
-        .route("/api/admin/device_group/delete", post(admin::device_group_delete))
+        .route(
+            "/api/admin/device_group/list",
+            get(admin::device_group_list),
+        )
+        .route(
+            "/api/admin/device_group/detail/:id",
+            get(admin::device_group_detail),
+        )
+        .route(
+            "/api/admin/device_group/create",
+            post(admin::device_group_create),
+        )
+        .route(
+            "/api/admin/device_group/update",
+            post(admin::device_group_update),
+        )
+        .route(
+            "/api/admin/device_group/delete",
+            post(admin::device_group_delete),
+        )
         // tag
         .route("/api/admin/tag/list", get(admin::tag_list))
         .route("/api/admin/tag/detail/:id", get(admin::tag_detail))
@@ -157,13 +196,22 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/peer/create", post(admin::peer_create))
         .route("/api/admin/peer/update", post(admin::peer_update))
         .route("/api/admin/peer/delete", post(admin::peer_delete))
-        .route("/api/admin/peer/batchDelete", post(admin::peer_batch_delete))
+        .route(
+            "/api/admin/peer/batchDelete",
+            post(admin::peer_batch_delete),
+        )
         .route("/api/admin/peer/disconnect", post(admin::peer_disconnect))
-        .route("/api/admin/active_connection/list", get(admin::active_connection_list))
+        .route(
+            "/api/admin/active_connection/list",
+            get(admin::active_connection_list),
+        )
         // login log
         .route("/api/admin/login_log/list", get(admin::login_log_list))
         .route("/api/admin/login_log/delete", post(admin::login_log_delete))
-        .route("/api/admin/login_log/batchDelete", post(admin::login_log_batch_delete))
+        .route(
+            "/api/admin/login_log/batchDelete",
+            post(admin::login_log_batch_delete),
+        )
         // oauth providers
         .route("/api/admin/oauth/list", get(admin::oauth_list))
         .route("/api/admin/oauth/detail/:id", get(admin::oauth_detail))
@@ -173,47 +221,137 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/oauth/unbind", post(admin::oauth_unbind))
         .route("/api/admin/oauth/confirm", post(oauth::admin_confirm))
         .route("/api/admin/oauth/bind", post(oauth::admin_to_bind))
-        .route("/api/admin/oauth/bindConfirm", post(oauth::admin_bind_confirm))
+        .route(
+            "/api/admin/oauth/bindConfirm",
+            post(oauth::admin_bind_confirm),
+        )
         .route("/api/admin/oauth/info", get(oauth::admin_info))
         // audit
         .route("/api/admin/audit_conn/list", get(admin::audit_conn_list))
-        .route("/api/admin/audit_conn/delete", post(admin::audit_conn_delete))
-        .route("/api/admin/audit_conn/batchDelete", post(admin::audit_conn_batch_delete))
+        .route(
+            "/api/admin/audit_conn/delete",
+            post(admin::audit_conn_delete),
+        )
+        .route(
+            "/api/admin/audit_conn/batchDelete",
+            post(admin::audit_conn_batch_delete),
+        )
         .route("/api/admin/audit_file/list", get(admin::audit_file_list))
-        .route("/api/admin/audit_file/delete", post(admin::audit_file_delete))
-        .route("/api/admin/audit_file/batchDelete", post(admin::audit_file_batch_delete))
+        .route(
+            "/api/admin/audit_file/delete",
+            post(admin::audit_file_delete),
+        )
+        .route(
+            "/api/admin/audit_file/batchDelete",
+            post(admin::audit_file_batch_delete),
+        )
+        .route("/api/admin/record_file/list", get(admin::record_file_list))
+        .route(
+            "/api/admin/record_file/delete",
+            post(admin::record_file_delete),
+        )
+        .route(
+            "/api/admin/record_file/download/:id",
+            get(admin::record_file_download),
+        )
         // share records
-        .route("/api/admin/share_record/list", get(admin::share_record_list))
-        .route("/api/admin/share_record/delete", post(admin::share_record_delete))
-        .route("/api/admin/share_record/batchDelete", post(admin::share_record_batch_delete))
+        .route(
+            "/api/admin/share_record/list",
+            get(admin::share_record_list),
+        )
+        .route(
+            "/api/admin/share_record/delete",
+            post(admin::share_record_delete),
+        )
+        .route(
+            "/api/admin/share_record/batchDelete",
+            post(admin::share_record_batch_delete),
+        )
         // user tokens
         .route("/api/admin/user_token/list", get(admin::user_token_list))
-        .route("/api/admin/user_token/delete", post(admin::user_token_delete))
-        .route("/api/admin/user_token/batchDelete", post(admin::user_token_batch_delete))
+        .route(
+            "/api/admin/user_token/delete",
+            post(admin::user_token_delete),
+        )
+        .route(
+            "/api/admin/user_token/batchDelete",
+            post(admin::user_token_batch_delete),
+        )
         // address book
-        .route("/api/admin/address_book/list", get(admin::address_book_list))
-        .route("/api/admin/address_book/detail/:id", get(admin::address_book_detail))
-        .route("/api/admin/address_book/create", post(admin::address_book_create))
-        .route("/api/admin/address_book/update", post(admin::address_book_update))
-        .route("/api/admin/address_book/delete", post(admin::address_book_delete))
-        .route("/api/admin/address_book/batchCreate", post(admin::address_book_batch_create))
+        .route(
+            "/api/admin/address_book/list",
+            get(admin::address_book_list),
+        )
+        .route(
+            "/api/admin/address_book/detail/:id",
+            get(admin::address_book_detail),
+        )
+        .route(
+            "/api/admin/address_book/create",
+            post(admin::address_book_create),
+        )
+        .route(
+            "/api/admin/address_book/update",
+            post(admin::address_book_update),
+        )
+        .route(
+            "/api/admin/address_book/delete",
+            post(admin::address_book_delete),
+        )
+        .route(
+            "/api/admin/address_book/batchCreate",
+            post(admin::address_book_batch_create),
+        )
         .route(
             "/api/admin/address_book/batchCreateFromPeers",
             post(admin::address_book_batch_create_from_peers),
         )
-        .route("/api/admin/address_book/shareByWebClient", post(admin::address_book_share))
+        .route(
+            "/api/admin/address_book/shareByWebClient",
+            post(admin::address_book_share),
+        )
         // address book collections
-        .route("/api/admin/address_book_collection/list", get(admin::collection_list))
-        .route("/api/admin/address_book_collection/detail/:id", get(admin::collection_detail))
-        .route("/api/admin/address_book_collection/create", post(admin::collection_create))
-        .route("/api/admin/address_book_collection/update", post(admin::collection_update))
-        .route("/api/admin/address_book_collection/delete", post(admin::collection_delete))
+        .route(
+            "/api/admin/address_book_collection/list",
+            get(admin::collection_list),
+        )
+        .route(
+            "/api/admin/address_book_collection/detail/:id",
+            get(admin::collection_detail),
+        )
+        .route(
+            "/api/admin/address_book_collection/create",
+            post(admin::collection_create),
+        )
+        .route(
+            "/api/admin/address_book_collection/update",
+            post(admin::collection_update),
+        )
+        .route(
+            "/api/admin/address_book_collection/delete",
+            post(admin::collection_delete),
+        )
         // address book collection rules
-        .route("/api/admin/address_book_collection_rule/list", get(admin::rule_list))
-        .route("/api/admin/address_book_collection_rule/detail/:id", get(admin::rule_detail))
-        .route("/api/admin/address_book_collection_rule/create", post(admin::rule_create))
-        .route("/api/admin/address_book_collection_rule/update", post(admin::rule_update))
-        .route("/api/admin/address_book_collection_rule/delete", post(admin::rule_delete))
+        .route(
+            "/api/admin/address_book_collection_rule/list",
+            get(admin::rule_list),
+        )
+        .route(
+            "/api/admin/address_book_collection_rule/detail/:id",
+            get(admin::rule_detail),
+        )
+        .route(
+            "/api/admin/address_book_collection_rule/create",
+            post(admin::rule_create),
+        )
+        .route(
+            "/api/admin/address_book_collection_rule/update",
+            post(admin::rule_update),
+        )
+        .route(
+            "/api/admin/address_book_collection_rule/delete",
+            post(admin::rule_delete),
+        )
         // rustdesk server commands
         .route("/api/admin/rustdesk/status", get(admin::rustdesk_status))
         .route(
@@ -224,43 +362,109 @@ fn admin_routes() -> Router<AppState> {
             "/api/admin/rustdesk/alwaysUseRelay",
             patch(admin::rustdesk_update_always_use_relay),
         )
-        .route("/api/admin/rustdesk/ipBlocker", get(admin::rustdesk_ip_blocker))
+        .route(
+            "/api/admin/rustdesk/ipBlocker",
+            get(admin::rustdesk_ip_blocker),
+        )
         .route("/api/admin/rustdesk/cmdList", get(admin::rustdesk_cmd_list))
-        .route("/api/admin/rustdesk/cmdCreate", post(admin::rustdesk_cmd_create))
-        .route("/api/admin/rustdesk/cmdUpdate", post(admin::rustdesk_cmd_update))
-        .route("/api/admin/rustdesk/cmdDelete", post(admin::rustdesk_cmd_delete))
-        .route("/api/admin/rustdesk/sendCmd", post(admin::rustdesk_send_cmd))
+        .route(
+            "/api/admin/rustdesk/cmdCreate",
+            post(admin::rustdesk_cmd_create),
+        )
+        .route(
+            "/api/admin/rustdesk/cmdUpdate",
+            post(admin::rustdesk_cmd_update),
+        )
+        .route(
+            "/api/admin/rustdesk/cmdDelete",
+            post(admin::rustdesk_cmd_delete),
+        )
+        .route(
+            "/api/admin/rustdesk/sendCmd",
+            post(admin::rustdesk_send_cmd),
+        )
         // file upload (local + OSS)
         .route("/api/admin/file/upload", post(file::upload))
         .route("/api/admin/file/oss_token", get(file::oss_token))
         .route("/api/admin/file/notify", post(file::notify))
         // my/*
-        .route("/api/admin/my/share_record/list", get(my::share_record_list))
-        .route("/api/admin/my/share_record/delete", post(my::share_record_delete))
-        .route("/api/admin/my/share_record/batchDelete", post(my::share_record_batch_delete))
-        .route("/api/admin/my/address_book/list", get(my::address_book_list))
-        .route("/api/admin/my/address_book/create", post(my::address_book_create))
-        .route("/api/admin/my/address_book/update", post(my::address_book_update))
-        .route("/api/admin/my/address_book/delete", post(my::address_book_delete))
+        .route(
+            "/api/admin/my/share_record/list",
+            get(my::share_record_list),
+        )
+        .route(
+            "/api/admin/my/share_record/delete",
+            post(my::share_record_delete),
+        )
+        .route(
+            "/api/admin/my/share_record/batchDelete",
+            post(my::share_record_batch_delete),
+        )
+        .route(
+            "/api/admin/my/address_book/list",
+            get(my::address_book_list),
+        )
+        .route(
+            "/api/admin/my/address_book/create",
+            post(my::address_book_create),
+        )
+        .route(
+            "/api/admin/my/address_book/update",
+            post(my::address_book_update),
+        )
+        .route(
+            "/api/admin/my/address_book/delete",
+            post(my::address_book_delete),
+        )
         .route(
             "/api/admin/my/address_book/batchCreateFromPeers",
             post(my::address_book_batch_create_from_peers),
         )
-        .route("/api/admin/my/address_book/batchUpdateTags", post(my::address_book_batch_update_tags))
+        .route(
+            "/api/admin/my/address_book/batchUpdateTags",
+            post(my::address_book_batch_update_tags),
+        )
         .route("/api/admin/my/tag/list", get(my::tag_list))
         .route("/api/admin/my/tag/create", post(my::tag_create))
         .route("/api/admin/my/tag/update", post(my::tag_update))
         .route("/api/admin/my/tag/delete", post(my::tag_delete))
-        .route("/api/admin/my/address_book_collection/list", get(my::collection_list))
-        .route("/api/admin/my/address_book_collection/create", post(my::collection_create))
-        .route("/api/admin/my/address_book_collection/update", post(my::collection_update))
-        .route("/api/admin/my/address_book_collection/delete", post(my::collection_delete))
-        .route("/api/admin/my/address_book_collection_rule/list", get(my::rule_list))
-        .route("/api/admin/my/address_book_collection_rule/create", post(my::rule_create))
-        .route("/api/admin/my/address_book_collection_rule/update", post(my::rule_update))
-        .route("/api/admin/my/address_book_collection_rule/delete", post(my::rule_delete))
+        .route(
+            "/api/admin/my/address_book_collection/list",
+            get(my::collection_list),
+        )
+        .route(
+            "/api/admin/my/address_book_collection/create",
+            post(my::collection_create),
+        )
+        .route(
+            "/api/admin/my/address_book_collection/update",
+            post(my::collection_update),
+        )
+        .route(
+            "/api/admin/my/address_book_collection/delete",
+            post(my::collection_delete),
+        )
+        .route(
+            "/api/admin/my/address_book_collection_rule/list",
+            get(my::rule_list),
+        )
+        .route(
+            "/api/admin/my/address_book_collection_rule/create",
+            post(my::rule_create),
+        )
+        .route(
+            "/api/admin/my/address_book_collection_rule/update",
+            post(my::rule_update),
+        )
+        .route(
+            "/api/admin/my/address_book_collection_rule/delete",
+            post(my::rule_delete),
+        )
         .route("/api/admin/my/peer/list", get(my::peer_list))
         .route("/api/admin/my/login_log/list", get(my::login_log_list))
         .route("/api/admin/my/login_log/delete", post(my::login_log_delete))
-        .route("/api/admin/my/login_log/batchDelete", post(my::login_log_batch_delete))
+        .route(
+            "/api/admin/my/login_log/batchDelete",
+            post(my::login_log_batch_delete),
+        )
 }

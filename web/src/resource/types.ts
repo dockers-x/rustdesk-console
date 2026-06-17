@@ -36,6 +36,10 @@ export interface ColumnDef<T = Record<string, unknown>> {
   render?: (row: T, t: (k: string) => string) => ReactNode;
 }
 
+export interface RowActionHelpers<T = Record<string, unknown>> {
+  openDelete: (row: T) => void;
+}
+
 export interface FilterDef {
   name: string; // query-param name
   label: string; // i18n key (placeholder)
@@ -55,6 +59,11 @@ export interface ResourceConfig<T = Record<string, unknown>> {
   columns: ColumnDef<T>[];
   fields: FieldDef[];
   filters?: FilterDef[];
+  rowActions?: (
+    row: T,
+    t: (key: string) => string,
+    helpers: RowActionHelpers<T>,
+  ) => ReactNode;
   canCreate?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;

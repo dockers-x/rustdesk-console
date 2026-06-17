@@ -18,6 +18,10 @@ pub struct WebClientConfig {
     #[serde(default, deserialize_with = "deserialize_string_like")]
     pub ws_host: String,
     #[serde(default, deserialize_with = "deserialize_string_like")]
+    pub ws_id_host: String,
+    #[serde(default, deserialize_with = "deserialize_string_like")]
+    pub ws_relay_host: String,
+    #[serde(default, deserialize_with = "deserialize_string_like")]
     pub key: String,
 }
 
@@ -28,6 +32,8 @@ impl From<&Rustdesk> for WebClientConfig {
             relay_server: value.relay_server.clone(),
             api_server: value.api_server.clone(),
             ws_host: value.ws_host.clone(),
+            ws_id_host: value.ws_id_host.clone(),
+            ws_relay_host: value.ws_relay_host.clone(),
             key: value.key.clone(),
         }
     }
@@ -54,6 +60,8 @@ impl WebClientConfig {
             relay_server: self.relay_server.trim().to_string(),
             api_server: self.api_server.trim().to_string(),
             ws_host: self.ws_host.trim().to_string(),
+            ws_id_host: self.ws_id_host.trim().to_string(),
+            ws_relay_host: self.ws_relay_host.trim().to_string(),
             key: self.key.trim().to_string(),
         }
     }
@@ -116,6 +124,8 @@ fn patch_rustdesk_section(raw: &str, cfg: &WebClientConfig) -> String {
         ("relay-server", cfg.relay_server.as_str()),
         ("api-server", cfg.api_server.as_str()),
         ("ws-host", cfg.ws_host.as_str()),
+        ("ws-id-host", cfg.ws_id_host.as_str()),
+        ("ws-relay-host", cfg.ws_relay_host.as_str()),
         ("key", cfg.key.as_str()),
     ];
 
@@ -268,6 +278,8 @@ logger:
                 relay_server: "relay.example:21117".to_string(),
                 api_server: "https://api.example".to_string(),
                 ws_host: "https://ws.example".to_string(),
+                ws_id_host: "wss://ws.example:21118".to_string(),
+                ws_relay_host: "wss://ws.example:21119".to_string(),
                 key: "abc\"def".to_string(),
             },
         );
@@ -275,6 +287,8 @@ logger:
         assert!(out.contains("  relay-server: \"relay.example:21117\" # keep"));
         assert!(out.contains("  api-server: \"https://api.example\""));
         assert!(out.contains("  ws-host: \"https://ws.example\""));
+        assert!(out.contains("  ws-id-host: \"wss://ws.example:21118\""));
+        assert!(out.contains("  ws-relay-host: \"wss://ws.example:21119\""));
         assert!(out.contains("  key: \"abc\\\"def\""));
         assert!(out.contains("logger:\n  level: \"info\""));
     }
@@ -289,11 +303,15 @@ logger:
                 relay_server: "relay".to_string(),
                 api_server: "api".to_string(),
                 ws_host: "ws".to_string(),
+                ws_id_host: "ws-id".to_string(),
+                ws_relay_host: "ws-relay".to_string(),
                 key: "key".to_string(),
             },
         );
         assert!(out.contains("  key-file: \"pub\"\n  id-server: \"id\""));
         assert!(out.contains("  ws-host: \"ws\""));
+        assert!(out.contains("  ws-id-host: \"ws-id\""));
+        assert!(out.contains("  ws-relay-host: \"ws-relay\""));
         assert!(out.ends_with('\n'));
     }
 
@@ -305,6 +323,8 @@ logger:
                 "relay_server": true,
                 "api_server": "https://api.example",
                 "ws_host": "https://ws.example",
+                "ws_id_host": 21118,
+                "ws_relay_host": "wss://ws.example:21119",
                 "key": null
             }"#,
         )
@@ -313,6 +333,8 @@ logger:
         assert_eq!(cfg.relay_server, "true");
         assert_eq!(cfg.api_server, "https://api.example");
         assert_eq!(cfg.ws_host, "https://ws.example");
+        assert_eq!(cfg.ws_id_host, "21118");
+        assert_eq!(cfg.ws_relay_host, "wss://ws.example:21119");
         assert_eq!(cfg.key, "");
     }
 }

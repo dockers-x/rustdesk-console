@@ -7,21 +7,43 @@ import { Radio } from "@cloudflare/kumo/components/radio";
 import { cn } from "@cloudflare/kumo/utils";
 import {
   CloudArrowUp,
+  CopySimple,
   GlobeHemisphereWest,
   Key,
   PlugsConnected,
+  TerminalWindow,
 } from "@phosphor-icons/react";
 import { InlineMessage } from "../components/InlineMessage";
-import { apiGet, apiPatch, ApiError } from "../lib/api";
+import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 
 type SaveTarget = "local" | "server";
+type WsMode = "auto" | "proxy" | "custom";
 
 interface WebClientConfig {
   id_server: string;
   relay_server: string;
   api_server: string;
   ws_host: string;
+  ws_id_host: string;
+  ws_relay_host: string;
   key: string;
+}
+
+interface DeploymentCommandSet {
+  linux: string[];
+  macos: string[];
+  windows: string[];
+}
+
+interface DeploymentConfig {
+  encoded_config: string;
+  filename_hint: string;
+  config_command: DeploymentCommandSet;
+  option_commands: DeploymentCommandSet;
+  webclient_ws_routes: {
+    id: string;
+    relay: string;
+  };
 }
 
 const LOCAL_OVERRIDE_KEY = "rustdesk-console.webclient.local-override";
@@ -31,6 +53,8 @@ const STORAGE_KEYS: Record<keyof WebClientConfig, string> = {
   relay_server: "relay-server",
   api_server: "api-server",
   ws_host: "ws-host",
+  ws_id_host: "ws-id-host",
+  ws_relay_host: "ws-relay-host",
   key: "key",
 };
 
@@ -39,6 +63,8 @@ const emptyConfig: WebClientConfig = {
   relay_server: "",
   api_server: "",
   ws_host: "",
+  ws_id_host: "",
+  ws_relay_host: "",
   key: "",
 };
 
@@ -58,6 +84,8 @@ function normalizeConfig(
     relay_server: toConfigString(config.relay_server),
     api_server: toConfigString(config.api_server),
     ws_host: toConfigString(config.ws_host),
+    ws_id_host: toConfigString(config.ws_id_host),
+    ws_relay_host: toConfigString(config.ws_relay_host),
     key: toConfigString(config.key),
   };
 }
@@ -76,6 +104,11 @@ function readLocalConfig(server: WebClientConfig): WebClientConfig {
     api_server:
       localStorage.getItem(STORAGE_KEYS.api_server) ?? normalized.api_server,
     ws_host: localStorage.getItem(STORAGE_KEYS.ws_host) ?? normalized.ws_host,
+    ws_id_host:
+      localStorage.getItem(STORAGE_KEYS.ws_id_host) ?? normalized.ws_id_host,
+    ws_relay_host:
+      localStorage.getItem(STORAGE_KEYS.ws_relay_host) ??
+      normalized.ws_relay_host,
     key: localStorage.getItem(STORAGE_KEYS.key) ?? normalized.key,
   };
 }
@@ -100,11 +133,10 @@ function valueOrEmpty(value: string, emptyLabel: string) {
   return value ? value : emptyLabel;
 }
 
-function normalizeWsBase(value: string) {
-  let base = value.trim();
-  if (!base) return "";
-  base = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
-  return base.replace(/\/+$/, "");
+function detectWsMode(config: WebClientConfig): WsMode {
+  if (config.ws_id_host.trim() || config.ws_relay_host.trim()) return "custom";
+  if (config.ws_host.trim()) return "proxy";
+  return "auto";
 }
 
 export function WebClientSettingsPage() {
@@ -112,6 +144,8 @@ export function WebClientSettingsPage() {
   const qc = useQueryClient();
   const [saveTarget, setSaveTarget] = useState<SaveTarget>("local");
   const [form, setForm] = useState<WebClientConfig>(emptyConfig);
+  const [formReady, setFormReady] = useState(false);
+  const [wsMode, setWsMode] = useState<WsMode>("auto");
   const [localActive, setLocalActive] = useState(false);
   const [message, setMessage] = useState("");
   const [localError, setLocalError] = useState("");
@@ -121,13 +155,23 @@ export function WebClientSettingsPage() {
     queryFn: () => apiGet<WebClientConfig>("/api/admin/config/server"),
   });
 
+  const deploymentPreview = useQuery({
+    queryKey: ["webclient-deployment-preview", form],
+    queryFn: () =>
+      apiPost<DeploymentConfig>("/api/admin/config/deployment", form),
+    enabled: formReady,
+  });
+
   useEffect(() => {
     if (!serverConfig.data) return;
     const normalized = normalizeConfig(serverConfig.data);
     const active = hasLocalOverride();
+    const nextForm = active ? readLocalConfig(normalized) : normalized;
     setLocalActive(active);
     setSaveTarget(active ? "local" : "server");
-    setForm(active ? readLocalConfig(normalized) : normalized);
+    setForm(nextForm);
+    setWsMode(detectWsMode(nextForm));
+    setFormReady(true);
   }, [serverConfig.data]);
 
   const saveServer = useMutation({
@@ -137,6 +181,7 @@ export function WebClientSettingsPage() {
       const normalized = normalizeConfig(saved);
       writeWebClientOptions(normalized, false);
       setForm(normalized);
+      setWsMode(detectWsMode(normalized));
       setLocalActive(false);
       setMessage(t("serverConfigSaved"));
       void qc.invalidateQueries({ queryKey: ["webclient-server-config"] });
@@ -171,6 +216,7 @@ export function WebClientSettingsPage() {
     const normalized = normalizeConfig(serverConfig.data);
     writeWebClientOptions(normalized, false);
     setForm(normalized);
+    setWsMode(detectWsMode(normalized));
     setSaveTarget("server");
     setLocalActive(false);
     setMessage(t("localOverrideCleared"));
@@ -195,10 +241,13 @@ export function WebClientSettingsPage() {
         </div>
         <Button
           variant="secondary"
-          loading={serverConfig.isFetching}
-          onClick={() =>
-            void qc.invalidateQueries({ queryKey: ["webclient-server-config"] })
-          }
+          loading={serverConfig.isFetching || deploymentPreview.isFetching}
+          onClick={() => {
+            void qc.invalidateQueries({ queryKey: ["webclient-server-config"] });
+            void qc.invalidateQueries({
+              queryKey: ["webclient-deployment-preview"],
+            });
+          }}
         >
           {t("refresh")}
         </Button>
@@ -214,7 +263,7 @@ export function WebClientSettingsPage() {
             title={t("connectionEndpoints")}
             description={t("connectionEndpointsHint")}
           >
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-3">
               <ConfigField
                 label={t("apiServer")}
                 storageKey={STORAGE_KEYS.api_server}
@@ -236,15 +285,21 @@ export function WebClientSettingsPage() {
                 onChange={(value) => updateField("relay_server", value)}
                 placeholder="relay.example.com:21117"
               />
-              <ConfigField
-                label={t("wsHost")}
-                storageKey={STORAGE_KEYS.ws_host}
-                value={form.ws_host}
-                onChange={(value) => updateField("ws_host", value)}
-                placeholder="https://rd.example.com"
-                helper={t("wsHostHint")}
-              />
             </div>
+          </FormSection>
+
+          <FormSection
+            icon={<GlobeHemisphereWest size={18} />}
+            title={t("webSocketRoutes")}
+            description={t("webSocketRoutesHint")}
+          >
+            <WebSocketRouteEditor
+              config={form}
+              mode={wsMode}
+              setMode={setWsMode}
+              updateField={updateField}
+              routes={deploymentPreview.data?.webclient_ws_routes}
+            />
           </FormSection>
 
           <FormSection
@@ -369,9 +424,15 @@ export function WebClientSettingsPage() {
             emptyLabel={t("emptyValue")}
           />
 
-          <WebSocketPreview
-            config={effectiveConfig ?? form}
-            emptyLabel={t("emptyValue")}
+          <DeploymentPreview
+            deployment={deploymentPreview.data}
+            loading={
+              serverConfig.isLoading ||
+              !formReady ||
+              (deploymentPreview.isPending &&
+                deploymentPreview.fetchStatus !== "idle")
+            }
+            error={deploymentPreview.error as Error | null}
           />
         </aside>
       </div>
@@ -472,6 +533,14 @@ function ConfigSummary({
           value={valueOrEmpty(config.ws_host, emptyLabel)}
         />
         <SummaryRow
+          label={t("wsIdHost")}
+          value={valueOrEmpty(config.ws_id_host, emptyLabel)}
+        />
+        <SummaryRow
+          label={t("wsRelayHost")}
+          value={valueOrEmpty(config.ws_relay_host, emptyLabel)}
+        />
+        <SummaryRow
           label={t("publicKey")}
           value={valueOrEmpty(config.key, emptyLabel)}
           muted={Boolean(config.key)}
@@ -481,36 +550,249 @@ function ConfigSummary({
   );
 }
 
-function WebSocketPreview({
+function WebSocketRouteEditor({
   config,
-  emptyLabel,
+  mode,
+  setMode,
+  updateField,
+  routes,
 }: {
   config: WebClientConfig;
-  emptyLabel: string;
+  mode: WsMode;
+  setMode: (mode: WsMode) => void;
+  updateField: (field: keyof WebClientConfig, value: string) => void;
+  routes?: DeploymentConfig["webclient_ws_routes"];
 }) {
   const { t } = useTranslation();
-  const base = normalizeWsBase(config.ws_host);
+  const changeMode = (next: WsMode) => {
+    setMode(next);
+    if (next === "auto") {
+      updateField("ws_host", "");
+      updateField("ws_id_host", "");
+      updateField("ws_relay_host", "");
+      return;
+    }
+    if (next === "proxy") {
+      updateField("ws_id_host", "");
+      updateField("ws_relay_host", "");
+      return;
+    }
+    updateField("ws_host", "");
+  };
+  return (
+    <div className="grid gap-4">
+      <Radio.Group
+        legend={t("webSocketMode")}
+        appearance="card"
+        value={mode}
+        onValueChange={(value) => changeMode(value as WsMode)}
+        className="grid gap-3 lg:grid-cols-3"
+      >
+        <Radio.Item
+          value="auto"
+          label={t("webSocketModeAuto")}
+          description={t("webSocketModeAutoHint")}
+        />
+        <Radio.Item
+          value="proxy"
+          label={t("webSocketModeProxy")}
+          description={t("webSocketModeProxyHint")}
+        />
+        <Radio.Item
+          value="custom"
+          label={t("webSocketModeCustom")}
+          description={t("webSocketModeCustomHint")}
+        />
+      </Radio.Group>
+
+      {mode === "proxy" && (
+        <ConfigField
+          label={t("wsHost")}
+          storageKey={STORAGE_KEYS.ws_host}
+          value={config.ws_host}
+          onChange={(value) => updateField("ws_host", value)}
+          placeholder="https://rd.example.com"
+          helper={t("wsHostHint")}
+        />
+      )}
+
+      {mode === "custom" && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <ConfigField
+            label={t("wsIdHost")}
+            storageKey={STORAGE_KEYS.ws_id_host}
+            value={config.ws_id_host}
+            onChange={(value) => updateField("ws_id_host", value)}
+            placeholder="wss://rd.example.com:21118"
+            helper={t("wsIdHostHint")}
+          />
+          <ConfigField
+            label={t("wsRelayHost")}
+            storageKey={STORAGE_KEYS.ws_relay_host}
+            value={config.ws_relay_host}
+            onChange={(value) => updateField("ws_relay_host", value)}
+            placeholder="wss://rd.example.com:21119"
+            helper={t("wsRelayHostHint")}
+          />
+        </div>
+      )}
+
+      <div className="grid gap-4 rounded-md border border-kumo-line bg-kumo-base p-4 lg:grid-cols-2">
+        <ReadonlyField
+          label={t("idWebSocket")}
+          value={routes?.id || t("derivedWebSocketRoutes")}
+        />
+        <ReadonlyField
+          label={t("relayWebSocket")}
+          value={routes?.relay || t("derivedWebSocketRoutes")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ReadonlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium text-kumo-subtle">
+        {label}
+      </span>
+      <Input
+        aria-label={label}
+        value={value}
+        readOnly
+        className="font-mono text-sm"
+        spellCheck={false}
+      />
+    </label>
+  );
+}
+
+function DeploymentPreview({
+  deployment,
+  loading,
+  error,
+}: {
+  deployment?: DeploymentConfig;
+  loading: boolean;
+  error?: Error | null;
+}) {
+  const { t } = useTranslation();
   return (
     <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
-      <h2 className="text-base font-semibold">{t("webSocketRoutes")}</h2>
-      <p className="mt-1 text-sm leading-6 text-kumo-subtle">
-        {t("webSocketRoutesHint")}
-      </p>
-      <dl className="mt-4 grid gap-3 text-sm">
-        <SummaryRow
-          label={t("idWebSocket")}
-          value={base ? `${base}/ws/id` : t("derivedWebSocketRoutes")}
-        />
-        <SummaryRow
-          label={t("relayWebSocket")}
-          value={base ? `${base}/ws/relay` : t("derivedWebSocketRoutes")}
-        />
-        <SummaryRow
-          label={t("wsHost")}
-          value={valueOrEmpty(config.ws_host, emptyLabel)}
-        />
-      </dl>
+      <div className="flex items-start gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
+          <TerminalWindow size={18} />
+        </div>
+        <div>
+          <h2 className="text-base font-semibold">{t("rustDeskDeployment")}</h2>
+          <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+            {t("rustDeskDeploymentHint")}
+          </p>
+        </div>
+      </div>
+      {loading && !deployment && (
+        <p
+          role="status"
+          className="mt-4 rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm text-kumo-subtle"
+        >
+          {t("loading")}
+        </p>
+      )}
+      {error && (
+        <InlineMessage tone="error" className="mt-4">
+          {error.message || t("operationFailed")}
+        </InlineMessage>
+      )}
+      {!loading && !deployment && !error && (
+        <p
+          role="status"
+          className="mt-4 rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm text-kumo-subtle"
+        >
+          {t("emptyValue")}
+        </p>
+      )}
+      {deployment && (
+        <div className="mt-4 grid gap-3">
+          <CopyField
+            label={t("idWebSocket")}
+            value={deployment.webclient_ws_routes.id}
+          />
+          <CopyField
+            label={t("relayWebSocket")}
+            value={deployment.webclient_ws_routes.relay}
+          />
+          <CopyField
+            label={t("encodedConfig")}
+            value={deployment.encoded_config}
+          />
+          <CopyField
+            label={t("filenameHint")}
+            value={deployment.filename_hint}
+          />
+          <CommandBlock
+            title={t("configCommand")}
+            commands={deployment.config_command}
+          />
+          <CommandBlock
+            title={t("optionCommands")}
+            commands={deployment.option_commands}
+          />
+        </div>
+      )}
     </section>
+  );
+}
+
+function CommandBlock({
+  title,
+  commands,
+}: {
+  title: string;
+  commands: DeploymentCommandSet;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="grid gap-2">
+      <p className="text-xs font-medium text-kumo-subtle">{title}</p>
+      <CopyField label={t("linux")} value={commands.linux.join("\n")} />
+      <CopyField label={t("macos")} value={commands.macos.join("\n")} />
+      <CopyField label={t("windows")} value={commands.windows.join("\n")} />
+    </div>
+  );
+}
+
+function CopyField({ label, value }: { label: string; value: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const display = value || t("emptyValue");
+  const copy = async () => {
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <div className="rounded-md border border-kumo-line bg-kumo-base p-2.5">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="min-w-0 break-all text-xs font-medium text-kumo-subtle">
+          {label}
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={copy}
+          disabled={!value}
+        >
+          <CopySimple size={14} />
+          {copied ? t("copied") : t("copy")}
+        </Button>
+      </div>
+      <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-kumo-default">
+        {display}
+      </pre>
+    </div>
   );
 }
 

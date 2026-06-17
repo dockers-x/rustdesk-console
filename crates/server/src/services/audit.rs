@@ -113,6 +113,42 @@ pub async fn record_conn_event(db: &DatabaseConnection, body: &JsonValue) -> Res
     Ok(())
 }
 
+pub async fn active_conn_guid(
+    db: &DatabaseConnection,
+    peer_id: &str,
+    session_id: &str,
+    conn_type: Option<i32>,
+) -> Result<Option<String>, DbErr> {
+    let mut query = audit_conn::Entity::find()
+        .filter(audit_conn::Column::PeerId.eq(peer_id))
+        .filter(audit_conn::Column::SessionId.eq(session_id));
+    if let Some(conn_type) = conn_type {
+        query = query.filter(audit_conn::Column::Type.eq(conn_type));
+    }
+    let row = query.order_by_desc(audit_conn::Column::Id).one(db).await?;
+    Ok(row.map(|row| row.id.to_string()))
+}
+
+pub async fn update_conn_note_by_guid(
+    db: &DatabaseConnection,
+    guid: &str,
+    note: &str,
+) -> Result<(), DbErr> {
+    if let Ok(id) = guid.parse::<i32>() {
+        audit_conn::Entity::update_many()
+            .col_expr(audit_conn::Column::Note, Expr::value(note.to_string()))
+            .col_expr(
+                audit_conn::Column::UpdatedAt,
+                Expr::value(crate::services::now().unwrap()),
+            )
+            .filter(audit_conn::Column::Id.eq(id))
+            .exec(db)
+            .await?;
+        return Ok(());
+    }
+    update_conn_note(db, guid, note).await
+}
+
 async fn insert_conn_event(db: &DatabaseConnection, event: &ConnEvent) -> Result<(), DbErr> {
     let now = crate::services::now();
     let am = audit_conn::ActiveModel {
@@ -401,6 +437,36 @@ mod tests {
         let row = only_conn_row(&db).await;
         assert_eq!(row.action, "close");
         assert!(row.close_time > 0);
+    }
+
+    #[tokio::test]
+    async fn active_conn_guid_can_update_note_by_guid() {
+        let db = setup_audit_db().await;
+
+        record_conn_event(
+            &db,
+            &json!({
+                "action": "new",
+                "conn_id": 762,
+                "id": "182921366",
+                "session_id": "17409556129324805845",
+                "type": 0,
+                "uuid": "u-1"
+            }),
+        )
+        .await
+        .unwrap();
+
+        let guid = active_conn_guid(&db, "182921366", "17409556129324805845", Some(0))
+            .await
+            .unwrap()
+            .unwrap();
+        update_conn_note_by_guid(&db, &guid, "operator note")
+            .await
+            .unwrap();
+
+        let row = only_conn_row(&db).await;
+        assert_eq!(row.note, "operator note");
     }
 
     #[test]

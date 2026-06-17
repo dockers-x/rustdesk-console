@@ -24,27 +24,53 @@ struct LdapUser {
 
 impl LdapUser {
     fn name(&self) -> String {
-        format!("{} {}", self.first_name, self.last_name).trim().to_string()
+        format!("{} {}", self.first_name, self.last_name)
+            .trim()
+            .to_string()
     }
 }
 
 fn field_username(c: &Ldap) -> String {
-    if c.user.username.is_empty() { "uid".into() } else { c.user.username.clone() }
+    if c.user.username.is_empty() {
+        "uid".into()
+    } else {
+        c.user.username.clone()
+    }
 }
 fn field_email(c: &Ldap) -> String {
-    if c.user.email.is_empty() { "mail".into() } else { c.user.email.clone() }
+    if c.user.email.is_empty() {
+        "mail".into()
+    } else {
+        c.user.email.clone()
+    }
 }
 fn field_first(c: &Ldap) -> String {
-    if c.user.first_name.is_empty() { "givenName".into() } else { c.user.first_name.clone() }
+    if c.user.first_name.is_empty() {
+        "givenName".into()
+    } else {
+        c.user.first_name.clone()
+    }
 }
 fn field_last(c: &Ldap) -> String {
-    if c.user.last_name.is_empty() { "sn".into() } else { c.user.last_name.clone() }
+    if c.user.last_name.is_empty() {
+        "sn".into()
+    } else {
+        c.user.last_name.clone()
+    }
 }
 fn field_enable(c: &Ldap) -> String {
-    if c.user.enable_attr.is_empty() { "userAccountControl".into() } else { c.user.enable_attr.clone() }
+    if c.user.enable_attr.is_empty() {
+        "userAccountControl".into()
+    } else {
+        c.user.enable_attr.clone()
+    }
 }
 fn base_dn_user(c: &Ldap) -> String {
-    if c.user.base_dn.is_empty() { c.base_dn.clone() } else { c.user.base_dn.clone() }
+    if c.user.base_dn.is_empty() {
+        c.base_dn.clone()
+    } else {
+        c.user.base_dn.clone()
+    }
 }
 
 async fn connect(cfg: &Ldap) -> Result<ldap3::Ldap, String> {
@@ -69,9 +95,18 @@ async fn connect_bind(cfg: &Ldap, dn: &str, pw: &str) -> Result<ldap3::Ldap, Str
 async fn search_user(cfg: &Ldap, username: &str) -> Result<Option<LdapUser>, String> {
     let mut ldap = connect_bind(cfg, &cfg.bind_dn, &cfg.bind_password).await?;
     let base = base_dn_user(cfg);
-    let filter_cfg = if cfg.user.filter.is_empty() { "(cn=*)".to_string() } else { cfg.user.filter.clone() };
+    let filter_cfg = if cfg.user.filter.is_empty() {
+        "(cn=*)".to_string()
+    } else {
+        cfg.user.filter.clone()
+    };
     let uattr = field_username(cfg);
-    let filter = format!("(&{}({}={}))", filter_cfg, uattr, ldap3::ldap_escape(username));
+    let filter = format!(
+        "(&{}({}={}))",
+        filter_cfg,
+        uattr,
+        ldap3::ldap_escape(username)
+    );
     let attrs = vec![
         uattr.clone(),
         field_email(cfg),
@@ -91,7 +126,12 @@ async fn search_user(cfg: &Ldap, username: &str) -> Result<Option<LdapUser>, Str
         return Ok(None);
     }
     let e = SearchEntry::construct(rs.into_iter().next().unwrap());
-    let get = |k: &str| e.attrs.get(k).and_then(|v| v.first().cloned()).unwrap_or_default();
+    let get = |k: &str| {
+        e.attrs
+            .get(k)
+            .and_then(|v| v.first().cloned())
+            .unwrap_or_default()
+    };
     let enable_val = get(&field_enable(cfg));
     let mut lu = LdapUser {
         dn: e.dn.clone(),
@@ -140,7 +180,10 @@ async fn reverse_member_search(cfg: &Ldap, user_dn: &str, group_dn: &str) -> boo
         return false;
     };
     let filter = format!("(member={})", ldap3::ldap_escape(user_dn));
-    let found = match ldap.search(group_dn, Scope::Subtree, &filter, vec!["dn"]).await {
+    let found = match ldap
+        .search(group_dn, Scope::Subtree, &filter, vec!["dn"])
+        .await
+    {
         Ok(r) => r.success().map(|(rs, _)| !rs.is_empty()).unwrap_or(false),
         Err(_) => false,
     };
@@ -194,7 +237,11 @@ async fn map_to_local_user(
         .one(db)
         .await
         .map_err(|e| e.to_string())?;
-    let status = if lu.enabled { user::STATUS_ENABLE } else { user::STATUS_DISABLED };
+    let status = if lu.enabled {
+        user::STATUS_ENABLE
+    } else {
+        user::STATUS_DISABLED
+    };
     match existing {
         None => {
             let am = user::ActiveModel {
@@ -208,7 +255,9 @@ async fn map_to_local_user(
                 updated_at: Set(now()),
                 ..Default::default()
             };
-            am.insert(db).await.map_err(|e| format!("LdapCreateUserFailed: {e}"))
+            am.insert(db)
+                .await
+                .map_err(|e| format!("LdapCreateUserFailed: {e}"))
         }
         Some(u) => {
             if cfg.user.sync {

@@ -32,6 +32,7 @@ import {
   User,
   Users,
   UsersThree,
+  VideoCamera,
 } from "@phosphor-icons/react";
 import { clearToken } from "../lib/auth";
 import { useAppTitle } from "../lib/adminTitle";
@@ -72,6 +73,7 @@ const NAV_ICONS: Record<string, IconType> = {
   activeConnections: PlugsConnected,
   auditConn: PlugsConnected,
   auditFile: FileText,
+  recordFiles: VideoCamera,
   serverCommands: Terminal,
   diagnostics: Pulse,
   webClientSettings: SlidersHorizontal,
