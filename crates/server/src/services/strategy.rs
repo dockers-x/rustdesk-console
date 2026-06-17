@@ -43,6 +43,13 @@ pub struct StrategyListResult {
     pub total: i64,
 }
 
+pub struct StrategyAssignmentListResult {
+    pub list: Vec<strategy_assignment::Model>,
+    pub page: i64,
+    pub page_size: i64,
+    pub total: i64,
+}
+
 pub async fn list(
     db: &DatabaseConnection,
     page: u64,
@@ -210,6 +217,47 @@ pub async fn assign(
     Ok(())
 }
 
+pub async fn list_assignments(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    target_type: Option<String>,
+) -> Result<StrategyAssignmentListResult, DbErr> {
+    let (page, page_size) = paginate(page, page_size);
+    let mut q = strategy_assignment::Entity::find();
+    if let Some(target_type) = target_type.filter(|v| !v.trim().is_empty()) {
+        q = q.filter(strategy_assignment::Column::TargetType.eq(target_type.trim()));
+    }
+    let total = q.clone().count(db).await? as i64;
+    let list = q
+        .order_by_asc(strategy_assignment::Column::Priority)
+        .order_by_desc(strategy_assignment::Column::Id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok(StrategyAssignmentListResult {
+        list,
+        page: page as i64,
+        page_size: page_size as i64,
+        total,
+    })
+}
+
+pub async fn assignment_by_id(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<strategy_assignment::Model>, DbErr> {
+    strategy_assignment::Entity::find_by_id(id).one(db).await
+}
+
+pub async fn delete_assignment(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    strategy_assignment::Entity::delete_by_id(id)
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn assign_peer_by_strategy_name(
     db: &DatabaseConnection,
     peer_id: &str,
@@ -339,5 +387,67 @@ mod tests {
     fn decodes_empty_maps() {
         assert!(decode_string_map("").unwrap().is_empty());
         assert!(decode_string_map("{}").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn effective_for_peer_uses_user_assignment() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(peer::Entity)),
+        )
+        .await
+        .unwrap();
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(strategy::Entity)),
+        )
+        .await
+        .unwrap();
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(strategy_assignment::Entity)),
+        )
+        .await
+        .unwrap();
+
+        let mut options = HashMap::new();
+        options.insert("enable-file-transfer".to_string(), "N".to_string());
+        let strategy = create(
+            &db,
+            "restricted",
+            "",
+            strategy::STATUS_ENABLE,
+            options,
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+        let peer = peer::ActiveModel {
+            id: Set("peer-1".to_string()),
+            user_id: Set(7),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        assign(
+            &db,
+            strategy.id,
+            strategy_assignment::TARGET_USER,
+            "7",
+            DEFAULT_PRIORITY,
+        )
+        .await
+        .unwrap();
+
+        let effective = effective_for_peer(&db, &peer).await.unwrap().unwrap();
+        assert_eq!(effective.id, strategy.id);
+        assert_eq!(
+            effective.config_options.get("enable-file-transfer"),
+            Some(&"N".to_string())
+        );
     }
 }

@@ -63,6 +63,7 @@ const NAV_ICONS: Record<string, IconType> = {
   deviceGroups: HardDrives,
   deploymentTokens: Ticket,
   strategies: SlidersHorizontal,
+  strategyAssignments: Rows,
   tags: Tag,
   devices: Monitor,
   oauth: Key,

@@ -343,7 +343,18 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                             value={form[field.name]}
                             form={form}
                             onChange={(v) =>
-                              setForm((s) => ({ ...s, [field.name]: v }))
+                              setForm((s) => {
+                                const next = { ...s, [field.name]: v };
+                                for (const resetName of field.resetFieldsOnChange ?? []) {
+                                  const resetField = cfg.fields.find(
+                                    (candidate) => candidate.name === resetName,
+                                  );
+                                  next[resetName] =
+                                    resetField?.defaultValue ??
+                                    (resetField?.type === "switch" ? false : "");
+                                }
+                                return next;
+                              })
                             }
                           />
                         </div>
@@ -631,7 +642,11 @@ function RelationInput({
         disabled={locked || isLoading || Boolean(error)}
         onChange={(e) => {
           const raw = e.target.value;
-          onChange(raw === "" ? 0 : Number(raw) || raw);
+          if (relation?.valueAsString) {
+            onChange(raw);
+          } else {
+            onChange(raw === "" ? 0 : Number(raw) || raw);
+          }
         }}
       >
         {(includeEmpty || selectedValue === "") && (

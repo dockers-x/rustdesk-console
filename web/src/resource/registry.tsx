@@ -88,6 +88,22 @@ const colorCol = {
     );
   },
 };
+const strategyTargetCol = {
+  key: "target_type",
+  label: "targetType",
+  render: (r: Record<string, unknown>, t: (k: string) => string) => {
+    switch (String(r.target_type ?? "")) {
+      case "peer":
+        return t("targetPeer");
+      case "user":
+        return t("targetUser");
+      case "device_group":
+        return t("targetDeviceGroup");
+      default:
+        return String(r.target_type ?? "") || "—";
+    }
+  },
+};
 const RULE_OPTIONS = [
   { label: "ruleRead", value: 1 },
   { label: "ruleReadWrite", value: 2 },
@@ -96,6 +112,11 @@ const RULE_OPTIONS = [
 const RULE_TYPE_OPTIONS = [
   { label: "rulePersonal", value: 1 },
   { label: "ruleGroup", value: 2 },
+];
+const STRATEGY_TARGET_OPTIONS = [
+  { label: "targetPeer", value: "peer" },
+  { label: "targetUser", value: "user" },
+  { label: "targetDeviceGroup", value: "device_group" },
 ];
 const USER_RELATION = {
   api: "/api/admin/user",
@@ -122,6 +143,10 @@ const oauthTypeIs =
   (...types: string[]) =>
   (form: Record<string, unknown>) =>
     types.includes(String(form.oauth_type ?? ""));
+const strategyTargetIs =
+  (...types: string[]) =>
+  (form: Record<string, unknown>) =>
+    types.includes(String(form.target_type ?? ""));
 
 export function resourcePath(r: ResourceConfig) {
   return r.path ?? `/${r.name}`;
@@ -307,6 +332,59 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         defaultValue: "{}",
         hint: "strategyExtraHint",
       },
+    ],
+  },
+  {
+    name: "strategy_assignments",
+    titleKey: "strategyAssignments",
+    api: "/api/admin/strategy_assignment",
+    columns: [
+      { key: "id", label: "id" },
+      { key: "strategy_id", label: "strategyId" },
+      strategyTargetCol,
+      monoCol("target_id", "targetId", "max-w-44"),
+      { key: "priority", label: "priority" },
+      { key: "created_at", label: "createdAt" },
+    ],
+    fields: [
+      {
+        name: "strategy_id",
+        label: "strategyId",
+        type: "relation",
+        relation: STRATEGY_RELATION,
+        defaultValue: 0,
+      },
+      {
+        name: "target_type",
+        label: "targetType",
+        type: "select",
+        defaultValue: "peer",
+        options: STRATEGY_TARGET_OPTIONS,
+        resetFieldsOnChange: ["target_id"],
+      },
+      {
+        name: "target_id",
+        label: "targetId",
+        type: "relation",
+        relation: {
+          api: (form) => {
+            switch (String(form.target_type ?? "peer")) {
+              case "user":
+                return "/api/admin/user";
+              case "device_group":
+                return "/api/admin/device_group";
+              default:
+                return "/api/admin/peer";
+            }
+          },
+          labelFields: ["hostname", "username", "name", "nickname", "id"],
+          valueAsString: true,
+          includeEmptyOption: false,
+        },
+        defaultValue: "",
+        visibleWhen: strategyTargetIs("peer", "user", "device_group"),
+      },
+      { name: "priority", label: "priority", type: "number", defaultValue: 100 },
     ],
   },
   {

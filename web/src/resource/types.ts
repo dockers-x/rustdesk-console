@@ -26,6 +26,7 @@ export interface RelationDef {
   params?: Record<string, unknown> | ((form: Record<string, unknown>) => Record<string, unknown>);
   includeEmptyOption?: boolean;
   emptyLabel?: string;
+  valueAsString?: boolean;
 }
 
 export interface FieldDef {
@@ -47,6 +48,8 @@ export interface FieldDef {
   switchOff?: unknown;
   /** Field used to derive the default RustDesk tag color. */
   colorSeedField?: string;
+  /** Fields reset to their default value when this field changes. */
+  resetFieldsOnChange?: string[];
 }
 
 export interface ColumnDef<T = Record<string, unknown>> {

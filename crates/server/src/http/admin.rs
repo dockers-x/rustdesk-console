@@ -875,13 +875,25 @@ pub struct StrategyForm {
 #[derive(Deserialize, Default)]
 pub struct StrategyAssignForm {
     #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
     pub strategy_id: i32,
     #[serde(default)]
     pub target_type: String,
     #[serde(default)]
-    pub target_id: String,
+    pub target_id: Value,
     #[serde(default)]
     pub priority: i32,
+}
+
+#[derive(Deserialize, Default)]
+pub struct StrategyAssignmentQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub target_type: Option<String>,
 }
 
 pub async fn strategy_list(
@@ -979,11 +991,12 @@ pub async fn strategy_assign(
     _user: AdminUser,
     Json(f): Json<StrategyAssignForm>,
 ) -> Response {
+    let target_id = value_as_string(f.target_id).unwrap_or_default();
     match services::strategy::assign(
         &state.db,
         f.strategy_id,
         &f.target_type,
-        &f.target_id,
+        &target_id,
         if f.priority == 0 {
             services::strategy::DEFAULT_PRIORITY
         } else {
@@ -992,6 +1005,71 @@ pub async fn strategy_assign(
     )
     .await
     {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn strategy_assignment_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<StrategyAssignmentQuery>,
+) -> Response {
+    match services::strategy::list_assignments(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.target_type,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn strategy_assignment_detail(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Path(id): Path<i32>,
+) -> Response {
+    match services::strategy::assignment_by_id(&state.db, id).await {
+        Ok(Some(row)) => resp::success(row),
+        _ => resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    }
+}
+
+pub async fn strategy_assignment_create(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: AdminUser,
+    Json(f): Json<StrategyAssignForm>,
+) -> Response {
+    strategy_assign(State(state), AcceptLang(lang), user, Json(f)).await
+}
+
+pub async fn strategy_assignment_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: AdminUser,
+    Json(f): Json<StrategyAssignForm>,
+) -> Response {
+    if f.id > 0 {
+        if let Err(e) = services::strategy::delete_assignment(&state.db, f.id).await {
+            return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+        }
+    }
+    strategy_assign(State(state), AcceptLang(lang), user, Json(f)).await
+}
+
+pub async fn strategy_assignment_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    match services::strategy::delete_assignment(&state.db, f.id).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
