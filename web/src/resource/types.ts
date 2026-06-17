@@ -20,6 +20,9 @@ export interface FieldDef {
   label: string; // i18n key
   type: FieldType;
   options?: SelectOption[];
+  hint?: string; // i18n key
+  placeholder?: string; // i18n key
+  visibleWhen?: (form: Record<string, unknown>, editing: boolean) => boolean;
   /** Only shown when creating (e.g. password). */
   createOnly?: boolean;
   /** Disabled when editing (e.g. username). */

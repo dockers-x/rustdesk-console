@@ -95,7 +95,10 @@ export function LoginPage() {
   const appTitle = useAppTitle();
   const navigate = useNavigate();
   const location = useLocation();
-  const locationState = location.state as { message?: string } | null;
+  const locationState = location.state as {
+    message?: string;
+    from?: string;
+  } | null;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [captcha, setCaptcha] = useState("");
@@ -124,12 +127,16 @@ export function LoginPage() {
     }
   };
 
+  const loginRedirectPath =
+    locationState?.from && locationState.from !== "/login"
+      ? locationState.from
+      : "";
+
   const finishLogin = (res: LoginResult, fallbackPath: string) => {
     const changeRequired = Boolean(res.must_change_password);
     setToken(res.token, changeRequired);
-    navigate(changeRequired ? "/change-password" : fallbackPath, {
-      replace: true,
-    });
+    const target = loginRedirectPath || fallbackPath;
+    navigate(changeRequired ? "/change-password" : target, { replace: true });
   };
 
   const queryOidc = async (code: string) => {

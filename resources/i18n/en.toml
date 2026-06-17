@@ -115,6 +115,86 @@ description = "Decode oauth user info error."
 one = "Decode oauth user info error."
 other = "Decode oauth user info error."
 
+[ProviderNotReady]
+description = "OAuth provider is not ready."
+one = "OAuth provider is not ready. Check client ID, client secret, issuer, and provider type."
+other = "OAuth provider is not ready. Check client ID, client secret, issuer, and provider type."
+
+[OAuthProviderEndpointMissing]
+description = "OAuth provider endpoint missing."
+one = "OAuth provider discovery is missing authorization, token, or userinfo endpoint."
+other = "OAuth provider discovery is missing authorization, token, or userinfo endpoint."
+
+[OAuthProviderJwksMissing]
+description = "OAuth provider JWKS missing."
+one = "OAuth provider discovery is missing JWKS URI."
+other = "OAuth provider discovery is missing JWKS URI."
+
+[OidcDiscoveryFailed]
+description = "OIDC discovery failed."
+one = "Failed to fetch OIDC discovery document."
+other = "Failed to fetch OIDC discovery document."
+
+[OidcDiscoveryParseFailed]
+description = "OIDC discovery parse failed."
+one = "Failed to parse OIDC discovery document."
+other = "Failed to parse OIDC discovery document."
+
+[OidcIdTokenInvalid]
+description = "OIDC ID token invalid."
+one = "OIDC ID token validation failed."
+other = "OIDC ID token validation failed."
+
+[OidcNonceMissing]
+description = "OIDC nonce missing."
+one = "OIDC ID token did not include nonce."
+other = "OIDC ID token did not include nonce."
+
+[OidcNonceMismatch]
+description = "OIDC nonce mismatch."
+one = "OIDC nonce mismatch."
+other = "OIDC nonce mismatch."
+
+[OidcSubjectMissing]
+description = "OIDC subject missing."
+one = "OIDC ID token did not include subject."
+other = "OIDC ID token did not include subject."
+
+[OidcSubjectMismatch]
+description = "OIDC subject mismatch."
+one = "OIDC userinfo subject does not match ID token subject."
+other = "OIDC userinfo subject does not match ID token subject."
+
+[OidcUnsupportedAlgorithm]
+description = "OIDC unsupported algorithm."
+one = "OIDC ID token uses an unsupported signing algorithm."
+other = "OIDC ID token uses an unsupported signing algorithm."
+
+[OidcSigningKeyNotFound]
+description = "OIDC signing key not found."
+one = "OIDC signing key was not found in JWKS."
+other = "OIDC signing key was not found in JWKS."
+
+[OidcSigningKeyInvalid]
+description = "OIDC signing key invalid."
+one = "OIDC signing key is invalid."
+other = "OIDC signing key is invalid."
+
+[OidcUnsupportedKeyType]
+description = "OIDC unsupported key type."
+one = "OIDC signing key type is unsupported."
+other = "OIDC signing key type is unsupported."
+
+[OidcJwksFetchFailed]
+description = "OIDC JWKS fetch failed."
+one = "Failed to fetch OIDC JWKS."
+other = "Failed to fetch OIDC JWKS."
+
+[OidcJwksParseFailed]
+description = "OIDC JWKS parse failed."
+one = "Failed to parse OIDC JWKS."
+other = "Failed to parse OIDC JWKS."
+
 [OldPasswordError]
 description = "Old password error."
 one = "Old password error."

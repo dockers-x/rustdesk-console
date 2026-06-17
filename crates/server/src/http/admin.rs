@@ -149,9 +149,12 @@ pub async fn login_options(
     if banned {
         return resp::fail(101, state.tr(&lang, "LoginBanned"));
     }
-    let ops: Vec<String> = services::oauth::get_oauth_providers(&state.db)
+    let ops: Vec<String> = services::oauth::get_login_providers(&state.db)
         .await
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider| provider.name)
+        .collect();
     resp::success(json!({
         "ops": ops,
         "register": state.config.app.register,
@@ -1083,11 +1086,26 @@ pub async fn oauth_delete(
     }
 }
 
+pub async fn oauth_test(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<OauthForm>,
+) -> Response {
+    let mut model = f.to_model();
+    if let Err(e) = services::oauth::format_oauth_info(&mut model) {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "ParamsError"), e));
+    }
+    match services::oauth::test_provider_config(&state.config, model).await {
+        Ok(result) => resp::success(result),
+        Err(e) => resp::fail(101, state.tr(&lang, &e)),
+    }
+}
+
 /// Replaces the earlier stub: real list of providers + bind status.
 pub async fn user_my_oauth_real(State(state): State<AppState>, user: BackendUser) -> Response {
-    let providers = services::oauth::list(&state.db, 1, 100)
+    let providers = services::oauth::get_login_providers(&state.db)
         .await
-        .map(|r| r.list)
         .unwrap_or_default();
     let thirds = services::oauth::user_thirds_by_user_id(&state.db, user.user.id)
         .await
@@ -1095,7 +1113,10 @@ pub async fn user_my_oauth_real(State(state): State<AppState>, user: BackendUser
     let bound: std::collections::HashSet<String> = thirds.into_iter().map(|t| t.op).collect();
     let res: Vec<Value> = providers
         .into_iter()
-        .map(|o| json!({ "op": o.op, "status": if bound.contains(&o.op) { 1 } else { 0 } }))
+        .map(|o| {
+            let op = o.name;
+            json!({ "op": op, "status": if bound.contains(&op) { 1 } else { 0 } })
+        })
         .collect();
     resp::success(res)
 }

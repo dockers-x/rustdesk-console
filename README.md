@@ -120,6 +120,7 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
 | `app.register` | `RUSTDESK_API_APP_REGISTER` |
 | `app.disable-pwd-login` | `RUSTDESK_API_APP_DISABLE_PWD_LOGIN` |
+| `app.web-sso` | `RUSTDESK_API_APP_WEB_SSO` |
 | `record-storage.type` | `RUSTDESK_API_RECORD_STORAGE_TYPE` (`local` / `s3` / `webdav`) |
 | `record-storage.local-dir` / `record-storage.temp-dir` | `RUSTDESK_API_RECORD_STORAGE_LOCAL_DIR` / `RUSTDESK_API_RECORD_STORAGE_TEMP_DIR` |
 | `record-storage.s3.endpoint` / `bucket` / `prefix` | `RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT` / `RUSTDESK_API_RECORD_STORAGE_S3_BUCKET` / `RUSTDESK_API_RECORD_STORAGE_S3_PREFIX` |
@@ -153,6 +154,32 @@ restart the service. The server extracts it into a temporary directory at startu
 serves `/webclient/` and `/webclient2/` from that directory first, and falls back to
 the embedded resources if the file is missing or invalid. The zip must contain a
 root `index.html`; it is not unpacked into the persistent `data` directory.
+
+## OAuth and OIDC
+
+RustDesk clients discover third-party login entries from `GET /api/login-options`.
+The server only exposes providers that are complete enough to start login:
+
+- GitHub, Google and LinuxDO require both `client_id` and `client_secret`.
+- Generic OIDC requires `client_id`, `client_secret` and `issuer`.
+- Web SSO is exposed as `webauth` when `app.web-sso` is enabled.
+
+The callback URL configured in the provider application must be:
+
+```text
+<rustdesk.api-server>/api/oidc/callback
+```
+
+For Google and generic OIDC, the server reads
+`<issuer>/.well-known/openid-configuration`, validates the ID Token signature via
+JWKS, and checks issuer, audience, subject and nonce before accepting the login.
+Automatic binding to an existing local user by email only happens when the
+provider returns a verified email address.
+
+The admin OAuth page includes a provider test action. It checks saved settings,
+discovery endpoints and the callback URL without starting a real user login.
+The embedded and external WebClient can also start the same RustDesk OAuth flow
+through the WebClient `account_auth` JavaScript bridge.
 
 ## Recording storage
 

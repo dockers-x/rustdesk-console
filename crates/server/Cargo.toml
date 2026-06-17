@@ -47,3 +47,6 @@ ldap3 = { workspace = true }
 urlencoding = { workspace = true }
 url = { workspace = true }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+rsa = "0.9.10"

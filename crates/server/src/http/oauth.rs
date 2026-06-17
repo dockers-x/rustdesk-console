@@ -182,6 +182,7 @@ pub async fn oauth_callback(
         &state.db,
         &q.code,
         &cache.verifier,
+        &cache.nonce,
         &cache.op,
     )
     .await

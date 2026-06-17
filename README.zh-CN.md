@@ -111,6 +111,7 @@ rustdesk-console reset-admin-pwd <新密码>
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
 | `app.register` | `RUSTDESK_API_APP_REGISTER` |
 | `app.disable-pwd-login` | `RUSTDESK_API_APP_DISABLE_PWD_LOGIN` |
+| `app.web-sso` | `RUSTDESK_API_APP_WEB_SSO` |
 | `record-storage.type` | `RUSTDESK_API_RECORD_STORAGE_TYPE`（`local` / `s3` / `webdav`） |
 | `record-storage.local-dir` / `record-storage.temp-dir` | `RUSTDESK_API_RECORD_STORAGE_LOCAL_DIR` / `RUSTDESK_API_RECORD_STORAGE_TEMP_DIR` |
 | `record-storage.s3.endpoint` / `bucket` / `prefix` | `RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT` / `RUSTDESK_API_RECORD_STORAGE_S3_BUCKET` / `RUSTDESK_API_RECORD_STORAGE_S3_PREFIX` |
@@ -141,6 +142,29 @@ rustdesk-console reset-admin-pwd <新密码>
 服务启动时会把它解压到临时目录，`/webclient/` 和 `/webclient2/` 会优先读取该目录；
 文件不存在或无效时自动回退到内置资源。zip 根目录必须包含 `index.html`，服务不会把它
 解压到持久化的 `data` 目录。
+
+## OAuth 与 OIDC
+
+RustDesk 客户端会通过 `GET /api/login-options` 获取第三方登录入口。服务端只会暴露
+配置完整、可以发起登录的提供商：
+
+- GitHub、Google、LinuxDO 需要同时配置 `client_id` 和 `client_secret`。
+- 通用 OIDC 需要配置 `client_id`、`client_secret` 和 `issuer`。
+- 开启 `app.web-sso` 后，会额外暴露 `webauth` 入口。
+
+OAuth 应用里配置的回调地址必须是：
+
+```text
+<rustdesk.api-server>/api/oidc/callback
+```
+
+Google 和通用 OIDC 登录会读取 `<issuer>/.well-known/openid-configuration`，
+通过 JWKS 校验 ID Token 签名，并验证 issuer、audience、subject 和 nonce 后才接受
+登录。按邮箱自动绑定已有本地用户时，要求提供商返回已验证邮箱。
+
+后台 OAuth 页面提供“测试”操作，可以检查已保存配置、发现端点和回调地址，不会发起真实
+用户登录。内置 WebClient 和外部 `web.zip` WebClient 也支持通过 WebClient 的
+`account_auth` JavaScript 桥接发起同一套 RustDesk OAuth 流程。
 
 ## 录像存储
 

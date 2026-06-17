@@ -116,6 +116,86 @@ description = "Decode oauth user info error."
 one = "解析授权用户信息失败。"
 other = "解析授权用户信息失败。"
 
+[ProviderNotReady]
+description = "OAuth provider is not ready."
+one = "OAuth 提供商未配置完成，请检查 Client ID、Client Secret、Issuer 和类型。"
+other = "OAuth 提供商未配置完成，请检查 Client ID、Client Secret、Issuer 和类型。"
+
+[OAuthProviderEndpointMissing]
+description = "OAuth provider endpoint missing."
+one = "OAuth 发现文档缺少授权、Token 或用户信息端点。"
+other = "OAuth 发现文档缺少授权、Token 或用户信息端点。"
+
+[OAuthProviderJwksMissing]
+description = "OAuth provider JWKS missing."
+one = "OAuth 发现文档缺少 JWKS 地址。"
+other = "OAuth 发现文档缺少 JWKS 地址。"
+
+[OidcDiscoveryFailed]
+description = "OIDC discovery failed."
+one = "获取 OIDC 发现文档失败。"
+other = "获取 OIDC 发现文档失败。"
+
+[OidcDiscoveryParseFailed]
+description = "OIDC discovery parse failed."
+one = "解析 OIDC 发现文档失败。"
+other = "解析 OIDC 发现文档失败。"
+
+[OidcIdTokenInvalid]
+description = "OIDC ID token invalid."
+one = "OIDC ID Token 验证失败。"
+other = "OIDC ID Token 验证失败。"
+
+[OidcNonceMissing]
+description = "OIDC nonce missing."
+one = "OIDC ID Token 缺少 nonce。"
+other = "OIDC ID Token 缺少 nonce。"
+
+[OidcNonceMismatch]
+description = "OIDC nonce mismatch."
+one = "OIDC nonce 不匹配。"
+other = "OIDC nonce 不匹配。"
+
+[OidcSubjectMissing]
+description = "OIDC subject missing."
+one = "OIDC ID Token 缺少用户标识。"
+other = "OIDC ID Token 缺少用户标识。"
+
+[OidcSubjectMismatch]
+description = "OIDC subject mismatch."
+one = "OIDC 用户信息中的标识与 ID Token 不一致。"
+other = "OIDC 用户信息中的标识与 ID Token 不一致。"
+
+[OidcUnsupportedAlgorithm]
+description = "OIDC unsupported algorithm."
+one = "OIDC ID Token 使用了不支持的签名算法。"
+other = "OIDC ID Token 使用了不支持的签名算法。"
+
+[OidcSigningKeyNotFound]
+description = "OIDC signing key not found."
+one = "没有在 JWKS 中找到 OIDC 签名密钥。"
+other = "没有在 JWKS 中找到 OIDC 签名密钥。"
+
+[OidcSigningKeyInvalid]
+description = "OIDC signing key invalid."
+one = "OIDC 签名密钥无效。"
+other = "OIDC 签名密钥无效。"
+
+[OidcUnsupportedKeyType]
+description = "OIDC unsupported key type."
+one = "OIDC 签名密钥类型不支持。"
+other = "OIDC 签名密钥类型不支持。"
+
+[OidcJwksFetchFailed]
+description = "OIDC JWKS fetch failed."
+one = "获取 OIDC JWKS 失败。"
+other = "获取 OIDC JWKS 失败。"
+
+[OidcJwksParseFailed]
+description = "OIDC JWKS parse failed."
+one = "解析 OIDC JWKS 失败。"
+other = "解析 OIDC JWKS 失败。"
+
 [OldPasswordError]
 description = "Old password error."
 one = "旧密码错误。"

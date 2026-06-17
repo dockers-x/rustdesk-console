@@ -290,6 +290,7 @@ fn webclient_bootstrap_js(cfg: &WebClientConfig, magic: i32, patch_external_v2_w
     } else {
         String::new()
     };
+    let oauth_bridge = webclient_oauth_bridge_js();
 
     format!(
         "(() => {{\n\
@@ -312,9 +313,204 @@ fn webclient_bootstrap_js(cfg: &WebClientConfig, magic: i32, patch_external_v2_w
   window.ws_host = getStored('ws-host');\n\
   window.ws_id_host = getStored('ws-id-host');\n\
   window.ws_relay_host = getStored('ws-relay-host');\
+{oauth_bridge}\
 {ws_patch}\
 }})();\n"
     )
+}
+
+fn webclient_oauth_bridge_js() -> &'static str {
+    r#"
+  const oauthBridge = (() => {
+    const REQUESTING = 'Requesting account auth';
+    const WAITING = 'Waiting account auth';
+    const LOGIN = 'Login account auth';
+    const blankResult = () => ({
+      state_msg: '',
+      failed_msg: '',
+      url: null,
+      url_launched: false,
+      auth_body: null,
+    });
+    let result = blankResult();
+    let generation = 0;
+    let timer = 0;
+    let popup = null;
+    const clearTimer = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = 0;
+    };
+    const apiBase = () => {
+      const base = getStored('api-server') || window.location.origin;
+      return String(base || '').replace(/\/+$/g, '');
+    };
+    const apiUrl = (path) => `${apiBase()}${path}`;
+    const parseJsonResponse = async (response) => {
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error((body && body.error) || `HTTP ${response.status}`);
+      }
+      if (body && body.error) {
+        throw new Error(body.error);
+      }
+      return body;
+    };
+    const deviceInfo = () => ({
+      name: window.navigator.userAgent || '',
+      os: window.navigator.platform || '',
+      type: 'browser',
+    });
+    const openAuthPopup = () => {
+      try {
+        popup = window.open('about:blank', '_blank');
+        if (popup) {
+          popup.opener = null;
+          popup.document.title = 'RustDesk OAuth';
+          popup.document.body.textContent = 'Redirecting to OAuth provider...';
+          result.url_launched = true;
+        }
+      } catch (_) {
+        popup = null;
+      }
+    };
+    const navigatePopup = (url) => {
+      if (!url) return;
+      if (popup && !popup.closed) {
+        try {
+          popup.location.href = url;
+          return;
+        } catch (_) {
+          popup = null;
+        }
+      }
+      result.url_launched = false;
+    };
+    const storeAuthBody = (authBody, remember) => {
+      if (!remember || !authBody || authBody.type !== 'access_token' || !authBody.access_token) return;
+      localStorage.setItem('access_token', authBody.access_token);
+      if (authBody.user) {
+        localStorage.setItem('user_info', JSON.stringify(authBody.user));
+      }
+    };
+    const poll = (token, code, id, uuid, remember, deadline) => {
+      if (token !== generation) return;
+      if (Date.now() > deadline) {
+        result = { ...result, state_msg: WAITING, failed_msg: 'timeout' };
+        return;
+      }
+      const url = new URL(apiUrl('/api/oidc/auth-query'), window.location.href);
+      url.searchParams.set('code', code);
+      url.searchParams.set('id', id);
+      url.searchParams.set('uuid', uuid);
+      fetch(url.toString(), { method: 'GET' })
+        .then(parseJsonResponse)
+        .then((body) => {
+          if (token !== generation) return;
+          if (body && body.type === 'access_token') {
+            storeAuthBody(body, remember);
+            result = { ...result, state_msg: LOGIN, failed_msg: '', auth_body: body };
+            return;
+          }
+          timer = window.setTimeout(() => poll(token, code, id, uuid, remember, deadline), 1000);
+        })
+        .catch((err) => {
+          if (token !== generation) return;
+          const message = String((err && err.message) || err || '');
+          if (message.includes('No authed oidc is found')) {
+            timer = window.setTimeout(() => poll(token, code, id, uuid, remember, deadline), 1000);
+          } else {
+            result = { ...result, state_msg: WAITING, failed_msg: message || 'OauthFailed' };
+          }
+        });
+    };
+    const start = (raw) => {
+      generation += 1;
+      clearTimer();
+      result = { ...blankResult(), state_msg: REQUESTING };
+      let parsed = {};
+      try {
+        parsed = raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        parsed = {};
+      }
+      const op = String(parsed.op || '').trim();
+      const remember = parsed.remember === true || parsed.remember === 'true';
+      if (!op) {
+        result = { ...result, failed_msg: 'ParamsError' };
+        return;
+      }
+      const id = localStorage.getItem('server-id') || localStorage.getItem('server_id') || 'webclient';
+      const uuid = localStorage.getItem('uuid') || '';
+      const token = generation;
+      openAuthPopup();
+      fetch(apiUrl('/api/oidc/auth'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op, id, uuid, deviceInfo: deviceInfo() }),
+      })
+        .then(parseJsonResponse)
+        .then((body) => {
+          if (token !== generation) return;
+          if (!body || !body.code || !body.url) throw new Error('Invalid auth response');
+          result = { ...result, state_msg: WAITING, failed_msg: '', url: body.url };
+          navigatePopup(body.url);
+          poll(token, body.code, id, uuid, remember, Date.now() + 180000);
+        })
+        .catch((err) => {
+          if (token !== generation) return;
+          result = {
+            ...result,
+            state_msg: REQUESTING,
+            failed_msg: String((err && err.message) || err || 'OauthFailed'),
+          };
+        });
+    };
+    const cancel = () => {
+      generation += 1;
+      clearTimer();
+      result = blankResult();
+    };
+    const wrapSetByName = (original) => {
+      if (typeof original !== 'function' || original.__rdConsoleOauthBridgeWrapped) return original;
+      const wrapped = function(name, value) {
+        if (name === 'account_auth') return start(value);
+        if (name === 'account_auth_cancel') return cancel();
+        return original.apply(this, arguments);
+      };
+      wrapped.__rdConsoleOauthBridgeWrapped = true;
+      return wrapped;
+    };
+    const wrapGetByName = (original) => {
+      if (typeof original !== 'function' || original.__rdConsoleOauthBridgeWrapped) return original;
+      const wrapped = function(name) {
+        if (name === 'account_auth_result') return JSON.stringify(result);
+        return original.apply(this, arguments);
+      };
+      wrapped.__rdConsoleOauthBridgeWrapped = true;
+      return wrapped;
+    };
+    const trap = (name, wrap) => {
+      let current = typeof window[name] === 'function' ? wrap(window[name]) : window[name];
+      try {
+        Object.defineProperty(window, name, {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return current;
+          },
+          set(next) {
+            current = typeof next === 'function' ? wrap(next) : next;
+          },
+        });
+      } catch (_) {
+        if (typeof current === 'function') window[name] = current;
+      }
+    };
+    trap('setByName', wrapSetByName);
+    trap('getByName', wrapGetByName);
+    return { start, cancel, result: () => result };
+  })();
+"#
 }
 
 fn safe_script_json(value: serde_json::Value) -> String {
@@ -435,6 +631,8 @@ mod tests {
         assert!(js.contains("\"ws-host\":\"https://rd-ws.czyt.tech\""));
         assert!(js.contains("\"id\":\"wss://rd-ws.czyt.tech/ws/id\""));
         assert!(js.contains("setDefault(wcPrefix + name, value)"));
+        assert!(js.contains("account_auth"));
+        assert!(js.contains("/api/oidc/auth-query"));
         assert!(js.contains("Proxy(NativeWebSocket"));
         assert!(js.contains("rewriteWsUrl(args[0])"));
     }

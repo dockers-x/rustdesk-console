@@ -1,4 +1,10 @@
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import {
+  HashRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import { isLoggedIn, mustChangePassword } from "./lib/auth";
 import { AppShell } from "./components/AppShell";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
@@ -21,7 +27,18 @@ function RequireAuth({
   children: React.ReactNode;
   allowPasswordChange?: boolean;
 }) {
-  if (!isLoggedIn()) return <Navigate to="/login" replace />;
+  const location = useLocation();
+  if (!isLoggedIn()) {
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{
+          from: `${location.pathname}${location.search}`,
+        }}
+      />
+    );
+  }
   if (mustChangePassword() && !allowPasswordChange) {
     return <Navigate to="/change-password" replace />;
   }

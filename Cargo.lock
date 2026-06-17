@@ -2561,6 +2561,7 @@ dependencies = [
  "mime_guess",
  "rand 0.8.6",
  "reqwest",
+ "rsa",
  "rust-embed",
  "sea-orm",
  "serde",

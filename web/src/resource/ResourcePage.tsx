@@ -245,6 +245,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                 <div className="grid gap-4">
                   {cfg.fields
                     .filter((f) => !(editing && f.createOnly))
+                    .filter((f) => !f.visibleWhen || f.visibleWhen(form, editing))
                     .map((field) => (
                       <FieldInput
                         key={field.name}
@@ -349,6 +350,11 @@ function FieldInput({
           disabled={locked}
           onCheckedChange={(v: boolean) => onChange(v ? on : off)}
         />
+        {field.hint && (
+          <span className="mt-1 block text-xs text-kumo-subtle">
+            {t(field.hint)}
+          </span>
+        )}
       </div>
     );
   }
@@ -373,6 +379,11 @@ function FieldInput({
             </option>
           ))}
         </select>
+        {field.hint && (
+          <span className="mt-1 block text-xs text-kumo-subtle">
+            {t(field.hint)}
+          </span>
+        )}
       </label>
     );
   }
@@ -384,9 +395,15 @@ function FieldInput({
         <textarea
           className="min-h-24 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
           value={value === null || value === undefined ? "" : String(value)}
+          placeholder={field.placeholder ? t(field.placeholder) : undefined}
           disabled={locked}
           onChange={(e) => onChange(e.target.value)}
         />
+        {field.hint && (
+          <span className="mt-1 block text-xs text-kumo-subtle">
+            {t(field.hint)}
+          </span>
+        )}
       </label>
     );
   }
@@ -404,6 +421,7 @@ function FieldInput({
         aria-label={t(field.label)}
         type={inputType}
         value={value === null || value === undefined ? "" : String(value)}
+        placeholder={field.placeholder ? t(field.placeholder) : undefined}
         disabled={locked}
         onChange={(e) =>
           onChange(
@@ -413,6 +431,11 @@ function FieldInput({
           )
         }
       />
+      {field.hint && (
+        <span className="mt-1 block text-xs text-kumo-subtle">
+          {t(field.hint)}
+        </span>
+      )}
     </label>
   );
 }

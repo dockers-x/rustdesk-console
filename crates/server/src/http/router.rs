@@ -222,6 +222,7 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/oauth/create", post(admin::oauth_create))
         .route("/api/admin/oauth/update", post(admin::oauth_update))
         .route("/api/admin/oauth/delete", post(admin::oauth_delete))
+        .route("/api/admin/oauth/test", post(admin::oauth_test))
         .route("/api/admin/oauth/unbind", post(admin::oauth_unbind))
         .route("/api/admin/oauth/confirm", post(oauth::admin_confirm))
         .route("/api/admin/oauth/bind", post(oauth::admin_to_bind))

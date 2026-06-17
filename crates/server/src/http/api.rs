@@ -288,24 +288,26 @@ pub async fn login(
 }
 
 pub async fn login_options(State(state): State<AppState>) -> Response {
-    let mut ops: Vec<String> = services::oauth::get_oauth_providers(&state.db)
+    let mut ops = services::oauth::get_login_providers(&state.db)
         .await
         .unwrap_or_default();
     if state.config.app.web_sso {
-        ops.push("webauth".to_string());
+        ops.push(services::oauth::LoginProvider {
+            name: "webauth".to_string(),
+        });
     }
     let oidc_items: Vec<Map<String, Value>> = ops
         .iter()
         .map(|v| {
             let mut m = Map::new();
-            m.insert("name".into(), Value::String(v.clone()));
+            m.insert("name".into(), Value::String(v.name.clone()));
             m
         })
         .collect();
     let common = serde_json::to_string(&oidc_items).unwrap_or_else(|_| "[]".into());
     let mut res = vec![format!("common-oidc/{common}")];
     for v in &ops {
-        res.push(format!("oidc/{v}"));
+        res.push(format!("oidc/{}", v.name));
     }
     Json(res).into_response()
 }

@@ -1,5 +1,6 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
+import { OAuthProviderActions } from "../components/OAuthProviderActions";
 import { PeerQuickActions } from "../components/PeerQuickActions";
 import { RecordFileActions } from "../components/RecordFileActions";
 import { WebClientActions } from "../components/WebClientActions";
@@ -75,6 +76,10 @@ const RULE_TYPE_OPTIONS = [
   { label: "rulePersonal", value: 1 },
   { label: "ruleGroup", value: 2 },
 ];
+const oauthTypeIs =
+  (...types: string[]) =>
+  (form: Record<string, unknown>) =>
+    types.includes(String(form.oauth_type ?? ""));
 
 export function resourcePath(r: ResourceConfig) {
   return r.path ?? `/${r.name}`;
@@ -210,6 +215,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "client_id", label: "clientId" },
       { key: "issuer", label: "issuer" },
     ],
+    rowActions: (row) => <OAuthProviderActions provider={row} />,
     fields: [
       {
         name: "oauth_type",
@@ -222,15 +228,64 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
           { label: "oidc", value: "oidc" },
           { label: "linuxdo", value: "linuxdo" },
         ],
+        hint: "oauthTypeHint",
       },
-      { name: "op", label: "op", type: "text" },
-      { name: "client_id", label: "clientId", type: "text" },
-      { name: "client_secret", label: "clientSecret", type: "text" },
-      { name: "issuer", label: "issuer", type: "text" },
-      { name: "scopes", label: "scopes", type: "text" },
-      { name: "auto_register", label: "autoRegister", type: "switch" },
-      { name: "pkce_enable", label: "pkce", type: "switch" },
-      { name: "pkce_method", label: "pkceMethod", type: "text" },
+      {
+        name: "op",
+        label: "op",
+        type: "text",
+        placeholder: "oauthOpPlaceholder",
+        hint: "oauthOpHint",
+      },
+      {
+        name: "client_id",
+        label: "clientId",
+        type: "text",
+        hint: "oauthClientIdHint",
+      },
+      {
+        name: "client_secret",
+        label: "clientSecret",
+        type: "password",
+        hint: "oauthClientSecretHint",
+      },
+      {
+        name: "issuer",
+        label: "issuer",
+        type: "text",
+        placeholder: "oauthIssuerPlaceholder",
+        hint: "oauthIssuerHint",
+        visibleWhen: oauthTypeIs("google", "oidc"),
+      },
+      {
+        name: "scopes",
+        label: "scopes",
+        type: "text",
+        defaultValue: "openid,profile,email",
+        hint: "oauthScopesHint",
+        visibleWhen: oauthTypeIs("google", "oidc"),
+      },
+      {
+        name: "auto_register",
+        label: "autoRegister",
+        type: "switch",
+        hint: "oauthAutoRegisterHint",
+      },
+      {
+        name: "pkce_enable",
+        label: "pkce",
+        type: "switch",
+        hint: "oauthPkceHint",
+        visibleWhen: oauthTypeIs("google", "oidc"),
+      },
+      {
+        name: "pkce_method",
+        label: "pkceMethod",
+        type: "text",
+        defaultValue: "S256",
+        hint: "oauthPkceMethodHint",
+        visibleWhen: oauthTypeIs("google", "oidc"),
+      },
     ],
   },
   {
