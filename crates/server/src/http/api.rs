@@ -2519,6 +2519,7 @@ mod deployment_tests {
     use super::*;
     use crate::config::{Config, RecordStorage};
     use crate::i18n::I18n;
+    use crate::support::admin_config::{AdminConfigStore, AdminPanelConfig};
     use crate::support::disconnect_store::DisconnectStore;
     use crate::support::jwt::Jwt;
     use crate::support::login_limiter::{LoginLimiter, SecurityPolicy};
@@ -2570,6 +2571,10 @@ mod deployment_tests {
             oauth_cache: Arc::new(OauthCache::new()),
             disconnect_store: Arc::new(DisconnectStore::new()),
             external_webclient: None,
+            admin_config: Arc::new(AdminConfigStore::new(
+                PathBuf::from("/tmp/rustdesk-console-test-config.yaml"),
+                AdminPanelConfig::from(&config.admin),
+            )),
             webclient_config: Arc::new(WebClientConfigStore::new(
                 PathBuf::from("/tmp/rustdesk-console-test-config.yaml"),
                 WebClientConfig::default(),

@@ -213,7 +213,14 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/overview", get(admin::overview))
         .route("/api/admin/diagnostics/run", post(admin::diagnostics_run))
         // config
-        .route("/api/admin/config/admin", get(admin::config_admin))
+        .route(
+            "/api/admin/config/admin",
+            get(admin::config_admin).patch(admin::config_admin_update),
+        )
+        .route(
+            "/api/admin/config/admin/manage",
+            get(admin::config_admin_manage).patch(admin::config_admin_update),
+        )
         .route(
             "/api/admin/config/server",
             get(admin::config_server).patch(admin::config_server_update),
@@ -241,6 +248,11 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/user/update", post(admin::user_update))
         .route("/api/admin/user/delete", post(admin::user_delete))
         .route("/api/admin/user/changePwd", post(admin::user_change_pwd))
+        // messages
+        .route("/api/admin/message/list", get(admin::message_list))
+        .route("/api/admin/message/create", post(admin::message_create))
+        .route("/api/admin/message/status", post(admin::message_status))
+        .route("/api/admin/message/delete", post(admin::message_delete))
         // group
         .route("/api/admin/group/list", get(admin::group_list))
         .route("/api/admin/group/detail/:id", get(admin::group_detail))
@@ -598,6 +610,16 @@ fn admin_routes() -> Router<AppState> {
             post(my::rule_delete),
         )
         .route("/api/admin/my/peer/list", get(my::peer_list))
+        .route("/api/admin/my/message/list", get(my::message_list))
+        .route("/api/admin/my/message/latest", get(my::message_latest))
+        .route(
+            "/api/admin/my/message/unread",
+            get(my::message_unread_count),
+        )
+        .route("/api/admin/my/message/create", post(my::message_create))
+        .route("/api/admin/my/message/read", post(my::message_read))
+        .route("/api/admin/my/message/delete", post(my::message_delete))
+        .route("/api/admin/my/message/users", get(my::message_users))
         .route("/api/admin/my/login_log/list", get(my::login_log_list))
         .route("/api/admin/my/login_log/delete", post(my::login_log_delete))
         .route(

@@ -1,3 +1,4 @@
+pub mod admin_config;
 pub mod deployment_config;
 pub mod disconnect_store;
 pub mod external_webclient;

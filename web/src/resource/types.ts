@@ -12,6 +12,7 @@ export type FieldType =
   | "password"
   | "switch"
   | "select"
+  | "strategy_options"
   | "textarea";
 
 export interface SelectOption {

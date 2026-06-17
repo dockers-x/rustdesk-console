@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -9,10 +9,10 @@ import { Input } from "@cloudflare/kumo/components/input";
 import { cn } from "@cloudflare/kumo/utils";
 import {
   ArrowClockwise,
+  Bell,
   CheckCircle,
   EnvelopeSimple,
   IdentificationBadge,
-  Key,
   LockKey,
   LinkSimple,
   ShieldCheck,
@@ -38,11 +38,6 @@ interface CurrentUser {
   must_change_password: boolean;
 }
 
-interface AdminConfig {
-  title?: string;
-  hello?: string;
-}
-
 interface OAuthStatus {
   op: string;
   oauth_type?: string;
@@ -58,6 +53,21 @@ interface OAuthStatus {
 interface BindStart {
   code: string;
   url: string;
+}
+
+interface MessageSummary {
+  id: number;
+  title: string;
+  body: string;
+  sender_name: string;
+  kind: string;
+  is_read: boolean;
+  created_at?: string;
+}
+
+interface MessageLatest {
+  list: MessageSummary[];
+  unread: number;
 }
 
 export function MyProfilePage() {
@@ -80,13 +90,13 @@ export function MyProfilePage() {
     queryKey: ["current-user"],
     queryFn: () => apiGet<CurrentUser>("/api/admin/user/current"),
   });
-  const config = useQuery({
-    queryKey: ["admin-config"],
-    queryFn: () => apiGet<AdminConfig>("/api/admin/config/admin"),
-  });
   const oauth = useQuery({
     queryKey: ["my-oauth"],
     queryFn: () => apiPost<OAuthStatus[]>("/api/admin/user/myOauth"),
+  });
+  const latestMessages = useQuery({
+    queryKey: ["profile-latest-messages"],
+    queryFn: () => apiGet<MessageLatest>("/api/admin/my/message/latest"),
   });
 
   const changePwd = useMutation({
@@ -328,22 +338,63 @@ export function MyProfilePage() {
           </div>
         </section>
 
-        {config.data?.hello && (
-          <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
-            <div className="mb-4 flex items-start gap-3">
+        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
-                <Key size={18} />
+                <Bell size={18} />
               </div>
               <div>
-                <h2 className="text-base font-semibold">
-                  {config.data.title || t("notice")}
-                </h2>
-                <p className="mt-1 text-sm text-kumo-subtle">{t("noticeHint")}</p>
+                <h2 className="text-base font-semibold">{t("latestMessages")}</h2>
+                <p className="mt-1 text-sm text-kumo-subtle">
+                  {t("latestMessagesHint")}
+                </p>
               </div>
             </div>
-            <NoticeRenderer text={config.data.hello} />
-          </section>
-        )}
+            <Button size="sm" variant="secondary" onClick={() => navigate("/messages")}>
+              {t("messageCenter")}
+            </Button>
+          </div>
+          <div className="rounded-lg border border-kumo-line bg-kumo-base">
+            <div className="divide-y divide-kumo-line">
+              {(latestMessages.data?.list ?? []).map((message) => (
+                <button
+                  key={message.id}
+                  type="button"
+                  className="block w-full px-3 py-3 text-left transition-colors hover:bg-kumo-tint/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                  onClick={() => navigate("/messages")}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="break-words text-sm font-semibold">
+                      {message.title}
+                    </span>
+                    {!message.is_read && (
+                      <span className="rounded border border-kumo-brand/30 bg-kumo-tint px-2 py-0.5 text-xs">
+                        {t("messageUnread")}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-sm leading-6 text-kumo-subtle">
+                    {message.body}
+                  </p>
+                </button>
+              ))}
+            </div>
+            {latestMessages.isLoading && (
+              <TableState tone="loading">{t("loading")}</TableState>
+            )}
+            {latestMessages.error && (
+              <TableState tone="error">
+                {(latestMessages.error as Error).message || t("operationFailed")}
+              </TableState>
+            )}
+            {!latestMessages.isLoading &&
+              !latestMessages.error &&
+              (latestMessages.data?.list ?? []).length === 0 && (
+                <TableState tone="empty">{t("messageEmpty")}</TableState>
+              )}
+          </div>
+        </section>
       </div>
 
       <Dialog.Root
@@ -639,112 +690,4 @@ function passwordStrengthKey(score: number): string {
   if (score >= 4) return "passwordStrengthStrong";
   if (score >= 2) return "passwordStrengthMedium";
   return "passwordStrengthWeak";
-}
-
-function NoticeRenderer({ text }: { text: string }) {
-  const rows = text
-    .split(/\r?\n/)
-    .map((line, index) => ({ line: line.trim(), index }))
-    .filter(({ line }) => line.length > 0);
-
-  if (rows.length === 0) {
-    return <p className="text-sm text-kumo-subtle">—</p>;
-  }
-
-  return (
-    <div className="space-y-3 break-words text-sm leading-6">
-      {rows.map(({ line, index }) => {
-        if (line.startsWith("#### ")) {
-          return (
-            <h3 key={index} className="text-base font-semibold">
-              {renderInlineMarkdown(line.slice(5))}
-            </h3>
-          );
-        }
-        if (line.startsWith("### ")) {
-          return (
-            <h3 key={index} className="text-base font-semibold">
-              {renderInlineMarkdown(line.slice(4))}
-            </h3>
-          );
-        }
-        if (line.startsWith("> ")) {
-          return (
-            <blockquote
-              key={index}
-              className="border-l-2 border-kumo-brand bg-kumo-base px-3 py-2 text-kumo-default"
-            >
-              {renderInlineMarkdown(line.slice(2))}
-            </blockquote>
-          );
-        }
-        if (line.startsWith("- ")) {
-          return (
-            <p key={index} className="flex min-w-0 gap-2 text-kumo-default">
-              <span className="mt-2 size-1.5 shrink-0 rounded-full bg-kumo-brand" />
-              <span>{renderInlineMarkdown(line.slice(2))}</span>
-            </p>
-          );
-        }
-        return <p key={index}>{renderInlineMarkdown(line)}</p>;
-      })}
-    </div>
-  );
-}
-
-function renderInlineMarkdown(text: string): ReactNode {
-  const parts: ReactNode[] = [];
-  const pattern = /(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > cursor) {
-      parts.push(text.slice(cursor, match.index));
-    }
-
-    const token = match[0];
-    if (token.startsWith("**")) {
-      parts.push(
-        <strong key={`${match.index}-strong`} className="font-semibold">
-          {token.slice(2, -2)}
-        </strong>,
-      );
-    } else {
-      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
-      if (link && isSafeLink(link[2])) {
-        parts.push(
-          <a
-            key={`${match.index}-link`}
-            href={link[2]}
-            target="_blank"
-            rel="noreferrer"
-            className="break-words font-medium text-kumo-brand underline-offset-4 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
-          >
-            {link[1]}
-          </a>,
-        );
-      } else {
-        parts.push(token);
-      }
-    }
-
-    cursor = match.index + token.length;
-  }
-
-  if (cursor < text.length) {
-    parts.push(text.slice(cursor));
-  }
-
-  return (
-    <>
-      {parts.map((part, index) => (
-        <Fragment key={index}>{part}</Fragment>
-      ))}
-    </>
-  );
-}
-
-function isSafeLink(url: string): boolean {
-  return url.startsWith("https://") || url.startsWith("http://") || url.startsWith("/");
 }

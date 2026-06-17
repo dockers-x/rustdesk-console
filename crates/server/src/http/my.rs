@@ -5,8 +5,9 @@
 use axum::extract::{Query, State};
 use axum::response::Response;
 use axum::Json;
-use serde::Deserialize;
-use serde_json::Value;
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::http::admin::{
     list_json, AddressBookForm, AddressBookQuery, CollectionForm, IdForm, IdsForm, PeerQuery,
@@ -16,6 +17,7 @@ use crate::http::middleware::{AcceptLang, BackendUser};
 use crate::http::response as resp;
 use crate::services;
 use crate::state::AppState;
+use ::entity::user as user_entity;
 
 // ---------- my/share_record ----------
 
@@ -635,4 +637,178 @@ pub async fn login_log_batch_delete(
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, e.to_string()),
     }
+}
+
+// ---------- my/message ----------
+
+#[derive(Deserialize, Default)]
+pub struct MyMessageQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub folder: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct MyMessageForm {
+    #[serde(default)]
+    pub recipient_id: i32,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+#[derive(Deserialize, Default)]
+pub struct MyMessageUserQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub q: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct MessageUserPayload {
+    pub id: i32,
+    pub username: String,
+    pub nickname: String,
+    pub email: String,
+}
+
+pub async fn message_list(
+    State(state): State<AppState>,
+    user: BackendUser,
+    Query(q): Query<MyMessageQuery>,
+) -> Response {
+    match services::message::user_list(
+        &state.db,
+        user.user.id,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.folder,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn message_latest(State(state): State<AppState>, user: BackendUser) -> Response {
+    let latest = match services::message::latest_for_user(&state.db, user.user.id, 3).await {
+        Ok(list) => list,
+        Err(e) => return resp::fail(101, e.to_string()),
+    };
+    let unread = services::message::unread_count(&state.db, user.user.id)
+        .await
+        .unwrap_or(0);
+    resp::success(json!({ "list": latest, "unread": unread }))
+}
+
+pub async fn message_unread_count(State(state): State<AppState>, user: BackendUser) -> Response {
+    match services::message::unread_count(&state.db, user.user.id).await {
+        Ok(unread) => resp::success(json!({ "unread": unread })),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn message_create(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<MyMessageForm>,
+) -> Response {
+    match services::message::create(
+        &state.db,
+        services::message::CreateInput {
+            sender: user.user,
+            kind: ::entity::message::KIND_PRIVATE.to_string(),
+            recipient_id: f.recipient_id,
+            title: f.title,
+            body: f.body,
+            status: ::entity::message::STATUS_ENABLE,
+            admin_mode: false,
+        },
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn message_read(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    let row = match services::message::info_by_id(&state.db, f.id).await {
+        Ok(Some(row)) if services::message::is_visible_to_user(&row, user.user.id) => row,
+        Ok(Some(_)) => return resp::fail(101, state.tr(&lang, "NoAccess")),
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::message::mark_read(&state.db, row.id, user.user.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn message_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    let row = match services::message::info_by_id(&state.db, f.id).await {
+        Ok(Some(row)) if services::message::is_visible_to_user(&row, user.user.id) => row,
+        Ok(Some(_)) => return resp::fail(101, state.tr(&lang, "NoAccess")),
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::message::mark_deleted(&state.db, row.id, user.user.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn message_users(
+    State(state): State<AppState>,
+    user: BackendUser,
+    Query(q): Query<MyMessageUserQuery>,
+) -> Response {
+    let (page, page_size) = services::paginate(q.page.unwrap_or(0), q.page_size.unwrap_or(0));
+    let mut query = user_entity::Entity::find()
+        .filter(user_entity::Column::Status.eq(user_entity::STATUS_ENABLE))
+        .filter(user_entity::Column::Id.ne(user.user.id));
+    if let Some(search) = q.q.filter(|value| !value.trim().is_empty()) {
+        let search = search.trim().to_string();
+        query = query.filter(
+            sea_orm::Condition::any()
+                .add(user_entity::Column::Username.contains(&search))
+                .add(user_entity::Column::Nickname.contains(&search))
+                .add(user_entity::Column::Email.contains(&search)),
+        );
+    }
+    let total = query.clone().count(&state.db).await.unwrap_or(0) as i64;
+    let rows = query
+        .order_by_asc(user_entity::Column::Username)
+        .offset((page - 1) * page_size)
+        .limit(page_size.min(50))
+        .all(&state.db)
+        .await
+        .unwrap_or_default();
+    let list: Vec<MessageUserPayload> = rows
+        .into_iter()
+        .map(|row| MessageUserPayload {
+            id: row.id,
+            username: row.username,
+            nickname: row.nickname,
+            email: row.email,
+        })
+        .collect();
+    list_json(list, page as i64, total, page_size as i64)
 }

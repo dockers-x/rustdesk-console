@@ -15,14 +15,15 @@ use sea_orm::{
 use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
     audit_conn, audit_file, deployment_event, deployment_token, device_group, group, login_log,
-    oauth, peer, record_file, server_cmd, share_record, strategy, strategy_assignment, tag, user,
-    user_third, user_token, version,
+    message, message_read, oauth, peer, record_file, server_cmd, share_record, strategy,
+    strategy_assignment, tag, user, user_third, user_token, version,
 };
 
 use crate::config::{self, Config};
 use crate::i18n::I18n;
 use crate::services;
 use crate::state::AppState;
+use crate::support::admin_config::{AdminConfigStore, AdminPanelConfig};
 use crate::support::jwt::Jwt;
 use crate::support::login_limiter::{LoginLimiter, SecurityPolicy};
 use crate::support::record_storage_config::RecordStorageConfigStore;
@@ -97,6 +98,8 @@ async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Resu
     create!(user_third::Entity);
     create!(oauth::Entity);
     create!(login_log::Entity);
+    create!(message::Entity);
+    create!(message_read::Entity);
     create!(share_record::Entity);
     create!(audit_conn::Entity);
     create!(audit_file::Entity);
@@ -127,6 +130,14 @@ async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
                     .not_null()
                     .default(false),
             )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "message_reads", "deleted_at").await? {
+        let stmt = Table::alter()
+            .table(message_read::Entity)
+            .add_column(ColumnDef::new(message_read::Column::DeletedAt).date_time())
             .to_owned();
         db.execute(backend.build(&stmt)).await?;
     }
@@ -368,12 +379,17 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
     let start_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let record_storage = config.record_storage.clone();
+    let admin_panel_config = AdminPanelConfig::from(&config.admin);
     let external_webclient = ExternalWebClient::try_load_from_default_zip()
         .await
         .map(Arc::new);
 
     Ok(AppState {
         db,
+        admin_config: Arc::new(AdminConfigStore::new(
+            config_path.clone(),
+            admin_panel_config,
+        )),
         webclient_config: Arc::new(WebClientConfigStore::new(
             config_path.clone(),
             WebClientConfig::from(&config.rustdesk),

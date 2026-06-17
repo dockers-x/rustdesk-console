@@ -22,6 +22,10 @@ import {
   formatDateTime,
   formatUnixSeconds,
 } from "../lib/dateFormat";
+import {
+  parseStrategyOptionsValue,
+  StrategyOptionsInput,
+} from "./strategyOptions";
 import type { FieldDef, ResourceConfig } from "./types";
 
 interface ListResult {
@@ -94,6 +98,9 @@ function normalizeFormPayload(cfg: ResourceConfig, source: Record<string, unknow
         ).trim();
         payload[field.name] = tagColorFromName(seed || "tag");
       }
+    }
+    if (field.type === "strategy_options") {
+      payload[field.name] = parseStrategyOptionsValue(payload[field.name]);
     }
   }
   return payload;
@@ -331,6 +338,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                         field.type === "switch" ||
                         field.type === "color" ||
                         field.type === "avatar" ||
+                        field.type === "strategy_options" ||
                         field.type === "oauth_provider";
                       return (
                         <div
@@ -535,6 +543,17 @@ function FieldInput({
         value={value}
         locked={locked}
         onChange={onChange}
+      />
+    );
+  }
+
+  if (field.type === "strategy_options") {
+    return (
+      <StrategyOptionsInput
+        label={t(field.label)}
+        hint={field.hint ? t(field.hint) : undefined}
+        value={value}
+        onChange={onChange as (v: Record<string, string>) => void}
       />
     );
   }

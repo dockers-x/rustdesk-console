@@ -11,11 +11,13 @@ import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { AppTitleController } from "./lib/adminTitle";
 import { ForceChangePasswordPage } from "./pages/ForceChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
+import { MessageCenterPage } from "./pages/MessageCenterPage";
 import { MyProfilePage } from "./pages/MyProfilePage";
 import { OAuthActionPage } from "./pages/OAuthActionPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ServerCommandsPage } from "./pages/ServerCommandsPage";
+import { SystemSettingsPage } from "./pages/SystemSettingsPage";
 import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { ResourcePage } from "./resource/ResourcePage";
 import { ALL_RESOURCES, resourcePath } from "./resource/registry";
@@ -73,6 +75,8 @@ export default function App() {
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/diagnostics" element={<DiagnosticsPage />} />
           <Route path="/my" element={<MyProfilePage />} />
+          <Route path="/messages" element={<MessageCenterPage />} />
+          <Route path="/settings" element={<SystemSettingsPage />} />
           <Route path="/serverCmd" element={<ServerCommandsPage />} />
           <Route path="/webclient-settings" element={<WebClientSettingsPage />} />
           <Route path="/oauth/:code" element={<OAuthActionPage mode="confirm" />} />

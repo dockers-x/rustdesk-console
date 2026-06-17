@@ -6,6 +6,7 @@ import { PeerQuickActions } from "../components/PeerQuickActions";
 import { OAuthProviderBadge } from "../components/OAuthProviderBadge";
 import { RecordFileActions } from "../components/RecordFileActions";
 import { WebClientActions } from "../components/WebClientActions";
+import { renderStrategyOptionsSummary } from "./strategyOptions";
 import type { ResourceConfig } from "./types";
 
 const statusCol = {
@@ -304,7 +305,11 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "name", label: "name" },
       statusCol,
       { key: "modified_at", label: "modifiedAt" },
-      monoCol("config_options", "configOptions", "max-w-72"),
+      {
+        key: "config_options",
+        label: "configOptions",
+        render: (r, t) => renderStrategyOptionsSummary(r.config_options, t),
+      },
       { key: "note", label: "note" },
       { key: "created_at", label: "createdAt" },
     ],
@@ -322,8 +327,8 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       {
         name: "config_options",
         label: "configOptions",
-        type: "textarea",
-        defaultValue: "{}",
+        type: "strategy_options",
+        defaultValue: {},
         hint: "strategyOptionsHint",
       },
       {

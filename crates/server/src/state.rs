@@ -7,6 +7,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::config::Config;
 use crate::i18n::I18n;
+use crate::support::admin_config::AdminConfigStore;
 use crate::support::disconnect_store::DisconnectStore;
 use crate::support::external_webclient::ExternalWebClient;
 use crate::support::jwt::Jwt;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub oauth_cache: Arc<OauthCache>,
     pub disconnect_store: Arc<DisconnectStore>,
     pub external_webclient: Option<Arc<ExternalWebClient>>,
+    pub admin_config: Arc<AdminConfigStore>,
     pub webclient_config: Arc<WebClientConfigStore>,
     pub record_storage_config: Arc<RecordStorageConfigStore>,
     pub start_time: Arc<String>,

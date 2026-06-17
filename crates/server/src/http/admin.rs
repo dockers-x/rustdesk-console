@@ -19,6 +19,7 @@ use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
 use crate::services;
 use crate::state::AppState;
+use crate::support::admin_config::AdminPanelConfig;
 use crate::support::record_storage_config::RecordStorageConfigForm;
 use crate::support::webclient_config::WebClientConfig;
 
@@ -250,25 +251,52 @@ pub async fn setup_initialize(
 pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUser>) -> Response {
     let timezone = std::env::var("TZ").unwrap_or_default();
     let Some(user) = user else {
+        let cfg = state.admin_config.view(None).await;
         return resp::success(json!({
-            "title": state.config.admin.title,
+            "title": cfg.title,
             "timezone": timezone,
         }));
     };
-    let mut hello = state.config.admin.hello.clone();
-    if hello.is_empty() && !state.config.admin.hello_file.is_empty() {
-        if let Ok(b) = std::fs::read_to_string(&state.config.admin.hello_file) {
-            if !b.is_empty() {
-                hello = b;
-            }
-        }
-    }
-    hello = hello.replace("{{username}}", &user.user.username);
+    let cfg = state.admin_config.view(Some(&user.user.username)).await;
     resp::success(json!({
-        "title": state.config.admin.title,
-        "hello": hello,
+        "title": cfg.title,
+        "hello": cfg.hello,
         "timezone": timezone,
     }))
+}
+
+pub async fn config_admin_manage(State(state): State<AppState>, user: AdminUser) -> Response {
+    let timezone = std::env::var("TZ").unwrap_or_default();
+    let cfg = state.admin_config.view(Some(&user.user.username)).await;
+    resp::success(json!({
+        "title": cfg.title,
+        "hello": cfg.hello,
+        "hello_raw": cfg.hello_raw,
+        "hello_file": cfg.hello_file,
+        "timezone": timezone,
+    }))
+}
+
+pub async fn config_admin_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<AdminPanelConfig>,
+) -> Response {
+    if f.title.chars().count() > 80
+        || f.hello_file.chars().count() > 500
+        || f.hello.chars().count() > 5000
+    {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+
+    match state.admin_config.update(f).await {
+        Ok(_) => {
+            let cfg = state.admin_config.view(None).await;
+            resp::success(cfg)
+        }
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
 }
 
 pub async fn config_server(State(state): State<AppState>, _user: BackendUser) -> Response {
@@ -384,6 +412,105 @@ pub struct IdForm {
 pub struct IdsForm {
     #[serde(default)]
     pub ids: Vec<i32>,
+}
+
+// ---------- message ----------
+
+#[derive(Deserialize, Default)]
+pub struct MessageQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct MessageForm {
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub recipient_id: i32,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub status: i32,
+}
+
+pub async fn message_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<MessageQuery>,
+) -> Response {
+    match services::message::admin_list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.kind,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn message_create(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: AdminUser,
+    Json(f): Json<MessageForm>,
+) -> Response {
+    match services::message::create(
+        &state.db,
+        services::message::CreateInput {
+            sender: user.user,
+            kind: f.kind,
+            recipient_id: f.recipient_id,
+            title: f.title,
+            body: f.body,
+            status: f.status,
+            admin_mode: true,
+        },
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn message_status(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<MessageForm>,
+) -> Response {
+    let row = match services::message::info_by_id(&state.db, f.id).await {
+        Ok(Some(row)) => row,
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::message::set_status(&state.db, row, f.status).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn message_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    match services::message::delete(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
 }
 
 // ---------- user CRUD ----------

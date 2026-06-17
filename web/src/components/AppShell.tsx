@@ -11,6 +11,7 @@ import {
   Desktop,
   FileText,
   Folders,
+  GearSix,
   HardDrives,
   Key,
   List,
@@ -21,6 +22,8 @@ import {
   Sun,
   SignOut,
   AddressBook,
+  Bell,
+  CaretDown,
   ShareNetwork,
   ShieldCheck,
   Tag,
@@ -51,6 +54,7 @@ type IconType = ComponentType<{ size?: number; weight?: "regular" | "fill" }>;
 const NAV_ICONS: Record<string, IconType> = {
   overview: ChartBar,
   myInfo: User,
+  messageCenter: Bell,
   myPeers: Desktop,
   myAddressBook: AddressBook,
   myCollections: BookBookmark,
@@ -78,6 +82,7 @@ const NAV_ICONS: Record<string, IconType> = {
   auditFile: FileText,
   recordFiles: VideoCamera,
   serverCommands: Terminal,
+  systemSettings: GearSix,
   diagnostics: Pulse,
   webClientSettings: SlidersHorizontal,
 };
@@ -89,6 +94,16 @@ interface NavItem {
   indent?: boolean;
 }
 
+const adminItem = (key: string): NavItem => {
+  const resource = ADMIN_RESOURCES.find((item) => item.titleKey === key);
+  return { to: resource ? resourcePath(resource) : `/${key}`, key };
+};
+
+const myItem = (key: string): NavItem => {
+  const resource = MY_RESOURCES.find((item) => item.titleKey === key);
+  return { to: resource ? resourcePath(resource) : `/${key}`, key };
+};
+
 const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
   {
     key: "workspace",
@@ -98,23 +113,65 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
     ],
   },
   {
-    key: "personal",
+    key: "mySpace",
     items: [
       { to: "/my", key: "myInfo", end: true },
-      ...MY_RESOURCES.map((r) => ({
-        to: resourcePath(r),
-        key: r.titleKey,
-        indent: true,
-      })),
+      myItem("myPeers"),
+      myItem("myCollections"),
+      myItem("myAddressBook"),
+      myItem("myTags"),
+      myItem("myShareRules"),
+      myItem("myShareRecords"),
+      myItem("myLoginLogs"),
     ],
   },
   {
-    key: "management",
-    items: ADMIN_RESOURCES.map((r) => ({ to: resourcePath(r), key: r.titleKey })),
+    key: "messageNotifications",
+    items: [{ to: "/messages", key: "messageCenter" }],
   },
   {
-    key: "operations",
+    key: "deviceAccess",
     items: [
+      adminItem("devices"),
+      adminItem("deviceGroups"),
+      adminItem("addressBook"),
+      adminItem("collections"),
+      adminItem("shareRules"),
+      adminItem("shareRecords"),
+      adminItem("activeConnections"),
+    ],
+  },
+  {
+    key: "policyDeployment",
+    items: [
+      adminItem("deploymentTokens"),
+      adminItem("strategies"),
+      adminItem("strategyAssignments"),
+      adminItem("tags"),
+    ],
+  },
+  {
+    key: "orgAccounts",
+    items: [
+      adminItem("users"),
+      adminItem("groups"),
+      adminItem("oauth"),
+      adminItem("userTokens"),
+      adminItem("loginLogs"),
+    ],
+  },
+  {
+    key: "auditRecords",
+    items: [
+      adminItem("auditConn"),
+      adminItem("auditFile"),
+      adminItem("recordFiles"),
+    ],
+  },
+  {
+    key: "systemOps",
+    items: [
+      { to: "/settings", key: "systemSettings" },
       { to: "/serverCmd", key: "serverCommands" },
       { to: "/webclient-settings", key: "webClientSettings" },
     ],
@@ -135,6 +192,16 @@ export function AppShell() {
     () => typeof window !== "undefined" && window.innerWidth < 768,
   );
   const [dark, setDark] = useState(() => getMode() === "dark");
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(
+    () =>
+      Object.fromEntries(
+        NAV_SECTIONS.map((section) => [
+          section.key,
+          section.key === "workspace" ||
+            section.items.some((item) => isItemActive(location.pathname, item)),
+        ]),
+      ),
+  );
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -167,6 +234,16 @@ export function AppShell() {
   const closeMobileNav = () => {
     if (window.innerWidth < 768) setCollapsed(true);
   };
+
+  useEffect(() => {
+    const activeSection = NAV_SECTIONS.find((section) =>
+      section.items.some((item) => isItemActive(location.pathname, item)),
+    );
+    if (!activeSection) return;
+    setOpenSections((state) =>
+      state[activeSection.key] ? state : { ...state, [activeSection.key]: true },
+    );
+  }, [location.pathname]);
 
   return (
     <div className="relative flex h-full overflow-hidden bg-kumo-base text-kumo-default">
@@ -218,55 +295,71 @@ export function AppShell() {
                 )}
               >
                 {!collapsed && (
-                  <div
+                  <button
+                    type="button"
                     className={cn(
-                      "px-3 pb-1 pt-1 text-xs font-semibold",
+                      "flex min-h-8 w-full items-center justify-between rounded-md px-3 pb-1 pt-1 text-left text-xs font-semibold transition-colors hover:bg-kumo-tint/70",
                       sectionActive ? "text-kumo-default" : "text-kumo-subtle",
                     )}
-                  >
-                    {t(section.key)}
-                  </div>
-                )}
-                {section.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.end}
-                    title={t(item.key)}
-                    onClick={closeMobileNav}
-                    className={({ isActive }) =>
-                      cn(
-                        "group relative flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-[background-color,color,box-shadow,scale] duration-150 active:scale-[0.98]",
-                        collapsed && "justify-center",
-                        item.indent && !collapsed && "pl-7",
-                        isActive
-                          ? "bg-kumo-tint font-medium text-kumo-default shadow-xs ring-1 ring-kumo-line/70"
-                          : "text-kumo-subtle hover:bg-kumo-tint/70 hover:text-kumo-default",
-                      )
+                    aria-expanded={openSections[section.key] ?? true}
+                    onClick={() =>
+                      setOpenSections((state) => ({
+                        ...state,
+                        [section.key]: !(state[section.key] ?? true),
+                      }))
                     }
                   >
-                    {({ isActive }) => {
-                      const Icon = NAV_ICONS[item.key] ?? Rows;
-                      return (
-                        <>
-                          {item.indent && !collapsed && (
-                            <span
-                              className={cn(
-                                "absolute left-3 top-1/2 h-4 w-px -translate-y-1/2 rounded-full",
-                                isActive ? "bg-kumo-brand" : "bg-kumo-line",
-                              )}
-                              aria-hidden="true"
-                            />
-                          )}
-                          <Icon size={18} weight={isActive ? "fill" : "regular"} />
-                          {!collapsed && (
-                            <span className="truncate">{t(item.key)}</span>
-                          )}
-                        </>
-                      );
-                    }}
-                  </NavLink>
-                ))}
+                    <span>{t(section.key)}</span>
+                    <CaretDown
+                      size={14}
+                      className={cn(
+                        "transition-transform",
+                        !(openSections[section.key] ?? true) && "-rotate-90",
+                      )}
+                    />
+                  </button>
+                )}
+                {(collapsed || (openSections[section.key] ?? true)) &&
+                  section.items.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.end}
+                      title={t(item.key)}
+                      onClick={closeMobileNav}
+                      className={({ isActive }) =>
+                        cn(
+                          "group relative flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-[background-color,color,box-shadow,scale] duration-150 active:scale-[0.98]",
+                          collapsed && "justify-center",
+                          item.indent && !collapsed && "pl-7",
+                          isActive
+                            ? "bg-kumo-tint font-medium text-kumo-default shadow-xs ring-1 ring-kumo-line/70"
+                            : "text-kumo-subtle hover:bg-kumo-tint/70 hover:text-kumo-default",
+                        )
+                      }
+                    >
+                      {({ isActive }) => {
+                        const Icon = NAV_ICONS[item.key] ?? Rows;
+                        return (
+                          <>
+                            {item.indent && !collapsed && (
+                              <span
+                                className={cn(
+                                  "absolute left-3 top-1/2 h-4 w-px -translate-y-1/2 rounded-full",
+                                  isActive ? "bg-kumo-brand" : "bg-kumo-line",
+                                )}
+                                aria-hidden="true"
+                              />
+                            )}
+                            <Icon size={18} weight={isActive ? "fill" : "regular"} />
+                            {!collapsed && (
+                              <span className="truncate">{t(item.key)}</span>
+                            )}
+                          </>
+                        );
+                      }}
+                    </NavLink>
+                  ))}
               </div>
             );
           })}

@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod group;
 pub mod ldap;
 pub mod login_log;
+pub mod message;
 pub mod oauth;
 pub mod overview;
 pub mod peer;

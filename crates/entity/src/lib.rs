@@ -17,6 +17,8 @@ pub mod deployment_token;
 pub mod device_group;
 pub mod group;
 pub mod login_log;
+pub mod message;
+pub mod message_read;
 pub mod oauth;
 pub mod peer;
 pub mod record_file;
