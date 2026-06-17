@@ -12,7 +12,7 @@ use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;
 use axum::response::Response;
 
-use entity::{user, user_token};
+use entity::{deployment_token, user, user_token};
 
 use crate::http::response;
 use crate::state::AppState;
@@ -80,6 +80,63 @@ fn header(parts: &Parts, name: &str) -> Option<String> {
         .get(name)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
+}
+
+/// RustDesk deployment CLI auth: accepts a normal user token or a deployment
+/// token created by the admin console.
+pub struct DeploymentAuth {
+    pub user: Option<user::Model>,
+    pub token: String,
+    pub deployment_token: Option<deployment_token::Model>,
+}
+
+impl DeploymentAuth {
+    pub fn is_deployment_token(&self) -> bool {
+        self.deployment_token.is_some()
+    }
+
+    pub fn deployment_token_id(&self) -> i32 {
+        self.deployment_token.as_ref().map(|t| t.id).unwrap_or(0)
+    }
+
+    pub fn has_scope(&self, scope: &str) -> bool {
+        match &self.deployment_token {
+            Some(token) => crate::services::deployment::has_scope(token, scope),
+            None => true,
+        }
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for DeploymentAuth {
+    type Rejection = Response;
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let auth = header(parts, "Authorization").ok_or_else(response::unauthorized)?;
+        if auth.len() <= 7 {
+            return Err(response::unauthorized());
+        }
+        let token = auth[7..].to_string();
+        if let Ok(Some((user, _ut))) =
+            crate::services::user::info_by_access_token(&state.db, &token).await
+        {
+            return Ok(DeploymentAuth {
+                user: Some(user),
+                token,
+                deployment_token: None,
+            });
+        }
+        match crate::services::deployment::verify_token(&state.db, &token).await {
+            Ok(Some(deployment_token)) => Ok(DeploymentAuth {
+                user: None,
+                token,
+                deployment_token: Some(deployment_token),
+            }),
+            _ => Err(response::unauthorized()),
+        }
+    }
 }
 
 /// RustDesk PC client auth: `Authorization: Bearer <access_token>`.

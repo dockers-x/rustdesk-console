@@ -5,6 +5,7 @@
 pub mod active_connection;
 pub mod address_book;
 pub mod audit;
+pub mod deployment;
 pub mod diagnostics;
 pub mod group;
 pub mod ldap;
@@ -16,6 +17,7 @@ pub mod record_file;
 pub mod record_storage;
 pub mod server_cmd;
 pub mod share_record;
+pub mod strategy;
 pub mod tag;
 pub mod user;
 

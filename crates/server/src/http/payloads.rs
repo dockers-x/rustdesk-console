@@ -9,7 +9,9 @@ use entity::{address_book, peer, share_record, user};
 /// `apiResp.UserPayload`.
 #[derive(Debug, Serialize)]
 pub struct UserPayload {
+    pub guid: String,
     pub name: String,
+    pub group_name: String,
     pub display_name: String,
     pub avatar: String,
     pub email: String,
@@ -23,7 +25,9 @@ pub struct UserPayload {
 impl UserPayload {
     pub fn from_user(u: &user::Model) -> Self {
         UserPayload {
+            guid: u.id.to_string(),
             name: u.username.clone(),
+            group_name: String::new(),
             display_name: u.nickname.clone(),
             avatar: u.avatar.clone(),
             email: u.email.clone(),

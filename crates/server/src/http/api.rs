@@ -10,9 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
-use entity::{address_book, audit_file, group, login_log, peer};
+use entity::{
+    address_book, audit_file, deployment_event, deployment_token, group, login_log, peer,
+};
 
-use crate::http::middleware::{AcceptLang, ClientIp, RustClientUser};
+use crate::http::middleware::{AcceptLang, ClientIp, DeploymentAuth, RustClientUser};
 use crate::http::payloads::*;
 use crate::http::response as resp;
 use crate::services;
@@ -62,7 +64,14 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
     if rustdesk_id.is_empty() {
         return Json(json!({ "error": "missing id" })).into_response();
     }
-    if let Ok(Some(p)) = services::peer::find_by_id(&state.db, &rustdesk_id).await {
+    let peer = match services::peer::find_by_id(&state.db, &rustdesk_id).await {
+        Ok(peer) => peer,
+        Err(e) => {
+            tracing::warn!("failed to query heartbeat peer {rustdesk_id}: {e}");
+            None
+        }
+    };
+    if let Some(p) = &peer {
         if Utc::now().timestamp() - p.last_online_time >= 30 {
             let am = peer::ActiveModel {
                 row_id: Set(p.row_id),
@@ -85,9 +94,25 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
             .remove_disconnected(&disconnect_key, conns);
     }
 
+    let mut modified_at = info.modified_at;
+    let mut strategy = resolve_capability(&normalize_reported_version(&info.version, info.ver));
+    if let Some(p) = &peer {
+        match services::strategy::effective_for_peer(&state.db, p).await {
+            Ok(Some(effective)) => {
+                modified_at = effective.modified_at;
+                strategy.extra.extend(effective.extra);
+                if effective.modified_at != info.modified_at {
+                    strategy.config_options = effective.config_options;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("failed to resolve strategy for {}: {e}", p.id),
+        }
+    }
+
     let mut res = json!({
-        "modified_at": info.modified_at,
-        "strategy": resolve_capability(&normalize_reported_version(&info.version, info.ver)),
+        "modified_at": modified_at,
+        "strategy": strategy,
     });
     let disconnect = state.disconnect_store.pending(&disconnect_key);
     if !disconnect.is_empty() {
@@ -414,9 +439,14 @@ pub async fn sysinfo_ver(State(state): State<AppState>) -> Response {
 #[derive(Deserialize)]
 pub struct PageQuery {
     #[serde(default)]
+    #[serde(alias = "current")]
     pub page: Option<u64>,
     #[serde(default, rename = "pageSize")]
     pub page_size: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub group_name: Option<String>,
 }
 
 pub async fn group_users(
@@ -433,6 +463,21 @@ pub async fn group_users(
 
     let (users, total) = if !u.is_admin() && !is_share {
         (vec![u.clone()], 1i64)
+    } else if u.is_admin() {
+        let r = services::user::list(
+            &state.db,
+            q.page.unwrap_or(1),
+            q.page_size.unwrap_or(10),
+            q.name.map(strip_like),
+        )
+        .await
+        .unwrap_or(services::user::UserListResult {
+            list: vec![],
+            page: 1,
+            page_size: 10,
+            total: 0,
+        });
+        (r.list, r.total)
     } else {
         let r = services::user::list_by_group_id(
             &state.db,
@@ -449,8 +494,24 @@ pub async fn group_users(
         });
         (r.list, r.total)
     };
-    let data: Vec<UserPayload> = users.iter().map(UserPayload::from_user).collect();
+    let group_names: std::collections::HashMap<i32, String> =
+        services::group::list(&state.db, 1, 9999)
+            .await
+            .map(|r| r.list.into_iter().map(|g| (g.id, g.name)).collect())
+            .unwrap_or_default();
+    let data: Vec<UserPayload> = users
+        .iter()
+        .map(|u| {
+            let mut payload = UserPayload::from_user(u);
+            payload.group_name = group_names.get(&u.group_id).cloned().unwrap_or_default();
+            payload
+        })
+        .collect();
     resp::data_response(total, data)
+}
+
+fn strip_like(value: String) -> String {
+    value.trim().trim_matches('%').to_string()
 }
 
 pub async fn group_peers(
@@ -534,20 +595,114 @@ pub struct DeviceDeployForm {
 
 pub async fn device_deploy(
     State(state): State<AppState>,
-    user: RustClientUser,
+    ClientIp(ip): ClientIp,
+    auth: DeploymentAuth,
     Json(f): Json<DeviceDeployForm>,
 ) -> Response {
-    let _ = f.pk.trim();
     if f.id.trim().is_empty() || f.uuid.trim().is_empty() {
+        let _ = record_deployment_event(
+            &state,
+            &auth,
+            deployment_event::ACTION_DEPLOY,
+            &f.id,
+            &f.uuid,
+            "INVALID_INPUT",
+            "missing id or uuid",
+            &ip,
+        )
+        .await;
         return Json(json!({ "result": "INVALID_INPUT" })).into_response();
     }
-    match upsert_deployed_peer(&state, &user.user, &f.id, &f.uuid, None).await {
-        Ok(_) => Json(json!({ "result": "OK" })).into_response(),
-        Err(DeviceDeployError::IdTaken) => Json(json!({ "result": "ID_TAKEN" })).into_response(),
+    if !auth.has_scope(deployment_token::SCOPE_DEPLOY) {
+        let _ = record_deployment_event(
+            &state,
+            &auth,
+            deployment_event::ACTION_DEPLOY,
+            &f.id,
+            &f.uuid,
+            "UNAUTHORIZED",
+            "deployment token lacks deploy scope",
+            &ip,
+        )
+        .await;
+        return Json(json!({ "error": "Unauthorized" })).into_response();
+    }
+    match upsert_deployed_peer(&state, &auth, None, &f.id, &f.uuid, Some(&f.pk), None).await {
+        Ok(peer) => {
+            if let Some(strategy_id) = auth
+                .deployment_token
+                .as_ref()
+                .map(|token| token.default_strategy_id)
+                .filter(|id| *id > 0)
+            {
+                let _ = services::strategy::assign(
+                    &state.db,
+                    strategy_id,
+                    entity::strategy_assignment::TARGET_PEER,
+                    &peer.id,
+                    services::strategy::DEFAULT_PRIORITY,
+                )
+                .await;
+            }
+            if auth.is_deployment_token() {
+                let _ = services::deployment::increment_used(&state.db, auth.deployment_token_id())
+                    .await;
+            }
+            let _ = record_deployment_event(
+                &state,
+                &auth,
+                deployment_event::ACTION_DEPLOY,
+                &f.id,
+                &f.uuid,
+                "OK",
+                "",
+                &ip,
+            )
+            .await;
+            Json(json!({ "result": "OK" })).into_response()
+        }
+        Err(DeviceDeployError::IdTaken) => {
+            let _ = record_deployment_event(
+                &state,
+                &auth,
+                deployment_event::ACTION_DEPLOY,
+                &f.id,
+                &f.uuid,
+                "ID_TAKEN",
+                "device id belongs to another uuid",
+                &ip,
+            )
+            .await;
+            Json(json!({ "result": "ID_TAKEN" })).into_response()
+        }
         Err(DeviceDeployError::InvalidInput) => {
+            let _ = record_deployment_event(
+                &state,
+                &auth,
+                deployment_event::ACTION_DEPLOY,
+                &f.id,
+                &f.uuid,
+                "INVALID_INPUT",
+                "invalid device deployment input",
+                &ip,
+            )
+            .await;
             Json(json!({ "result": "INVALID_INPUT" })).into_response()
         }
-        Err(DeviceDeployError::Other(e)) => Json(json!({ "error": e })).into_response(),
+        Err(DeviceDeployError::Other(e)) => {
+            let _ = record_deployment_event(
+                &state,
+                &auth,
+                deployment_event::ACTION_DEPLOY,
+                &f.id,
+                &f.uuid,
+                "ERROR",
+                &e,
+                &ip,
+            )
+            .await;
+            Json(json!({ "error": e })).into_response()
+        }
     }
 }
 
@@ -590,18 +745,63 @@ pub struct DeviceCliForm {
 
 pub async fn device_cli(
     State(state): State<AppState>,
-    user: RustClientUser,
+    ClientIp(ip): ClientIp,
+    auth: DeploymentAuth,
     Json(f): Json<DeviceCliForm>,
 ) -> Response {
-    match apply_device_cli_assignment(&state, &user.user, f).await {
-        Ok(message) => message.into_response(),
-        Err(message) => message.into_response(),
+    if !auth.has_scope(deployment_token::SCOPE_ASSIGN) {
+        let _ = record_deployment_event(
+            &state,
+            &auth,
+            deployment_event::ACTION_ASSIGN,
+            &f.id,
+            &f.uuid,
+            "UNAUTHORIZED",
+            "deployment token lacks assign scope",
+            &ip,
+        )
+        .await;
+        return "UNAUTHORIZED".into_response();
+    }
+    match apply_device_cli_assignment(&state, &auth, f).await {
+        Ok(message) => {
+            if auth.is_deployment_token() {
+                let _ = services::deployment::increment_used(&state.db, auth.deployment_token_id())
+                    .await;
+            }
+            let _ = record_deployment_event(
+                &state,
+                &auth,
+                deployment_event::ACTION_ASSIGN,
+                "",
+                "",
+                "OK",
+                "",
+                &ip,
+            )
+            .await;
+            message.into_response()
+        }
+        Err(message) => {
+            let _ = record_deployment_event(
+                &state,
+                &auth,
+                deployment_event::ACTION_ASSIGN,
+                "",
+                "",
+                "ERROR",
+                &message,
+                &ip,
+            )
+            .await;
+            message.into_response()
+        }
     }
 }
 
 async fn apply_device_cli_assignment(
     state: &AppState,
-    token_user: &entity::user::Model,
+    auth: &DeploymentAuth,
     f: DeviceCliForm,
 ) -> Result<String, String> {
     if f.id.trim().is_empty() || f.uuid.trim().is_empty() {
@@ -612,7 +812,7 @@ async fn apply_device_cli_assignment(
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("User not found: {name}"))?,
-        None => token_user.clone(),
+        None => resolve_deployment_default_user(state, auth).await?,
     };
     let device_group_id = match option_text(&f.device_group_name) {
         Some(name) => Some(
@@ -622,15 +822,27 @@ async fn apply_device_cli_assignment(
                 .ok_or_else(|| format!("Device group not found: {name}"))?
                 .id,
         ),
-        None => None,
+        None => auth
+            .deployment_token
+            .as_ref()
+            .map(|token| token.default_device_group_id)
+            .filter(|id| *id > 0),
     };
-    let mut peer = upsert_deployed_peer(state, &target_user, &f.id, &f.uuid, device_group_id)
-        .await
-        .map_err(|e| match e {
-            DeviceDeployError::InvalidInput => "INVALID_INPUT".to_string(),
-            DeviceDeployError::IdTaken => "ID_TAKEN".to_string(),
-            DeviceDeployError::Other(e) => e,
-        })?;
+    let mut peer = upsert_deployed_peer(
+        state,
+        auth,
+        Some(&target_user),
+        &f.id,
+        &f.uuid,
+        None,
+        device_group_id,
+    )
+    .await
+    .map_err(|e| match e {
+        DeviceDeployError::InvalidInput => "INVALID_INPUT".to_string(),
+        DeviceDeployError::IdTaken => "ID_TAKEN".to_string(),
+        DeviceDeployError::Other(e) => e,
+    })?;
 
     let mut changed_peer = false;
     if let Some(name) = option_text(&f.device_username) {
@@ -663,18 +875,45 @@ async fn apply_device_cli_assignment(
     }
 
     if let Some(address_book_name) = option_text(&f.address_book_name) {
+        if !auth.has_scope(deployment_token::SCOPE_ADDRESS_BOOK_ASSIGN) {
+            return Err("UNAUTHORIZED".to_string());
+        }
         assign_peer_to_address_book(state, &target_user, &peer, &address_book_name, &f).await?;
     }
 
-    let _ = option_text(&f.strategy_name);
+    if let Some(strategy_name) = option_text(&f.strategy_name) {
+        if !auth.has_scope(deployment_token::SCOPE_STRATEGY_ASSIGN) {
+            return Err("UNAUTHORIZED".to_string());
+        }
+        services::strategy::assign_peer_by_strategy_name(&state.db, &peer.id, &strategy_name)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else if let Some(strategy_id) = auth
+        .deployment_token
+        .as_ref()
+        .map(|token| token.default_strategy_id)
+        .filter(|id| *id > 0)
+    {
+        services::strategy::assign(
+            &state.db,
+            strategy_id,
+            entity::strategy_assignment::TARGET_PEER,
+            &peer.id,
+            services::strategy::DEFAULT_PRIORITY,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     Ok(String::new())
 }
 
 async fn upsert_deployed_peer(
     state: &AppState,
-    user: &entity::user::Model,
+    auth: &DeploymentAuth,
+    user_override: Option<&entity::user::Model>,
     id: &str,
     uuid: &str,
+    pk: Option<&str>,
     device_group_id: Option<i32>,
 ) -> Result<peer::Model, DeviceDeployError> {
     let id = id.trim();
@@ -682,7 +921,21 @@ async fn upsert_deployed_peer(
     if id.is_empty() || uuid.is_empty() {
         return Err(DeviceDeployError::InvalidInput);
     }
-    let group_id = device_group_id.unwrap_or(0);
+    let pk = pk.map(str::trim).filter(|value| !value.is_empty());
+    let user = match user_override {
+        Some(user) => user.clone(),
+        None => resolve_deployment_default_user(state, auth)
+            .await
+            .map_err(DeviceDeployError::Other)?,
+    };
+    let group_id = device_group_id
+        .or_else(|| {
+            auth.deployment_token
+                .as_ref()
+                .map(|token| token.default_device_group_id)
+                .filter(|id| *id > 0)
+        })
+        .unwrap_or(0);
     let existing = services::peer::find_by_id(&state.db, id)
         .await
         .map_err(|e| DeviceDeployError::Other(e.to_string()))?;
@@ -693,6 +946,12 @@ async fn upsert_deployed_peer(
             }
             p.uuid = uuid.to_string();
             p.user_id = user.id;
+            if let Some(pk) = pk {
+                p.pk = pk.to_string();
+            }
+            if p.guid.is_empty() {
+                p.guid = uuid::Uuid::new_v4().to_string();
+            }
             if device_group_id.is_some() {
                 p.group_id = group_id;
             }
@@ -700,6 +959,8 @@ async fn upsert_deployed_peer(
                 row_id: Set(p.row_id),
                 id: Set(p.id.clone()),
                 uuid: Set(p.uuid.clone()),
+                pk: Set(p.pk.clone()),
+                guid: Set(p.guid.clone()),
                 user_id: Set(p.user_id),
                 group_id: Set(p.group_id),
                 ..Default::default()
@@ -713,8 +974,11 @@ async fn upsert_deployed_peer(
             let p = peer::ActiveModel {
                 id: Set(id.to_string()),
                 uuid: Set(uuid.to_string()),
+                pk: Set(pk.unwrap_or_default().to_string()),
+                guid: Set(uuid::Uuid::new_v4().to_string()),
                 user_id: Set(user.id),
                 group_id: Set(group_id),
+                status: Set(entity::user::STATUS_ENABLE),
                 ..Default::default()
             };
             services::peer::create(&state.db, p)
@@ -722,6 +986,49 @@ async fn upsert_deployed_peer(
                 .map_err(|e| DeviceDeployError::Other(e.to_string()))
         }
     }
+}
+
+async fn resolve_deployment_default_user(
+    state: &AppState,
+    auth: &DeploymentAuth,
+) -> Result<entity::user::Model, String> {
+    if let Some(user) = &auth.user {
+        return Ok(user.clone());
+    }
+    let Some(token) = &auth.deployment_token else {
+        return Err("Unauthorized".to_string());
+    };
+    let user_id = token.default_user_id;
+    if user_id <= 0 {
+        return Err("deployment token has no default user".to_string());
+    }
+    services::user::info_by_id(&state.db, user_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "deployment token default user not found".to_string())
+}
+
+async fn record_deployment_event(
+    state: &AppState,
+    auth: &DeploymentAuth,
+    action: &str,
+    peer_id: &str,
+    uuid: &str,
+    result: &str,
+    message: &str,
+    ip: &str,
+) -> Result<(), sea_orm::DbErr> {
+    services::deployment::record_event(
+        &state.db,
+        auth.deployment_token_id(),
+        peer_id,
+        uuid,
+        action,
+        result,
+        message,
+        ip,
+    )
+    .await
 }
 
 async fn assign_peer_to_address_book(

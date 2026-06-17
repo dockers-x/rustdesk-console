@@ -7,7 +7,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::http::{admin, api, file, my, oauth, observability, static_files};
+use crate::http::{admin, api, file, my, oauth, observability, pro_api, static_files};
 use crate::state::AppState;
 
 pub fn build(state: AppState) -> Router {
@@ -34,8 +34,54 @@ pub fn build(state: AppState) -> Router {
         .route("/api/user/info", get(api::user_info))
         .route("/api/sysinfo", post(api::sysinfo))
         .route("/api/sysinfo_ver", post(api::sysinfo_ver))
-        .route("/api/users", get(api::group_users))
+        .route(
+            "/api/users",
+            get(api::group_users).post(pro_api::user_create),
+        )
+        .route("/api/users/:guid/disable", post(pro_api::user_disable))
+        .route("/api/users/:guid/enable", post(pro_api::user_enable))
+        .route("/api/users/:guid", delete(pro_api::user_delete))
         .route("/api/peers", get(api::group_peers))
+        .route("/api/devices", get(pro_api::devices))
+        .route("/api/devices/:guid/disable", post(pro_api::device_disable))
+        .route("/api/devices/:guid/enable", post(pro_api::device_enable))
+        .route("/api/devices/:guid", delete(pro_api::device_delete))
+        .route("/api/devices/:guid/assign", post(pro_api::device_assign))
+        .route(
+            "/api/device-groups",
+            get(pro_api::device_groups).post(pro_api::device_group_create),
+        )
+        .route(
+            "/api/device-groups/:guid",
+            patch(pro_api::device_group_update)
+                .delete(pro_api::device_group_delete)
+                .post(pro_api::device_group_add_devices),
+        )
+        .route(
+            "/api/device-groups/:guid/devices",
+            delete(pro_api::device_group_remove_devices),
+        )
+        .route("/api/strategies", get(pro_api::strategies))
+        .route("/api/strategies/:guid", get(pro_api::strategy_detail))
+        .route(
+            "/api/strategies/:guid/status",
+            put(pro_api::strategy_status),
+        )
+        .route("/api/strategies/assign", post(pro_api::strategy_assign))
+        .route(
+            "/api/user-groups",
+            get(pro_api::user_groups).post(pro_api::user_group_create),
+        )
+        .route(
+            "/api/user-groups/:guid",
+            patch(pro_api::user_group_update)
+                .delete(pro_api::user_group_delete)
+                .post(pro_api::user_group_add_users),
+        )
+        .route("/api/audits/conn", get(pro_api::audits_conn))
+        .route("/api/audits/file", get(pro_api::audits_file))
+        .route("/api/audits/alarm", get(pro_api::audits_empty))
+        .route("/api/audits/console", get(pro_api::audits_empty))
         .route(
             "/api/device-group/accessible",
             get(api::device_group_accessible),
@@ -189,6 +235,37 @@ fn admin_routes() -> Router<AppState> {
             "/api/admin/device_group/delete",
             post(admin::device_group_delete),
         )
+        // deployment tokens
+        .route(
+            "/api/admin/deployment_token/list",
+            get(admin::deployment_token_list),
+        )
+        .route(
+            "/api/admin/deployment_token/detail/:id",
+            get(admin::deployment_token_detail),
+        )
+        .route(
+            "/api/admin/deployment_token/create",
+            post(admin::deployment_token_create),
+        )
+        .route(
+            "/api/admin/deployment_token/delete",
+            post(admin::deployment_token_delete),
+        )
+        .route(
+            "/api/admin/deployment_token/revoke",
+            post(admin::deployment_token_revoke),
+        )
+        // strategy
+        .route("/api/admin/strategy/list", get(admin::strategy_list))
+        .route(
+            "/api/admin/strategy/detail/:id",
+            get(admin::strategy_detail),
+        )
+        .route("/api/admin/strategy/create", post(admin::strategy_create))
+        .route("/api/admin/strategy/update", post(admin::strategy_update))
+        .route("/api/admin/strategy/delete", post(admin::strategy_delete))
+        .route("/api/admin/strategy/assign", post(admin::strategy_assign))
         // tag
         .route("/api/admin/tag/list", get(admin::tag_list))
         .route("/api/admin/tag/detail/:id", get(admin::tag_detail))

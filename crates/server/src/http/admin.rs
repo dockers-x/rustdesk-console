@@ -10,6 +10,7 @@ use axum::Json;
 use sea_orm::Set;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 use entity::{group, peer, user};
 
@@ -723,6 +724,343 @@ pub async fn device_group_delete(
     match services::group::device_group_delete(&state.db, f.id).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+// ---------- deployment token CRUD ----------
+
+#[derive(Deserialize, Default)]
+pub struct DeploymentTokenQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct DeploymentTokenForm {
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub scopes: Value,
+    #[serde(default)]
+    pub default_user_id: i32,
+    #[serde(default)]
+    pub default_device_group_id: i32,
+    #[serde(default)]
+    pub default_strategy_id: i32,
+    #[serde(default)]
+    pub expires_at: i64,
+    #[serde(default)]
+    pub max_uses: i32,
+}
+
+pub async fn deployment_token_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<DeploymentTokenQuery>,
+) -> Response {
+    match services::deployment::list_tokens(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.name,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn deployment_token_detail(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Path(id): Path<i32>,
+) -> Response {
+    match services::deployment::info_by_id(&state.db, id).await {
+        Ok(Some(row)) => resp::success(row),
+        _ => resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    }
+}
+
+pub async fn deployment_token_create(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: AdminUser,
+    Json(f): Json<DeploymentTokenForm>,
+) -> Response {
+    let scopes = parse_scopes(f.scopes);
+    let scopes = if scopes.is_empty() {
+        services::deployment::default_scopes()
+    } else {
+        scopes
+    };
+    let input = services::deployment::CreateTokenInput {
+        name: f.name,
+        scopes,
+        default_user_id: f.default_user_id,
+        default_device_group_id: f.default_device_group_id,
+        default_strategy_id: f.default_strategy_id,
+        expires_at: f.expires_at,
+        max_uses: f.max_uses,
+        created_by: user.user.id,
+    };
+    match services::deployment::create_token(&state.db, input).await {
+        Ok(created) => resp::success(json!({
+            "token": created.token,
+            "row": created.row,
+        })),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn deployment_token_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    match services::deployment::delete_token(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn deployment_token_revoke(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    match services::deployment::revoke_token(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+// ---------- strategy CRUD ----------
+
+#[derive(Deserialize, Default)]
+pub struct StrategyQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct StrategyForm {
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub status: i32,
+    #[serde(default)]
+    pub config_options: Value,
+    #[serde(default)]
+    pub extra: Value,
+}
+
+#[derive(Deserialize, Default)]
+pub struct StrategyAssignForm {
+    #[serde(default)]
+    pub strategy_id: i32,
+    #[serde(default)]
+    pub target_type: String,
+    #[serde(default)]
+    pub target_id: String,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+pub async fn strategy_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<StrategyQuery>,
+) -> Response {
+    match services::strategy::list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.name,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn strategy_detail(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Path(id): Path<i32>,
+) -> Response {
+    match services::strategy::info_by_id(&state.db, id).await {
+        Ok(Some(row)) => resp::success(row),
+        _ => resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    }
+}
+
+pub async fn strategy_create(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<StrategyForm>,
+) -> Response {
+    match services::strategy::create(
+        &state.db,
+        &f.name,
+        &f.note,
+        f.status,
+        parse_string_map(f.config_options),
+        parse_string_map(f.extra),
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn strategy_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<StrategyForm>,
+) -> Response {
+    let row = match services::strategy::info_by_id(&state.db, f.id).await {
+        Ok(Some(row)) => row,
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::strategy::update(
+        &state.db,
+        row,
+        &f.name,
+        &f.note,
+        f.status,
+        parse_string_map(f.config_options),
+        parse_string_map(f.extra),
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn strategy_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    match services::strategy::delete(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn strategy_assign(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<StrategyAssignForm>,
+) -> Response {
+    match services::strategy::assign(
+        &state.db,
+        f.strategy_id,
+        &f.target_type,
+        &f.target_id,
+        if f.priority == 0 {
+            services::strategy::DEFAULT_PRIORITY
+        } else {
+            f.priority
+        },
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+fn parse_string_map(value: Value) -> HashMap<String, String> {
+    match value {
+        Value::Object(obj) => obj
+            .into_iter()
+            .filter_map(|(k, v)| {
+                value_as_string(v)
+                    .map(|v| (k.trim().to_string(), v))
+                    .filter(|(k, _)| !k.is_empty())
+            })
+            .collect(),
+        Value::String(raw) => {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                return HashMap::new();
+            }
+            if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(raw) {
+                return parse_string_map(Value::Object(obj));
+            }
+            raw.split(',')
+                .filter_map(|pair| {
+                    let (k, v) = pair.split_once('=')?;
+                    let k = k.trim();
+                    if k.is_empty() {
+                        return None;
+                    }
+                    Some((k.to_string(), v.trim().to_string()))
+                })
+                .collect()
+        }
+        _ => HashMap::new(),
+    }
+}
+
+fn parse_scopes(value: Value) -> Vec<String> {
+    match value {
+        Value::Array(values) => values
+            .into_iter()
+            .filter_map(value_as_string)
+            .filter(|v| !v.is_empty())
+            .collect(),
+        Value::String(raw) => {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                return vec![];
+            }
+            if let Ok(Value::Array(values)) = serde_json::from_str::<Value>(raw) {
+                return parse_scopes(Value::Array(values));
+            }
+            raw.split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        }
+        _ => vec![],
+    }
+}
+
+fn value_as_string(value: Value) -> Option<String> {
+    match value {
+        Value::String(v) => Some(v.trim().to_string()),
+        Value::Number(v) => Some(v.to_string()),
+        Value::Bool(v) => Some(if v { "Y" } else { "N" }.to_string()),
+        _ => None,
     }
 }
 

@@ -5,6 +5,10 @@ import type { ReactNode } from "react";
 export type FieldType =
   | "text"
   | "number"
+  | "color"
+  | "avatar"
+  | "relation"
+  | "oauth_provider"
   | "password"
   | "switch"
   | "select"
@@ -15,11 +19,21 @@ export interface SelectOption {
   value: string | number;
 }
 
+export interface RelationDef {
+  api: string | ((form: Record<string, unknown>) => string);
+  valueField?: string;
+  labelFields?: string[];
+  params?: Record<string, unknown> | ((form: Record<string, unknown>) => Record<string, unknown>);
+  includeEmptyOption?: boolean;
+  emptyLabel?: string;
+}
+
 export interface FieldDef {
   name: string;
   label: string; // i18n key
   type: FieldType;
   options?: SelectOption[];
+  relation?: RelationDef;
   hint?: string; // i18n key
   placeholder?: string; // i18n key
   visibleWhen?: (form: Record<string, unknown>, editing: boolean) => boolean;
@@ -31,6 +45,8 @@ export interface FieldDef {
   /** For `switch` fields backing a non-boolean column. */
   switchOn?: unknown;
   switchOff?: unknown;
+  /** Field used to derive the default RustDesk tag color. */
+  colorSeedField?: string;
 }
 
 export interface ColumnDef<T = Record<string, unknown>> {

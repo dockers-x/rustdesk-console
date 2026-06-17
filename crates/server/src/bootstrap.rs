@@ -14,8 +14,9 @@ use sea_orm::{
 
 use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
-    audit_conn, audit_file, device_group, group, login_log, oauth, peer, record_file, server_cmd,
-    share_record, tag, user, user_third, user_token, version,
+    audit_conn, audit_file, deployment_event, deployment_token, device_group, group, login_log,
+    oauth, peer, record_file, server_cmd, share_record, strategy, strategy_assignment, tag, user,
+    user_third, user_token, version,
 };
 
 use crate::config::{self, Config};
@@ -29,7 +30,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 268;
+pub const DATABASE_VERSION: i32 = 270;
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
@@ -100,6 +101,10 @@ async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Resu
     create!(audit_conn::Entity);
     create!(audit_file::Entity);
     create!(record_file::Entity);
+    create!(deployment_token::Entity);
+    create!(deployment_event::Entity);
+    create!(strategy::Entity);
+    create!(strategy_assignment::Entity);
     create!(address_book_collection::Entity);
     create!(address_book_collection_rule::Entity);
     create!(server_cmd::Entity);
@@ -160,6 +165,45 @@ async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
                     .string()
                     .not_null()
                     .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "peers", "pk").await? {
+        let stmt = Table::alter()
+            .table(peer::Entity)
+            .add_column(
+                ColumnDef::new(peer::Column::Pk)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "peers", "guid").await? {
+        let stmt = Table::alter()
+            .table(peer::Entity)
+            .add_column(
+                ColumnDef::new(peer::Column::Guid)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "peers", "status").await? {
+        let stmt = Table::alter()
+            .table(peer::Entity)
+            .add_column(
+                ColumnDef::new(peer::Column::Status)
+                    .integer()
+                    .not_null()
+                    .default(user::STATUS_ENABLE),
             )
             .to_owned();
         db.execute(backend.build(&stmt)).await?;

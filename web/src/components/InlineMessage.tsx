@@ -17,11 +17,11 @@ export function InlineMessage({
   className?: string;
 }) {
   return (
-    <p
+    <div
       role={tone === "error" ? "alert" : "status"}
       className={`rounded-md border px-3 py-2 text-sm ${TONE_CLASS[tone]} ${className}`}
     >
       {children}
-    </p>
+    </div>
   );
 }

@@ -6,6 +6,7 @@ pub mod my;
 pub mod oauth;
 pub mod observability;
 pub mod payloads;
+pub mod pro_api;
 pub mod response;
 pub mod router;
 pub mod static_files;

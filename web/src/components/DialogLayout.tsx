@@ -5,7 +5,7 @@ export const dialogPanelClass =
   "overflow-hidden bg-kumo-elevated p-0 ring-1 ring-kumo-line";
 
 export const resourceFormDialogPanelClass =
-  "z-50 flex max-h-[calc(100svh-1rem)] min-w-0 w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] flex-col overflow-hidden border border-kumo-line bg-kumo-base p-0 text-kumo-default ring-2 ring-kumo-line drop-shadow-xl drop-shadow-kumo-shadow-drop sm:max-h-[min(86vh,720px)] sm:w-[min(42rem,calc(100vw-2rem))] sm:max-w-[min(42rem,calc(100vw-2rem))]";
+  "z-50 flex max-h-[calc(100svh-1rem)] min-w-0 w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] flex-col overflow-hidden border border-kumo-line bg-kumo-base p-0 text-kumo-default ring-2 ring-kumo-line drop-shadow-xl drop-shadow-kumo-shadow-drop sm:max-h-[min(90vh,760px)] sm:w-[min(56rem,calc(100vw-2rem))] sm:max-w-[min(56rem,calc(100vw-2rem))]";
 
 export function DialogHeader({
   title,
@@ -28,7 +28,7 @@ export function DialogHeader({
 
 export function DialogBody({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 [scrollbar-gutter:stable] sm:px-6">
       {children}
     </div>
   );

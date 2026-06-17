@@ -1,7 +1,9 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
+import { DeploymentTokenActions } from "../components/DeploymentTokenActions";
 import { OAuthProviderActions } from "../components/OAuthProviderActions";
 import { PeerQuickActions } from "../components/PeerQuickActions";
+import { OAuthProviderBadge } from "../components/OAuthProviderBadge";
 import { RecordFileActions } from "../components/RecordFileActions";
 import { WebClientActions } from "../components/WebClientActions";
 import type { ResourceConfig } from "./types";
@@ -67,6 +69,25 @@ const activeConnectionActionsCol = {
     />
   ),
 };
+const colorCol = {
+  key: "color",
+  label: "color",
+  render: (r: Record<string, unknown>) => {
+    const n = Number(r.color);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    const hex = `#${((n >>> 0) & 0x00ffffff).toString(16).padStart(6, "0")}`;
+    return (
+      <span className="inline-flex items-center gap-2 tabular-nums">
+        <span
+          className="size-4 rounded border border-kumo-line"
+          style={{ backgroundColor: hex }}
+          aria-hidden="true"
+        />
+        <span className="font-mono text-xs">{hex}</span>
+      </span>
+    );
+  },
+};
 const RULE_OPTIONS = [
   { label: "ruleRead", value: 1 },
   { label: "ruleReadWrite", value: 2 },
@@ -76,6 +97,27 @@ const RULE_TYPE_OPTIONS = [
   { label: "rulePersonal", value: 1 },
   { label: "ruleGroup", value: 2 },
 ];
+const USER_RELATION = {
+  api: "/api/admin/user",
+  labelFields: ["username", "nickname", "email", "id"],
+};
+const GROUP_RELATION = {
+  api: "/api/admin/group",
+  labelFields: ["name", "id"],
+  includeEmptyOption: false,
+};
+const DEVICE_GROUP_RELATION = {
+  api: "/api/admin/device_group",
+  labelFields: ["name", "id"],
+};
+const STRATEGY_RELATION = {
+  api: "/api/admin/strategy",
+  labelFields: ["name", "guid", "id"],
+};
+const COLLECTION_RELATION = {
+  api: "/api/admin/address_book_collection",
+  labelFields: ["name", "id"],
+};
 const oauthTypeIs =
   (...types: string[]) =>
   (form: Record<string, unknown>) =>
@@ -107,7 +149,20 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { name: "password", label: "password", type: "password", createOnly: true },
       { name: "email", label: "email", type: "text" },
       { name: "nickname", label: "nickname", type: "text" },
-      { name: "group_id", label: "groupId", type: "number", defaultValue: 1 },
+      {
+        name: "avatar",
+        label: "avatar",
+        type: "avatar",
+        placeholder: "avatarPlaceholder",
+        hint: "avatarHint",
+      },
+      {
+        name: "group_id",
+        label: "groupId",
+        type: "relation",
+        relation: GROUP_RELATION,
+        defaultValue: 1,
+      },
       { name: "is_admin", label: "isAdmin", type: "switch" },
       {
         name: "status",
@@ -159,6 +214,102 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     fields: [{ name: "name", label: "name", type: "text" }],
   },
   {
+    name: "deployment_tokens",
+    titleKey: "deploymentTokens",
+    api: "/api/admin/deployment_token",
+    canEdit: false,
+    filters: [{ name: "name", label: "search" }],
+    columns: [
+      { key: "id", label: "id" },
+      { key: "name", label: "name" },
+      monoCol("scopes", "scopes", "max-w-64"),
+      { key: "default_user_id", label: "defaultUserId" },
+      { key: "default_device_group_id", label: "defaultDeviceGroupId" },
+      { key: "default_strategy_id", label: "defaultStrategyId" },
+      { key: "used_count", label: "usedCount" },
+      { key: "max_uses", label: "maxUses" },
+      { key: "expires_at", label: "expiredAt" },
+      { key: "revoked_at", label: "revokedAt" },
+      { key: "created_at", label: "createdAt" },
+    ],
+    fields: [
+      { name: "name", label: "name", type: "text" },
+      {
+        name: "scopes",
+        label: "scopes",
+        type: "textarea",
+        defaultValue: "deploy,assign,strategy_assign,address_book_assign",
+        hint: "deploymentTokenScopesHint",
+      },
+      {
+        name: "default_user_id",
+        label: "defaultUserId",
+        type: "relation",
+        relation: USER_RELATION,
+        defaultValue: 0,
+      },
+      {
+        name: "default_device_group_id",
+        label: "defaultDeviceGroupId",
+        type: "relation",
+        relation: DEVICE_GROUP_RELATION,
+        defaultValue: 0,
+      },
+      {
+        name: "default_strategy_id",
+        label: "defaultStrategyId",
+        type: "relation",
+        relation: STRATEGY_RELATION,
+        defaultValue: 0,
+      },
+      { name: "expires_at", label: "expiredAt", type: "number", defaultValue: 0 },
+      { name: "max_uses", label: "maxUses", type: "number", defaultValue: 0 },
+    ],
+    rowActions: (r) => <DeploymentTokenActions id={Number(r.id ?? 0)} />,
+  },
+  {
+    name: "strategies",
+    titleKey: "strategies",
+    api: "/api/admin/strategy",
+    filters: [{ name: "name", label: "search" }],
+    columns: [
+      { key: "id", label: "id" },
+      monoCol("guid", "guid", "max-w-52"),
+      { key: "name", label: "name" },
+      statusCol,
+      { key: "modified_at", label: "modifiedAt" },
+      monoCol("config_options", "configOptions", "max-w-72"),
+      { key: "note", label: "note" },
+      { key: "created_at", label: "createdAt" },
+    ],
+    fields: [
+      { name: "name", label: "name", type: "text" },
+      { name: "note", label: "note", type: "text" },
+      {
+        name: "status",
+        label: "status",
+        type: "switch",
+        switchOn: 1,
+        switchOff: 2,
+        defaultValue: 1,
+      },
+      {
+        name: "config_options",
+        label: "configOptions",
+        type: "textarea",
+        defaultValue: "{}",
+        hint: "strategyOptionsHint",
+      },
+      {
+        name: "extra",
+        label: "extra",
+        type: "textarea",
+        defaultValue: "{}",
+        hint: "strategyExtraHint",
+      },
+    ],
+  },
+  {
     name: "tags",
     titleKey: "tags",
     api: "/api/admin/tag",
@@ -166,14 +317,31 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "id", label: "id" },
       { key: "name", label: "name" },
       { key: "user_id", label: "userId" },
-      { key: "color", label: "color" },
+      colorCol,
       { key: "collection_id", label: "collectionId" },
     ],
     fields: [
       { name: "name", label: "name", type: "text" },
-      { name: "user_id", label: "userId", type: "number" },
-      { name: "color", label: "color", type: "number", defaultValue: 0 },
-      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+      {
+        name: "user_id",
+        label: "userId",
+        type: "relation",
+        relation: USER_RELATION,
+      },
+      {
+        name: "color",
+        label: "color",
+        type: "color",
+        defaultValue: 0,
+        colorSeedField: "name",
+      },
+      {
+        name: "collection_id",
+        label: "collectionId",
+        type: "relation",
+        relation: COLLECTION_RELATION,
+        defaultValue: 0,
+      },
     ],
   },
   {
@@ -198,8 +366,20 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     ],
     fields: [
       { name: "alias", label: "alias", type: "text" },
-      { name: "group_id", label: "groupId", type: "number", defaultValue: 0 },
-      { name: "user_id", label: "userId", type: "number", defaultValue: 0 },
+      {
+        name: "group_id",
+        label: "groupId",
+        type: "relation",
+        relation: DEVICE_GROUP_RELATION,
+        defaultValue: 0,
+      },
+      {
+        name: "user_id",
+        label: "userId",
+        type: "relation",
+        relation: USER_RELATION,
+        defaultValue: 0,
+      },
     ],
   },
   {
@@ -209,7 +389,11 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     columns: [
       { key: "id", label: "id" },
       { key: "op", label: "op" },
-      { key: "oauth_type", label: "oauthType" },
+      {
+        key: "oauth_type",
+        label: "oauthType",
+        render: (r) => <OAuthProviderBadge value={r.oauth_type} />,
+      },
       boolCol("auto_register", "autoRegister"),
       boolCol("pkce_enable", "pkce"),
       { key: "client_id", label: "clientId" },
@@ -220,7 +404,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       {
         name: "oauth_type",
         label: "oauthType",
-        type: "select",
+        type: "oauth_provider",
         defaultValue: "github",
         options: [
           { label: "github", value: "github" },
@@ -236,6 +420,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         type: "text",
         placeholder: "oauthOpPlaceholder",
         hint: "oauthOpHint",
+        visibleWhen: oauthTypeIs("oidc"),
       },
       {
         name: "client_id",
@@ -313,8 +498,23 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { name: "hostname", label: "hostname", type: "text" },
       { name: "platform", label: "platform", type: "text" },
       { name: "alias", label: "alias", type: "text" },
-      { name: "user_id", label: "userId", type: "number", defaultValue: 0 },
-      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+      {
+        name: "user_id",
+        label: "userId",
+        type: "relation",
+        relation: USER_RELATION,
+        defaultValue: 0,
+      },
+      {
+        name: "collection_id",
+        label: "collectionId",
+        type: "relation",
+        relation: {
+          ...COLLECTION_RELATION,
+          params: (form) => ({ user_id: form.user_id || 0 }),
+        },
+        defaultValue: 0,
+      },
     ],
   },
   {
@@ -329,7 +529,12 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     ],
     fields: [
       { name: "name", label: "name", type: "text" },
-      { name: "user_id", label: "userId", type: "number" },
+      {
+        name: "user_id",
+        label: "userId",
+        type: "relation",
+        relation: USER_RELATION,
+      },
     ],
   },
   {
@@ -354,11 +559,34 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "to_id", label: "toId" },
     ],
     fields: [
-      { name: "user_id", label: "userId", type: "number" },
-      { name: "collection_id", label: "collectionId", type: "number" },
+      {
+        name: "user_id",
+        label: "userId",
+        type: "relation",
+        relation: USER_RELATION,
+      },
+      {
+        name: "collection_id",
+        label: "collectionId",
+        type: "relation",
+        relation: {
+          ...COLLECTION_RELATION,
+          params: (form) => ({ user_id: form.user_id || 0 }),
+        },
+      },
       { name: "rule", label: "rule", type: "select", defaultValue: 1, options: RULE_OPTIONS },
       { name: "type", label: "type", type: "select", defaultValue: 1, options: RULE_TYPE_OPTIONS },
-      { name: "to_id", label: "toId", type: "number" },
+      {
+        name: "to_id",
+        label: "toId",
+        type: "relation",
+        relation: {
+          api: (form) =>
+            Number(form.type ?? 1) === 2 ? "/api/admin/group" : "/api/admin/user",
+          labelFields: ["name", "username", "nickname", "id"],
+          includeEmptyOption: false,
+        },
+      },
     ],
   },
   {
@@ -579,7 +807,16 @@ export const MY_RESOURCES: ResourceConfig[] = [
       { name: "hostname", label: "hostname", type: "text" },
       { name: "platform", label: "platform", type: "text" },
       { name: "alias", label: "alias", type: "text" },
-      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+      {
+        name: "collection_id",
+        label: "collectionId",
+        type: "relation",
+        relation: {
+          api: "/api/admin/my/address_book_collection",
+          labelFields: ["name", "id"],
+        },
+        defaultValue: 0,
+      },
     ],
   },
   {
@@ -591,13 +828,28 @@ export const MY_RESOURCES: ResourceConfig[] = [
     columns: [
       { key: "id", label: "id" },
       { key: "name", label: "name" },
-      { key: "color", label: "color" },
+      colorCol,
       { key: "collection_id", label: "collectionId" },
     ],
     fields: [
       { name: "name", label: "name", type: "text" },
-      { name: "color", label: "color", type: "number", defaultValue: 0 },
-      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+      {
+        name: "color",
+        label: "color",
+        type: "color",
+        defaultValue: 0,
+        colorSeedField: "name",
+      },
+      {
+        name: "collection_id",
+        label: "collectionId",
+        type: "relation",
+        relation: {
+          api: "/api/admin/my/address_book_collection",
+          labelFields: ["name", "id"],
+        },
+        defaultValue: 0,
+      },
     ],
   },
   {
@@ -623,10 +875,29 @@ export const MY_RESOURCES: ResourceConfig[] = [
       { key: "to_id", label: "toId" },
     ],
     fields: [
-      { name: "collection_id", label: "collectionId", type: "number", defaultValue: 0 },
+      {
+        name: "collection_id",
+        label: "collectionId",
+        type: "relation",
+        relation: {
+          api: "/api/admin/my/address_book_collection",
+          labelFields: ["name", "id"],
+        },
+        defaultValue: 0,
+      },
       { name: "rule", label: "rule", type: "select", defaultValue: 1, options: RULE_OPTIONS },
       { name: "type", label: "type", type: "select", defaultValue: 1, options: RULE_TYPE_OPTIONS },
-      { name: "to_id", label: "toId", type: "number" },
+      {
+        name: "to_id",
+        label: "toId",
+        type: "relation",
+        relation: {
+          api: (form) =>
+            Number(form.type ?? 1) === 2 ? "/api/admin/group" : "/api/admin/user",
+          labelFields: ["name", "username", "nickname", "id"],
+          includeEmptyOption: false,
+        },
+      },
     ],
   },
   {
