@@ -32,6 +32,13 @@ pub struct WebSocketRoutes {
     pub relay: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DeploymentOptions {
+    pub permanent_password: String,
+    pub approve_mode: String,
+    pub verification_method: String,
+}
+
 #[derive(Serialize)]
 struct RustDeskServerConfig<'a> {
     host: &'a str,
@@ -41,6 +48,20 @@ struct RustDeskServerConfig<'a> {
 }
 
 pub fn build(cfg: &WebClientConfig) -> DeploymentConfig {
+    build_with_options(cfg, &DeploymentOptions::default())
+}
+
+pub fn build_with_password(cfg: &WebClientConfig, permanent_password: &str) -> DeploymentConfig {
+    build_with_options(
+        cfg,
+        &DeploymentOptions {
+            permanent_password: permanent_password.to_string(),
+            ..Default::default()
+        },
+    )
+}
+
+pub fn build_with_options(cfg: &WebClientConfig, options: &DeploymentOptions) -> DeploymentConfig {
     let id_server = cfg.id_server.trim().to_string();
     let relay_server = cfg.relay_server.trim().to_string();
     let api_server = cfg.api_server.trim().to_string();
@@ -50,7 +71,7 @@ pub fn build(cfg: &WebClientConfig) -> DeploymentConfig {
     let key = cfg.key.trim().to_string();
     let encoded_config = encode_server_config(&id_server, &relay_server, &api_server, &key);
     let filename_hint = filename_hint(&id_server, &relay_server, &api_server, &key);
-    let config_command = DeploymentCommandSet {
+    let mut config_command = DeploymentCommandSet {
         linux: vec![format!(
             "sudo rustdesk --config {}",
             sh_arg(&encoded_config)
@@ -64,7 +85,7 @@ pub fn build(cfg: &WebClientConfig) -> DeploymentConfig {
             cmd_arg(&encoded_config)
         )],
     };
-    let option_commands = DeploymentCommandSet {
+    let mut option_commands = DeploymentCommandSet {
         linux: option_commands(
             "sudo rustdesk",
             &id_server,
@@ -90,6 +111,8 @@ pub fn build(cfg: &WebClientConfig) -> DeploymentConfig {
             cmd_arg,
         ),
     };
+    append_deployment_options(&mut config_command, options);
+    append_deployment_options(&mut option_commands, options);
     let webclient_ws_routes = ws_routes(&ws_host, &ws_id_host, &ws_relay_host);
 
     DeploymentConfig {
@@ -105,6 +128,67 @@ pub fn build(cfg: &WebClientConfig) -> DeploymentConfig {
         config_command,
         option_commands,
         webclient_ws_routes,
+    }
+}
+
+fn append_deployment_options(commands: &mut DeploymentCommandSet, options: &DeploymentOptions) {
+    let password = options.permanent_password.trim();
+    if password.is_empty() {
+    } else {
+        commands
+            .linux
+            .push(format!("sudo rustdesk --password {}", sh_arg(password)));
+        commands.macos.push(format!(
+            "sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --password {}",
+            sh_arg(password)
+        ));
+        commands
+            .windows
+            .push(format!("rustdesk.exe --password {}", cmd_arg(password)));
+    }
+    append_option_if_valid(
+        commands,
+        "approve-mode",
+        normalize_approve_mode(&options.approve_mode),
+    );
+    append_option_if_valid(
+        commands,
+        "verification-method",
+        normalize_verification_method(&options.verification_method),
+    );
+}
+
+fn append_option_if_valid(commands: &mut DeploymentCommandSet, name: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    commands
+        .linux
+        .push(format!("sudo rustdesk --option {name} {}", sh_arg(value)));
+    commands.macos.push(format!(
+        "sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --option {name} {}",
+        sh_arg(value)
+    ));
+    commands
+        .windows
+        .push(format!("rustdesk.exe --option {name} {}", cmd_arg(value)));
+}
+
+fn normalize_approve_mode(value: &str) -> &str {
+    match value.trim() {
+        "password" => "password",
+        "click" => "click",
+        "password-click" => "password-click",
+        _ => "",
+    }
+}
+
+fn normalize_verification_method(value: &str) -> &str {
+    match value.trim() {
+        "use-temporary-password" => "use-temporary-password",
+        "use-permanent-password" => "use-permanent-password",
+        "use-both-passwords" => "use-both-passwords",
+        _ => "",
     }
 }
 
@@ -268,5 +352,179 @@ mod tests {
     #[test]
     fn shell_quotes_single_quotes() {
         assert_eq!(sh_arg("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn build_without_password_keeps_existing_command_shape() {
+        let cfg = WebClientConfig {
+            id_server: "id.example.com:21116".to_string(),
+            relay_server: "relay.example.com:21117".to_string(),
+            api_server: "https://api.example.com".to_string(),
+            key: "pk".to_string(),
+            ..Default::default()
+        };
+        let without = build(&cfg);
+        let with_empty = build_with_password(&cfg, "");
+        assert_eq!(
+            without.config_command.linux,
+            with_empty.config_command.linux
+        );
+        assert_eq!(
+            without.config_command.macos,
+            with_empty.config_command.macos
+        );
+        assert_eq!(
+            without.config_command.windows,
+            with_empty.config_command.windows
+        );
+        assert_eq!(
+            without.option_commands.linux,
+            with_empty.option_commands.linux
+        );
+        assert_eq!(
+            without.option_commands.macos,
+            with_empty.option_commands.macos
+        );
+        assert_eq!(
+            without.option_commands.windows,
+            with_empty.option_commands.windows
+        );
+    }
+
+    #[test]
+    fn appends_shell_quoted_password_commands() {
+        let cfg = WebClientConfig::default();
+        let deployment = build_with_password(&cfg, "abc'123");
+        assert!(deployment
+            .config_command
+            .linux
+            .contains(&"sudo rustdesk --password 'abc'\\''123'".to_string()));
+        assert!(deployment.config_command.macos.contains(
+            &"sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --password 'abc'\\''123'"
+                .to_string()
+        ));
+        assert!(deployment
+            .option_commands
+            .linux
+            .contains(&"sudo rustdesk --password 'abc'\\''123'".to_string()));
+    }
+
+    #[test]
+    fn appends_cmd_quoted_password_command() {
+        let cfg = WebClientConfig::default();
+        let deployment = build_with_password(&cfg, "abc\"123");
+        assert!(deployment
+            .config_command
+            .windows
+            .contains(&"rustdesk.exe --password \"abc\\\"123\"".to_string()));
+        assert!(deployment
+            .option_commands
+            .windows
+            .contains(&"rustdesk.exe --password \"abc\\\"123\"".to_string()));
+    }
+
+    #[test]
+    fn password_is_not_encoded_or_added_to_filename_hint() {
+        let cfg = WebClientConfig {
+            id_server: "id.example.com:21116".to_string(),
+            relay_server: "relay.example.com:21117".to_string(),
+            api_server: "https://api.example.com".to_string(),
+            key: "pk".to_string(),
+            ..Default::default()
+        };
+        let deployment = build_with_password(&cfg, "do-not-store");
+        assert!(!deployment.encoded_config.contains("do-not-store"));
+        assert!(!deployment.filename_hint.contains("do-not-store"));
+        let normalized = deployment.encoded_config.chars().rev().collect::<String>();
+        let decoded = URL_SAFE_NO_PAD.decode(normalized).unwrap();
+        let json = String::from_utf8(decoded).unwrap();
+        assert!(!json.contains("do-not-store"));
+    }
+
+    #[test]
+    fn appends_approve_mode_commands() {
+        let deployment = build_with_options(
+            &WebClientConfig::default(),
+            &DeploymentOptions {
+                approve_mode: "password".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(deployment
+            .config_command
+            .linux
+            .contains(&"sudo rustdesk --option approve-mode 'password'".to_string()));
+        assert!(deployment.config_command.macos.contains(
+            &"sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --option approve-mode 'password'"
+                .to_string()
+        ));
+        assert!(deployment
+            .config_command
+            .windows
+            .contains(&"rustdesk.exe --option approve-mode \"password\"".to_string()));
+    }
+
+    #[test]
+    fn appends_verification_method_commands() {
+        let deployment = build_with_options(
+            &WebClientConfig::default(),
+            &DeploymentOptions {
+                verification_method: "use-permanent-password".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(deployment.config_command.linux.contains(
+            &"sudo rustdesk --option verification-method 'use-permanent-password'".to_string()
+        ));
+        assert!(deployment.config_command.windows.contains(
+            &"rustdesk.exe --option verification-method \"use-permanent-password\"".to_string()
+        ));
+    }
+
+    #[test]
+    fn invalid_mode_values_do_not_generate_commands() {
+        let deployment = build_with_options(
+            &WebClientConfig::default(),
+            &DeploymentOptions {
+                approve_mode: "abc'123".to_string(),
+                verification_method: "abc\"123".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(!deployment
+            .config_command
+            .linux
+            .iter()
+            .any(|cmd| cmd.contains("approve-mode") || cmd.contains("verification-method")));
+        assert!(!deployment
+            .config_command
+            .windows
+            .iter()
+            .any(|cmd| cmd.contains("approve-mode") || cmd.contains("verification-method")));
+    }
+
+    #[test]
+    fn modes_are_not_encoded_or_added_to_filename_hint() {
+        let cfg = WebClientConfig {
+            id_server: "id.example.com:21116".to_string(),
+            ..Default::default()
+        };
+        let deployment = build_with_options(
+            &cfg,
+            &DeploymentOptions {
+                approve_mode: "password".to_string(),
+                verification_method: "use-permanent-password".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(!deployment.encoded_config.contains("approve-mode"));
+        assert!(!deployment.encoded_config.contains("verification-method"));
+        assert!(!deployment.filename_hint.contains("approve-mode"));
+        assert!(!deployment.filename_hint.contains("verification-method"));
+        let normalized = deployment.encoded_config.chars().rev().collect::<String>();
+        let decoded = URL_SAFE_NO_PAD.decode(normalized).unwrap();
+        let json = String::from_utf8(decoded).unwrap();
+        assert!(!json.contains("approve-mode"));
+        assert!(!json.contains("verification-method"));
     }
 }

@@ -2,15 +2,15 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
-import { Input, Textarea } from "@cloudflare/kumo/components/input";
-import { Radio } from "@cloudflare/kumo/components/radio";
+import { Input } from "@cloudflare/kumo/components/input";
+import { SensitiveInput } from "@cloudflare/kumo/components/sensitive-input";
+import { Switch } from "@cloudflare/kumo/components/switch";
 import { Tabs } from "@cloudflare/kumo/components/tabs";
 import { cn } from "@cloudflare/kumo/utils";
 import {
   CloudArrowUp,
   CopySimple,
   GlobeHemisphereWest,
-  Key,
   PlugsConnected,
   TerminalWindow,
 } from "@phosphor-icons/react";
@@ -19,8 +19,15 @@ import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 
 type SaveTarget = "local" | "server";
 type WsMode = "auto" | "proxy" | "custom";
-type SettingsTab = "webclient" | "rustdesk";
+type SettingsTab = "webclient" | "rustdesk" | "record-storage";
 type DeploymentPlatform = keyof DeploymentCommandSet;
+type RecordStorageType = "local" | "s3" | "webdav";
+type ApproveMode = "" | "password" | "click" | "password-click";
+type VerificationMethod =
+  | ""
+  | "use-temporary-password"
+  | "use-permanent-password"
+  | "use-both-passwords";
 
 interface WebClientConfig {
   id_server: string;
@@ -49,6 +56,33 @@ interface DeploymentConfig {
   };
 }
 
+interface RecordStorageConfig {
+  type: RecordStorageType;
+  local_dir: string;
+  temp_dir: string;
+  s3: {
+    endpoint: string;
+    region: string;
+    bucket: string;
+    prefix: string;
+    access_key_id: string;
+    secret_access_key: string;
+    access_key_id_configured: boolean;
+    secret_access_key_configured: boolean;
+    force_path_style: boolean;
+    clear_access_key_id?: boolean;
+    clear_secret_access_key?: boolean;
+  };
+  webdav: {
+    url: string;
+    username: string;
+    password: string;
+    password_configured: boolean;
+    prefix: string;
+    clear_password?: boolean;
+  };
+}
+
 const LOCAL_OVERRIDE_KEY = "rustdesk-console.webclient.local-override";
 
 const STORAGE_KEYS: Record<keyof WebClientConfig, string> = {
@@ -71,6 +105,33 @@ const emptyConfig: WebClientConfig = {
   key: "",
 };
 
+const emptyRecordStorageConfig: RecordStorageConfig = {
+  type: "local",
+  local_dir: "",
+  temp_dir: "",
+  s3: {
+    endpoint: "",
+    region: "auto",
+    bucket: "",
+    prefix: "record/",
+    access_key_id: "",
+    secret_access_key: "",
+    access_key_id_configured: false,
+    secret_access_key_configured: false,
+    force_path_style: false,
+    clear_access_key_id: false,
+    clear_secret_access_key: false,
+  },
+  webdav: {
+    url: "",
+    username: "",
+    password: "",
+    password_configured: false,
+    prefix: "record/",
+    clear_password: false,
+  },
+};
+
 function toConfigString(value: unknown) {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") {
@@ -90,6 +151,37 @@ function normalizeConfig(
     ws_id_host: toConfigString(config.ws_id_host),
     ws_relay_host: toConfigString(config.ws_relay_host),
     key: toConfigString(config.key),
+  };
+}
+
+function normalizeRecordStorageConfig(config: Partial<RecordStorageConfig>): RecordStorageConfig {
+  const type =
+    config.type === "s3" || config.type === "webdav" ? config.type : "local";
+  return {
+    type,
+    local_dir: toConfigString(config.local_dir),
+    temp_dir: toConfigString(config.temp_dir),
+    s3: {
+      endpoint: toConfigString(config.s3?.endpoint),
+      region: toConfigString(config.s3?.region) || "auto",
+      bucket: toConfigString(config.s3?.bucket),
+      prefix: toConfigString(config.s3?.prefix) || "record/",
+      access_key_id: toConfigString(config.s3?.access_key_id),
+      secret_access_key: toConfigString(config.s3?.secret_access_key),
+      access_key_id_configured: Boolean(config.s3?.access_key_id_configured),
+      secret_access_key_configured: Boolean(config.s3?.secret_access_key_configured),
+      force_path_style: Boolean(config.s3?.force_path_style),
+      clear_access_key_id: Boolean(config.s3?.clear_access_key_id),
+      clear_secret_access_key: Boolean(config.s3?.clear_secret_access_key),
+    },
+    webdav: {
+      url: toConfigString(config.webdav?.url),
+      username: toConfigString(config.webdav?.username),
+      password: toConfigString(config.webdav?.password),
+      password_configured: Boolean(config.webdav?.password_configured),
+      prefix: toConfigString(config.webdav?.prefix) || "record/",
+      clear_password: Boolean(config.webdav?.clear_password),
+    },
   };
 }
 
@@ -169,6 +261,9 @@ export function WebClientSettingsPage() {
   const qc = useQueryClient();
   const [saveTarget, setSaveTarget] = useState<SaveTarget>("local");
   const [form, setForm] = useState<WebClientConfig>(emptyConfig);
+  const [recordStorageForm, setRecordStorageForm] = useState<RecordStorageConfig>(
+    emptyRecordStorageConfig,
+  );
   const [formReady, setFormReady] = useState(false);
   const [wsMode, setWsMode] = useState<WsMode>("auto");
   const [localActive, setLocalActive] = useState(false);
@@ -177,6 +272,11 @@ export function WebClientSettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("webclient");
   const [deploymentPlatform, setDeploymentPlatform] =
     useState<DeploymentPlatform>("linux");
+  const [deploymentPassword, setDeploymentPasswordState] = useState("");
+  const [approveMode, setApproveMode] = useState<ApproveMode>("");
+  const [verificationMethod, setVerificationMethod] =
+    useState<VerificationMethod>("");
+  const [deploymentPasswordRevision, setDeploymentPasswordRevision] = useState(0);
   const previewConfig = configForWsMode(form, wsMode);
 
   const serverConfig = useQuery({
@@ -184,12 +284,33 @@ export function WebClientSettingsPage() {
     queryFn: () => apiGet<WebClientConfig>("/api/admin/config/server"),
   });
 
-  const deploymentPreview = useQuery({
-    queryKey: ["webclient-deployment-preview", previewConfig],
+  const recordStorageConfig = useQuery({
+    queryKey: ["record-storage-config"],
     queryFn: () =>
-      apiPost<DeploymentConfig>("/api/admin/config/deployment", previewConfig),
-    enabled: formReady,
+      apiGet<RecordStorageConfig>("/api/admin/config/record-storage"),
   });
+
+  const deploymentPreview = useQuery({
+    queryKey: [
+      "webclient-deployment-preview",
+      previewConfig,
+      deploymentPasswordRevision,
+    ],
+    queryFn: () =>
+      apiPost<DeploymentConfig>("/api/admin/config/deployment", {
+        ...previewConfig,
+        permanent_password: deploymentPassword,
+        approve_mode: approveMode,
+        verification_method: verificationMethod,
+      }),
+    enabled: formReady,
+    gcTime: 0,
+  });
+
+  useEffect(() => {
+    if (!recordStorageConfig.data) return;
+    setRecordStorageForm(normalizeRecordStorageConfig(recordStorageConfig.data));
+  }, [recordStorageConfig.data]);
 
   useEffect(() => {
     if (!serverConfig.data) return;
@@ -221,8 +342,29 @@ export function WebClientSettingsPage() {
     },
   });
 
+  const saveRecordStorage = useMutation({
+    mutationFn: (payload: RecordStorageConfig) =>
+      apiPatch<RecordStorageConfig>("/api/admin/config/record-storage", payload),
+    onSuccess: (saved) => {
+      setRecordStorageForm(normalizeRecordStorageConfig(saved));
+      setMessage(t("recordStorageSaved"));
+      setLocalError("");
+      void qc.invalidateQueries({ queryKey: ["record-storage-config"] });
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setLocalError(ae.message || t("operationFailed"));
+    },
+  });
+
   const updateField = (field: keyof WebClientConfig, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
+    setMessage("");
+    setLocalError("");
+  };
+
+  const updateRecordStorage = (next: RecordStorageConfig) => {
+    setRecordStorageForm(next);
     setMessage("");
     setLocalError("");
   };
@@ -239,6 +381,44 @@ export function WebClientSettingsPage() {
       return;
     }
     saveServer.mutate(payload);
+  };
+
+  const setDeploymentPassword = (value: string) => {
+    if (value.trim() && !deploymentPassword.trim() && !approveMode && !verificationMethod) {
+      setApproveMode("password");
+      setVerificationMethod("use-permanent-password");
+    }
+    setDeploymentPasswordState(value);
+    setDeploymentPasswordRevision((current) => current + 1);
+  };
+
+  const updateApproveMode = (value: ApproveMode) => {
+    setApproveMode(value);
+    setDeploymentPasswordRevision((current) => current + 1);
+  };
+
+  const updateVerificationMethod = (value: VerificationMethod) => {
+    setVerificationMethod(value);
+    setDeploymentPasswordRevision((current) => current + 1);
+  };
+
+  const useUnattendedDefaults = () => {
+    setApproveMode("password");
+    setVerificationMethod("use-permanent-password");
+    setDeploymentPasswordRevision((current) => current + 1);
+  };
+
+  const clearDeploymentOptions = () => {
+    setDeploymentPasswordState("");
+    setApproveMode("");
+    setVerificationMethod("");
+    setDeploymentPasswordRevision((current) => current + 1);
+  };
+
+  const saveRecordStorageConfig = () => {
+    setMessage("");
+    setLocalError("");
+    saveRecordStorage.mutate(recordStorageForm);
   };
 
   const resetLocalOverride = () => {
@@ -275,9 +455,14 @@ export function WebClientSettingsPage() {
         </div>
         <Button
           variant="secondary"
-          loading={serverConfig.isFetching || deploymentPreview.isFetching}
+          loading={
+            serverConfig.isFetching ||
+            deploymentPreview.isFetching ||
+            recordStorageConfig.isFetching
+          }
           onClick={() => {
             void qc.invalidateQueries({ queryKey: ["webclient-server-config"] });
+            void qc.invalidateQueries({ queryKey: ["record-storage-config"] });
             void qc.invalidateQueries({
               queryKey: ["webclient-deployment-preview"],
             });
@@ -289,92 +474,84 @@ export function WebClientSettingsPage() {
 
       <div className="space-y-4">
         <section className="rounded-lg border border-kumo-line bg-kumo-elevated">
-          <FormSection
-            icon={<PlugsConnected size={18} />}
-            title={t("clientBaseConfig")}
-            description={t("clientBaseConfigHint")}
-          >
-            <div className="grid gap-4 lg:grid-cols-3">
-              <ConfigField
-                label={t("apiServer")}
-                storageKey={STORAGE_KEYS.api_server}
-                value={form.api_server}
-                onChange={(value) => updateField("api_server", value)}
-                placeholder="https://api.example.com"
-              />
-              <ConfigField
-                label={t("idServer")}
-                storageKey={STORAGE_KEYS.id_server}
-                value={form.id_server}
-                onChange={(value) => updateField("id_server", value)}
-                placeholder="id.example.com:21116"
-              />
-              <ConfigField
-                label={t("relayServer")}
-                storageKey={STORAGE_KEYS.relay_server}
-                value={form.relay_server}
-                onChange={(value) => updateField("relay_server", value)}
-                placeholder="relay.example.com:21117"
-              />
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-kumo-line px-4 py-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-kumo-line bg-kumo-base text-kumo-brand">
+                <PlugsConnected size={17} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold">{t("clientBaseConfig")}</h2>
+                <p className="truncate text-xs text-kumo-subtle">
+                  {t("clientBaseConfigHint")}
+                </p>
+              </div>
             </div>
-          </FormSection>
-
-          <FormSection
-            icon={<Key size={18} />}
-            title={t("publicKey")}
-            description={t("publicKeyHint")}
-          >
-            <label className="block">
-              <Textarea
-                aria-label={t("publicKey")}
-                value={form.key}
-                onChange={(e) => updateField("key", e.target.value)}
-                className="min-h-24 font-mono text-xs"
-                spellCheck={false}
-                placeholder="OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="
-              />
-              <span className="mt-1 block text-xs text-kumo-subtle">
-                {STORAGE_KEYS.key}
-              </span>
-            </label>
-          </FormSection>
-
-          <FormSection
-            icon={<CloudArrowUp size={18} />}
-            title={t("storageTarget")}
-            description={t("storageTargetHint")}
-          >
-            <Radio.Group
-              legend={t("storageTarget")}
-              appearance="card"
-              value={saveTarget}
-              onValueChange={(value) => setSaveTarget(value as SaveTarget)}
-              className="grid gap-3 md:grid-cols-2"
-            >
-              <Radio.Item
-                value="local"
-                label={t("localStorageMode")}
-                description={t("localStorageModeHint")}
-              />
-              <Radio.Item
-                value="server"
-                label={t("serverPersistentMode")}
-                description={t("serverPersistentModeHint")}
-              />
-            </Radio.Group>
-          </FormSection>
+            <ConfigSaveActions
+              localActive={localActive}
+              serverConfigLoaded={Boolean(serverConfig.data)}
+              saveTarget={saveTarget}
+              setSaveTarget={setSaveTarget}
+              saving={saveServer.isPending}
+              disabled={saveServer.isPending || serverConfig.isLoading}
+              onResetLocal={resetLocalOverride}
+              onSave={saveConfig}
+            />
+          </div>
+          <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)]">
+            <ConfigField
+              label={t("apiServer")}
+              storageKey={STORAGE_KEYS.api_server}
+              value={form.api_server}
+              onChange={(value) => updateField("api_server", value)}
+              placeholder="https://api.example.com"
+              compact
+            />
+            <ConfigField
+              label={t("idServer")}
+              storageKey={STORAGE_KEYS.id_server}
+              value={form.id_server}
+              onChange={(value) => updateField("id_server", value)}
+              placeholder="id.example.com:21116"
+              compact
+            />
+            <ConfigField
+              label={t("relayServer")}
+              storageKey={STORAGE_KEYS.relay_server}
+              value={form.relay_server}
+              onChange={(value) => updateField("relay_server", value)}
+              placeholder="relay.example.com:21117"
+              compact
+            />
+            <SensitiveConfigField
+              label={t("publicKey")}
+              value={form.key}
+              onChange={(value) => updateField("key", value)}
+              placeholder="OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="
+              helper={t("publicKeyHint")}
+              compact
+            />
+          </div>
         </section>
 
-        <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-2">
-          <Tabs
-            variant="segmented"
-            value={activeTab}
-            onValueChange={(value) => setActiveTab(value as SettingsTab)}
-            tabs={[
-              { value: "webclient", label: t("webClientSettingsTab") },
-              { value: "rustdesk", label: t("rustDeskDeployment") },
-            ]}
-          />
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-kumo-line bg-kumo-elevated p-2">
+          <TabButton
+            active={activeTab === "webclient"}
+            onClick={() => setActiveTab("webclient")}
+          >
+            {t("webClientSettingsTab")}
+          </TabButton>
+          <TabButton
+            active={activeTab === "rustdesk"}
+            onClick={() => setActiveTab("rustdesk")}
+          >
+            {t("rustDeskDeployment")}
+          </TabButton>
+          <TabButton
+            active={activeTab === "record-storage"}
+            onClick={() => setActiveTab("record-storage")}
+          >
+            {t("recordStorage")}
+          </TabButton>
         </div>
 
         {activeTab === "webclient" && (
@@ -417,45 +594,172 @@ export function WebClientSettingsPage() {
             error={deploymentPreview.error as Error | null}
             platform={deploymentPlatform}
             setPlatform={setDeploymentPlatform}
+            deploymentPassword={deploymentPassword}
+            setDeploymentPassword={setDeploymentPassword}
+            approveMode={approveMode}
+            setApproveMode={updateApproveMode}
+            verificationMethod={verificationMethod}
+            setVerificationMethod={updateVerificationMethod}
+            useUnattendedDefaults={useUnattendedDefaults}
+            clearDeploymentOptions={clearDeploymentOptions}
           />
         )}
 
-        {(message || localError || serverConfig.error) && (
+        {activeTab === "record-storage" && (
+          <RecordStoragePanel
+            config={recordStorageForm}
+            loading={recordStorageConfig.isLoading}
+            error={recordStorageConfig.error as Error | null}
+            onChange={updateRecordStorage}
+            saving={saveRecordStorage.isPending}
+            saveDisabled={saveRecordStorage.isPending || recordStorageConfig.isLoading}
+            onSave={saveRecordStorageConfig}
+          />
+        )}
+
+        {(message || localError || serverConfig.error || recordStorageConfig.error) && (
           <div className="grid gap-2">
             {message && <InlineMessage tone="success">{message}</InlineMessage>}
-            {(localError || serverConfig.error) && (
+            {(localError || serverConfig.error || recordStorageConfig.error) && (
               <InlineMessage tone="error">
                 {localError ||
-                  (serverConfig.error as Error).message ||
+                  (recordStorageConfig.error as Error | undefined)?.message ||
+                  (serverConfig.error as Error | undefined)?.message ||
                   t("operationFailed")}
               </InlineMessage>
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
 
-        <div className="flex flex-wrap justify-end gap-2 rounded-lg border border-kumo-line bg-kumo-recessed px-5 py-4">
-          {localActive && (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={resetLocalOverride}
-              disabled={!serverConfig.data}
-            >
-              {t("resetLocalOverride")}
-            </Button>
-          )}
+function ConfigSaveActions({
+  localActive,
+  serverConfigLoaded,
+  saveTarget,
+  setSaveTarget,
+  saving,
+  disabled,
+  onResetLocal,
+  onSave,
+}: {
+  localActive: boolean;
+  serverConfigLoaded: boolean;
+  saveTarget: SaveTarget;
+  setSaveTarget: (target: SaveTarget) => void;
+  saving: boolean;
+  disabled: boolean;
+  onResetLocal: () => void;
+  onSave: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <CompactButtonGroup
+        ariaLabel={t("storageTarget")}
+        value={saveTarget}
+        onChange={setSaveTarget}
+        options={[
+          { value: "local", label: t("localStorageMode") },
+          { value: "server", label: t("serverPersistentMode") },
+        ]}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        {localActive && (
           <Button
             type="button"
-            onClick={saveConfig}
-            disabled={saveServer.isPending || serverConfig.isLoading}
-            loading={saveServer.isPending}
+            size="sm"
+            variant="secondary"
+            onClick={onResetLocal}
+            disabled={!serverConfigLoaded}
           >
-            {saveTarget === "local"
-              ? t("writeLocalStorage")
-              : t("writeServerConfig")}
+            {t("resetLocalOverride")}
           </Button>
-        </div>
+        )}
+        <Button
+          type="button"
+          size="sm"
+          onClick={onSave}
+          disabled={disabled}
+          loading={saving}
+        >
+          {saveTarget === "local" ? t("writeLocalStorage") : t("writeServerConfig")}
+        </Button>
       </div>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "min-h-9 rounded-md border px-3 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand",
+        active
+          ? "border-kumo-brand bg-kumo-brand text-white"
+          : "border-kumo-line bg-kumo-base text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function CompactButtonGroup<T extends string>({
+  ariaLabel,
+  value,
+  options,
+  onChange,
+  className,
+}: {
+  ariaLabel: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className={cn(
+        "inline-flex min-h-8 flex-wrap items-center gap-1 rounded-md border border-kumo-line bg-kumo-base p-1",
+        className,
+      )}
+    >
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            key={`${ariaLabel}-${option.value || "empty"}`}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "min-h-6 rounded px-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand",
+              selected
+                ? "bg-kumo-brand text-white"
+                : "text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default",
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -496,6 +800,7 @@ function ConfigField({
   onChange,
   placeholder,
   helper,
+  compact = false,
 }: {
   label: string;
   storageKey: string;
@@ -503,22 +808,57 @@ function ConfigField({
   onChange: (value: string) => void;
   placeholder: string;
   helper?: string;
+  compact?: boolean;
 }) {
   return (
-    <label className="block">
+    <label className="block min-w-0">
       <span className="mb-1 block text-sm font-medium">{label}</span>
       <Input
         aria-label={label}
+        size={compact ? "sm" : "base"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         spellCheck={false}
+        className="w-full min-w-0"
       />
-      <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
-        {storageKey}
-        {helper ? `. ${helper}` : ""}
-      </span>
+      {!compact && (
+        <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
+          {storageKey}
+          {helper ? `. ${helper}` : ""}
+        </span>
+      )}
     </label>
+  );
+}
+
+function SensitiveConfigField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  helper,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  helper?: string;
+  compact?: boolean;
+}) {
+  return (
+    <SensitiveInput
+      label={label}
+      labelTooltip={helper}
+      value={value}
+      onValueChange={onChange}
+      placeholder={placeholder}
+      size={compact ? "sm" : "base"}
+      autoComplete="off"
+      spellCheck={false}
+      className="w-full min-w-0"
+    />
   );
 }
 
@@ -630,41 +970,42 @@ function WebSocketRouteEditor({
   const changeMode = (next: WsMode) => {
     setMode(next);
   };
+  const selectedHint =
+    mode === "auto"
+      ? t("webSocketModeAutoHint")
+      : mode === "proxy"
+        ? t("webSocketModeProxyHint")
+        : t("webSocketModeCustomHint");
   return (
     <div className="grid gap-4">
-      <Radio.Group
-        legend={t("webSocketMode")}
-        appearance="card"
-        value={mode}
-        onValueChange={(value) => changeMode(value as WsMode)}
-        className="grid gap-3 lg:grid-cols-3"
-      >
-        <Radio.Item
-          value="auto"
-          label={t("webSocketModeAuto")}
-          description={t("webSocketModeAutoHint")}
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm font-medium">{t("webSocketMode")}</span>
+        <CompactButtonGroup<WsMode>
+          ariaLabel={t("webSocketMode")}
+          value={mode}
+          onChange={changeMode}
+          options={[
+            { value: "auto", label: t("webSocketModeAuto") },
+            { value: "proxy", label: t("webSocketModeProxy") },
+            { value: "custom", label: t("webSocketModeCustom") },
+          ]}
         />
-        <Radio.Item
-          value="proxy"
-          label={t("webSocketModeProxy")}
-          description={t("webSocketModeProxyHint")}
-        />
-        <Radio.Item
-          value="custom"
-          label={t("webSocketModeCustom")}
-          description={t("webSocketModeCustomHint")}
-        />
-      </Radio.Group>
+        <span className="min-w-0 text-sm leading-6 text-kumo-subtle">
+          {selectedHint}
+        </span>
+      </div>
 
       {mode === "proxy" && (
-        <ConfigField
-          label={t("wsHost")}
-          storageKey={STORAGE_KEYS.ws_host}
-          value={config.ws_host}
-          onChange={(value) => updateField("ws_host", value)}
-          placeholder="https://rd.example.com"
-          helper={t("wsHostHint")}
-        />
+        <div className="max-w-3xl">
+          <ConfigField
+            label={t("wsHost")}
+            storageKey={STORAGE_KEYS.ws_host}
+            value={config.ws_host}
+            onChange={(value) => updateField("ws_host", value)}
+            placeholder="https://rd.example.com"
+            helper={t("wsHostHint")}
+          />
+        </div>
       )}
 
       {mode === "custom" && (
@@ -704,18 +1045,14 @@ function WebSocketRouteEditor({
 
 function ReadonlyField({ label, value }: { label: string; value: string }) {
   return (
-    <label className="block">
+    <div className="block min-w-0">
       <span className="mb-1 block text-sm font-medium text-kumo-subtle">
         {label}
       </span>
-      <Input
-        aria-label={label}
-        value={value}
-        readOnly
-        className="font-mono text-sm"
-        spellCheck={false}
-      />
-    </label>
+      <div className="min-h-9 break-all rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 font-mono text-sm leading-5 text-kumo-default">
+        {value}
+      </div>
+    </div>
   );
 }
 
@@ -725,14 +1062,34 @@ function DeploymentPreview({
   error,
   platform,
   setPlatform,
+  deploymentPassword,
+  setDeploymentPassword,
+  approveMode,
+  setApproveMode,
+  verificationMethod,
+  setVerificationMethod,
+  useUnattendedDefaults,
+  clearDeploymentOptions,
 }: {
   deployment?: DeploymentConfig;
   loading: boolean;
   error?: Error | null;
   platform: DeploymentPlatform;
   setPlatform: (platform: DeploymentPlatform) => void;
+  deploymentPassword: string;
+  setDeploymentPassword: (value: string) => void;
+  approveMode: ApproveMode;
+  setApproveMode: (value: ApproveMode) => void;
+  verificationMethod: VerificationMethod;
+  setVerificationMethod: (value: VerificationMethod) => void;
+  useUnattendedDefaults: () => void;
+  clearDeploymentOptions: () => void;
 }) {
   const { t } = useTranslation();
+  const hasDeploymentOptions =
+    Boolean(deploymentPassword.trim()) ||
+    Boolean(approveMode) ||
+    Boolean(verificationMethod);
   return (
     <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
       <div className="flex items-start gap-3">
@@ -746,6 +1103,17 @@ function DeploymentPreview({
           </p>
         </div>
       </div>
+      <DeploymentAccessOptions
+        deploymentPassword={deploymentPassword}
+        setDeploymentPassword={setDeploymentPassword}
+        approveMode={approveMode}
+        setApproveMode={setApproveMode}
+        verificationMethod={verificationMethod}
+        setVerificationMethod={setVerificationMethod}
+        useUnattendedDefaults={useUnattendedDefaults}
+        clearDeploymentOptions={clearDeploymentOptions}
+        hasDeploymentOptions={hasDeploymentOptions}
+      />
       {loading && !deployment && (
         <p
           role="status"
@@ -834,6 +1202,411 @@ function DeploymentPreview({
         </div>
       )}
     </section>
+  );
+}
+
+function DeploymentAccessOptions({
+  deploymentPassword,
+  setDeploymentPassword,
+  approveMode,
+  setApproveMode,
+  verificationMethod,
+  setVerificationMethod,
+  useUnattendedDefaults,
+  clearDeploymentOptions,
+  hasDeploymentOptions,
+}: {
+  deploymentPassword: string;
+  setDeploymentPassword: (value: string) => void;
+  approveMode: ApproveMode;
+  setApproveMode: (value: ApproveMode) => void;
+  verificationMethod: VerificationMethod;
+  setVerificationMethod: (value: VerificationMethod) => void;
+  useUnattendedDefaults: () => void;
+  clearDeploymentOptions: () => void;
+  hasDeploymentOptions: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-4 rounded-md border border-kumo-line bg-kumo-base p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold">{t("deploymentAccessOptions")}</h3>
+          <p className="mt-1 text-xs leading-5 text-kumo-subtle">
+            {t("deploymentAccessOptionsHint")}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={useUnattendedDefaults}
+          >
+            {t("deploymentUseUnattendedDefaults")}
+          </Button>
+          {hasDeploymentOptions && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={clearDeploymentOptions}
+            >
+              {t("deploymentClearOptional")}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3">
+        <label className="block min-w-0">
+          <span className="mb-1 block text-sm font-medium">
+            {t("deploymentPermanentPassword")}
+          </span>
+          <Input
+            aria-label={t("deploymentPermanentPassword")}
+            type="password"
+            value={deploymentPassword}
+            onChange={(event) => setDeploymentPassword(event.target.value)}
+            placeholder={t("deploymentPermanentPasswordPlaceholder")}
+            autoComplete="new-password"
+            spellCheck={false}
+            size="sm"
+            className="w-full min-w-0 md:max-w-xl"
+          />
+          <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
+            {t("deploymentPermanentPasswordHint")}
+          </span>
+        </label>
+
+        <div className="grid gap-3 xl:grid-cols-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium">{t("deploymentApproveMode")}</span>
+            <CompactButtonGroup<ApproveMode>
+              ariaLabel={t("deploymentApproveMode")}
+              value={approveMode}
+              onChange={setApproveMode}
+              options={[
+                { value: "", label: t("doNotChange") },
+                { value: "password", label: t("approveModePassword") },
+                { value: "click", label: t("approveModeClick") },
+                {
+                  value: "password-click",
+                  label: t("approveModePasswordClick"),
+                },
+              ]}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium">
+              {t("deploymentVerificationMethod")}
+            </span>
+            <CompactButtonGroup<VerificationMethod>
+              ariaLabel={t("deploymentVerificationMethod")}
+              value={verificationMethod}
+              onChange={setVerificationMethod}
+              options={[
+                { value: "", label: t("doNotChange") },
+                {
+                  value: "use-permanent-password",
+                  label: t("verificationPermanentOnly"),
+                },
+                {
+                  value: "use-temporary-password",
+                  label: t("verificationTemporaryOnly"),
+                },
+                {
+                  value: "use-both-passwords",
+                  label: t("verificationBothPasswords"),
+                },
+              ]}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecordStoragePanel({
+  config,
+  loading,
+  error,
+  onChange,
+  saving,
+  saveDisabled,
+  onSave,
+}: {
+  config: RecordStorageConfig;
+  loading: boolean;
+  error?: Error | null;
+  onChange: (next: RecordStorageConfig) => void;
+  saving: boolean;
+  saveDisabled: boolean;
+  onSave: () => void;
+}) {
+  const { t } = useTranslation();
+  const setType = (type: RecordStorageType) => onChange({ ...config, type });
+  const setRoot = (
+    field: "local_dir" | "temp_dir",
+    value: string,
+  ) => onChange({ ...config, [field]: value });
+  const setS3 = <K extends keyof RecordStorageConfig["s3"]>(
+    field: K,
+    value: RecordStorageConfig["s3"][K],
+  ) => onChange({ ...config, s3: { ...config.s3, [field]: value } });
+  const setWebDav = <K extends keyof RecordStorageConfig["webdav"]>(
+    field: K,
+    value: RecordStorageConfig["webdav"][K],
+  ) => onChange({ ...config, webdav: { ...config.webdav, [field]: value } });
+  const remote = config.type === "s3" || config.type === "webdav";
+  const storageHint =
+    config.type === "local"
+      ? t("recordStorageLocalHint")
+      : config.type === "s3"
+        ? t("recordStorageS3Hint")
+        : t("recordStorageWebDavHint");
+
+  return (
+    <section className="rounded-lg border border-kumo-line bg-kumo-elevated">
+      <div className="flex items-start gap-3 p-5">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
+          <CloudArrowUp size={18} />
+        </div>
+        <div>
+          <h2 className="text-base font-semibold">{t("recordStorage")}</h2>
+          <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+            {t("recordStorageHint")}
+          </p>
+        </div>
+      </div>
+
+      {loading && (
+        <p
+          role="status"
+          className="mx-5 rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm text-kumo-subtle"
+        >
+          {t("loading")}
+        </p>
+      )}
+      {error && (
+        <InlineMessage tone="error" className="mx-5">
+          {error.message || t("operationFailed")}
+        </InlineMessage>
+      )}
+
+      <div className="grid gap-5 px-5 pb-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-medium">{t("recordStorageBackend")}</span>
+          <CompactButtonGroup<RecordStorageType>
+            ariaLabel={t("recordStorageBackend")}
+            value={config.type}
+            onChange={setType}
+            options={[
+              { value: "local", label: t("recordStorageLocal") },
+              { value: "s3", label: t("recordStorageS3") },
+              { value: "webdav", label: t("recordStorageWebDav") },
+            ]}
+          />
+          <span className="min-w-0 text-sm leading-6 text-kumo-subtle">
+            {storageHint}
+          </span>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          {config.type === "local" && (
+            <ConfigField
+              label={t("recordStorageLocalDir")}
+              storageKey="RUSTDESK_API_RECORD_STORAGE_LOCAL_DIR"
+              value={config.local_dir}
+              onChange={(value) => setRoot("local_dir", value)}
+              placeholder="resources/record"
+              helper={t("recordStorageLocalDirHint")}
+            />
+          )}
+          {remote && (
+            <ConfigField
+              label={t("recordStorageTempDir")}
+              storageKey="RUSTDESK_API_RECORD_STORAGE_TEMP_DIR"
+              value={config.temp_dir}
+              onChange={(value) => setRoot("temp_dir", value)}
+              placeholder="resources/record/tmp"
+              helper={t("recordStorageTempDirHint")}
+            />
+          )}
+        </div>
+
+        {config.type === "s3" && (
+          <div className="grid gap-4">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ConfigField
+                label={t("s3Endpoint")}
+                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT"
+                value={config.s3.endpoint}
+                onChange={(value) => setS3("endpoint", value)}
+                placeholder="https://s3.example.com"
+              />
+              <ConfigField
+                label={t("s3Region")}
+                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_REGION"
+                value={config.s3.region}
+                onChange={(value) => setS3("region", value)}
+                placeholder="auto"
+              />
+              <ConfigField
+                label={t("s3Bucket")}
+                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_BUCKET"
+                value={config.s3.bucket}
+                onChange={(value) => setS3("bucket", value)}
+                placeholder="rustdesk-recordings"
+              />
+              <ConfigField
+                label={t("storagePrefix")}
+                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_PREFIX"
+                value={config.s3.prefix}
+                onChange={(value) => setS3("prefix", value)}
+                placeholder="record/"
+              />
+              <SecretConfigField
+                label={t("s3AccessKeyId")}
+                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_ACCESS_KEY_ID"
+                value={config.s3.access_key_id}
+                configured={config.s3.access_key_id_configured}
+                clear={Boolean(config.s3.clear_access_key_id)}
+                onChange={(value) => setS3("access_key_id", value)}
+                onClearChange={(value) => setS3("clear_access_key_id", value)}
+              />
+              <SecretConfigField
+                label={t("s3SecretAccessKey")}
+                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_SECRET_ACCESS_KEY"
+                value={config.s3.secret_access_key}
+                configured={config.s3.secret_access_key_configured}
+                clear={Boolean(config.s3.clear_secret_access_key)}
+                onChange={(value) => setS3("secret_access_key", value)}
+                onClearChange={(value) =>
+                  setS3("clear_secret_access_key", value)
+                }
+              />
+            </div>
+            <div className="rounded-lg border border-kumo-line bg-kumo-base px-3 py-2">
+              <Switch
+                label={t("s3ForcePathStyle")}
+                labelTooltip={t("s3ForcePathStyleHint")}
+                controlFirst={false}
+                checked={config.s3.force_path_style}
+                onCheckedChange={(checked: boolean) =>
+                  setS3("force_path_style", checked)
+                }
+              />
+            </div>
+          </div>
+        )}
+
+        {config.type === "webdav" && (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ConfigField
+              label={t("webDavUrl")}
+              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_URL"
+              value={config.webdav.url}
+              onChange={(value) => setWebDav("url", value)}
+              placeholder="https://dav.example.com/remote.php/dav/files/user"
+            />
+            <ConfigField
+              label={t("storagePrefix")}
+              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_PREFIX"
+              value={config.webdav.prefix}
+              onChange={(value) => setWebDav("prefix", value)}
+              placeholder="record/"
+            />
+            <ConfigField
+              label={t("webDavUsername")}
+              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_USERNAME"
+              value={config.webdav.username}
+              onChange={(value) => setWebDav("username", value)}
+              placeholder="rustdesk"
+            />
+            <SecretConfigField
+              label={t("webDavPassword")}
+              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_PASSWORD"
+              value={config.webdav.password}
+              configured={config.webdav.password_configured}
+              clear={Boolean(config.webdav.clear_password)}
+              onChange={(value) => setWebDav("password", value)}
+              onClearChange={(value) => setWebDav("clear_password", value)}
+            />
+          </div>
+        )}
+
+        <p className="rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm leading-6 text-kumo-subtle">
+          {t("recordStorageApplyHint")}
+        </p>
+      </div>
+      <div className="flex justify-end border-t border-kumo-line bg-kumo-recessed px-5 py-4">
+        <Button
+          type="button"
+          size="sm"
+          onClick={onSave}
+          disabled={saveDisabled}
+          loading={saving}
+        >
+          {t("writeRecordStorageConfig")}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function SecretConfigField({
+  label,
+  storageKey,
+  value,
+  configured,
+  clear,
+  onChange,
+  onClearChange,
+}: {
+  label: string;
+  storageKey: string;
+  value: string;
+  configured: boolean;
+  clear: boolean;
+  onChange: (value: string) => void;
+  onClearChange: (value: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="grid gap-2">
+      <label className="block min-w-0">
+        <span className="mb-1 block text-sm font-medium">{label}</span>
+        <Input
+          aria-label={label}
+          type="password"
+          value={value}
+          disabled={clear}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={
+            configured
+              ? t("secretConfiguredPlaceholder")
+              : t("secretEmptyPlaceholder")
+          }
+          spellCheck={false}
+          className="w-full min-w-0"
+        />
+        <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
+          {storageKey}
+        </span>
+      </label>
+      {configured && (
+        <div className="rounded-lg border border-kumo-line bg-kumo-base px-3 py-2">
+          <Switch
+            label={t("clearConfiguredSecret")}
+            controlFirst={false}
+            checked={clear}
+            onCheckedChange={(checked: boolean) => onClearChange(checked)}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 

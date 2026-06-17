@@ -34,6 +34,8 @@ pub struct Config {
     pub redis: Redis,
     pub cache: Cache,
     pub oss: Oss,
+    #[serde(rename = "record-storage")]
+    pub record_storage: RecordStorage,
     pub jwt: Jwt,
     pub rustdesk: Rustdesk,
     pub proxy: Proxy,
@@ -195,6 +197,99 @@ pub struct Oss {
     pub max_byte: i64,
 }
 
+pub const RECORD_STORAGE_LOCAL: &str = "local";
+pub const RECORD_STORAGE_S3: &str = "s3";
+pub const RECORD_STORAGE_WEBDAV: &str = "webdav";
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct RecordStorage {
+    pub r#type: String,
+    #[serde(rename = "local-dir")]
+    pub local_dir: String,
+    #[serde(rename = "temp-dir")]
+    pub temp_dir: String,
+    pub s3: RecordStorageS3,
+    pub webdav: RecordStorageWebDav,
+}
+
+impl RecordStorage {
+    pub fn normalized_type(&self) -> &str {
+        match self.r#type.trim() {
+            RECORD_STORAGE_S3 => RECORD_STORAGE_S3,
+            RECORD_STORAGE_WEBDAV => RECORD_STORAGE_WEBDAV,
+            _ => RECORD_STORAGE_LOCAL,
+        }
+    }
+
+    pub fn normalize(mut self) -> Self {
+        self.r#type = self.normalized_type().to_string();
+        self.local_dir = self.local_dir.trim().to_string();
+        self.temp_dir = self.temp_dir.trim().to_string();
+        self.s3 = self.s3.normalize();
+        self.webdav = self.webdav.normalize();
+        self
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct RecordStorageS3 {
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    #[serde(rename = "access-key-id")]
+    pub access_key_id: String,
+    #[serde(rename = "secret-access-key")]
+    pub secret_access_key: String,
+    #[serde(rename = "force-path-style")]
+    pub force_path_style: bool,
+}
+
+impl RecordStorageS3 {
+    fn normalize(mut self) -> Self {
+        self.endpoint = trim_trailing_slash(&self.endpoint);
+        self.region = self.region.trim().to_string();
+        self.bucket = self.bucket.trim().to_string();
+        self.prefix = normalize_object_prefix(&self.prefix);
+        self.access_key_id = self.access_key_id.trim().to_string();
+        self.secret_access_key = self.secret_access_key.trim().to_string();
+        self
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct RecordStorageWebDav {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub prefix: String,
+}
+
+impl RecordStorageWebDav {
+    fn normalize(mut self) -> Self {
+        self.url = trim_trailing_slash(&self.url);
+        self.username = self.username.trim().to_string();
+        self.password = self.password.trim().to_string();
+        self.prefix = normalize_object_prefix(&self.prefix);
+        self
+    }
+}
+
+fn trim_trailing_slash(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+fn normalize_object_prefix(value: &str) -> String {
+    let mut prefix = value.trim().trim_matches('/').to_string();
+    if !prefix.is_empty() {
+        prefix.push('/');
+    }
+    prefix
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Jwt {
@@ -312,6 +407,7 @@ pub fn init(path: &str) -> anyhow::Result<Config> {
     let mut cfg: Config = serde_json::from_value(value)?;
     cfg.rustdesk.load_key_file();
     cfg.admin.init();
+    cfg.record_storage = cfg.record_storage.normalize();
     Ok(cfg)
 }
 
@@ -487,6 +583,39 @@ mod tests {
         assert_eq!(cfg.admin.username, "root");
         assert_eq!(cfg.admin.password, "change-me");
         assert!(cfg.admin.force_change_password);
+    }
+
+    #[test]
+    fn env_overrides_record_storage_config() {
+        let _guard = env_lock();
+        std::env::set_var("RUSTDESK_API_RECORD_STORAGE_TYPE", "s3");
+        std::env::set_var(
+            "RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT",
+            "https://s3.example.com",
+        );
+        std::env::set_var("RUSTDESK_API_RECORD_STORAGE_S3_BUCKET", "recordings");
+        std::env::set_var("RUSTDESK_API_RECORD_STORAGE_S3_PREFIX", "rustdesk");
+        std::env::set_var("RUSTDESK_API_RECORD_STORAGE_S3_ACCESS_KEY_ID", "ak");
+        std::env::set_var("RUSTDESK_API_RECORD_STORAGE_S3_SECRET_ACCESS_KEY", "sk");
+        std::env::set_var("RUSTDESK_API_RECORD_STORAGE_S3_FORCE_PATH_STYLE", "true");
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        apply_env_overrides(&mut value, "RUSTDESK_API");
+        let mut cfg: Config = serde_json::from_value(value).unwrap();
+        cfg.record_storage = cfg.record_storage.normalize();
+        std::env::remove_var("RUSTDESK_API_RECORD_STORAGE_TYPE");
+        std::env::remove_var("RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT");
+        std::env::remove_var("RUSTDESK_API_RECORD_STORAGE_S3_BUCKET");
+        std::env::remove_var("RUSTDESK_API_RECORD_STORAGE_S3_PREFIX");
+        std::env::remove_var("RUSTDESK_API_RECORD_STORAGE_S3_ACCESS_KEY_ID");
+        std::env::remove_var("RUSTDESK_API_RECORD_STORAGE_S3_SECRET_ACCESS_KEY");
+        std::env::remove_var("RUSTDESK_API_RECORD_STORAGE_S3_FORCE_PATH_STYLE");
+        assert_eq!(cfg.record_storage.r#type, "s3");
+        assert_eq!(cfg.record_storage.s3.endpoint, "https://s3.example.com");
+        assert_eq!(cfg.record_storage.s3.bucket, "recordings");
+        assert_eq!(cfg.record_storage.s3.prefix, "rustdesk/");
+        assert_eq!(cfg.record_storage.s3.access_key_id, "ak");
+        assert_eq!(cfg.record_storage.s3.secret_access_key, "sk");
+        assert!(cfg.record_storage.s3.force_path_style);
     }
 
     #[test]

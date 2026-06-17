@@ -11,6 +11,7 @@ use crate::support::disconnect_store::DisconnectStore;
 use crate::support::jwt::Jwt;
 use crate::support::login_limiter::LoginLimiter;
 use crate::support::oauth_cache::OauthCache;
+use crate::support::record_storage_config::RecordStorageConfigStore;
 use crate::support::webclient_config::WebClientConfigStore;
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ pub struct AppState {
     pub oauth_cache: Arc<OauthCache>,
     pub disconnect_store: Arc<DisconnectStore>,
     pub webclient_config: Arc<WebClientConfigStore>,
+    pub record_storage_config: Arc<RecordStorageConfigStore>,
     pub start_time: Arc<String>,
     pub version: Arc<String>,
 }

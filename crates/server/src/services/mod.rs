@@ -13,6 +13,7 @@ pub mod oauth;
 pub mod overview;
 pub mod peer;
 pub mod record_file;
+pub mod record_storage;
 pub mod server_cmd;
 pub mod share_record;
 pub mod tag;

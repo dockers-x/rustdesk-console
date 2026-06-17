@@ -435,6 +435,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       monoCol("filename", "filename", "max-w-80"),
       monoCol("peer_id", "deviceId", "max-w-28"),
       { key: "direction", label: "direction" },
+      { key: "storage_backend", label: "storageBackend" },
       { key: "size", label: "sizeBytes" },
       {
         key: "status",

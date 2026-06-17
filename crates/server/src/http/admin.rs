@@ -18,6 +18,7 @@ use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
 use crate::services;
 use crate::state::AppState;
+use crate::support::record_storage_config::RecordStorageConfigForm;
 use crate::support::webclient_config::WebClientConfig;
 
 pub fn list_json<T: serde::Serialize>(
@@ -207,11 +208,46 @@ pub async fn config_deployment(State(state): State<AppState>, _user: BackendUser
     resp::success(crate::support::deployment_config::build(&cfg))
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DeploymentPreviewRequest {
+    #[serde(flatten)]
+    pub config: WebClientConfig,
+    #[serde(default)]
+    pub permanent_password: String,
+    #[serde(default)]
+    pub approve_mode: String,
+    #[serde(default)]
+    pub verification_method: String,
+}
+
 pub async fn config_deployment_preview(
     _user: BackendUser,
-    Json(f): Json<WebClientConfig>,
+    Json(f): Json<DeploymentPreviewRequest>,
 ) -> Response {
-    resp::success(crate::support::deployment_config::build(&f))
+    resp::success(crate::support::deployment_config::build_with_options(
+        &f.config,
+        &crate::support::deployment_config::DeploymentOptions {
+            permanent_password: f.permanent_password,
+            approve_mode: f.approve_mode,
+            verification_method: f.verification_method,
+        },
+    ))
+}
+
+pub async fn config_record_storage(State(state): State<AppState>, _user: BackendUser) -> Response {
+    resp::success(state.record_storage_config.view().await)
+}
+
+pub async fn config_record_storage_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<RecordStorageConfigForm>,
+) -> Response {
+    match state.record_storage_config.update(f).await {
+        Ok(cfg) => resp::success(cfg),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
 }
 
 pub async fn config_app(State(state): State<AppState>, _user: BackendUser) -> Response {
@@ -1239,14 +1275,27 @@ pub async fn record_file_delete(
     let Some(row) = row else {
         return resp::fail(101, state.tr(&lang, "ItemNotFound"));
     };
-    if let Ok(path) =
-        services::record_file::record_path(&state.config.gin.resources_path, &row.filename)
+    let storage_cfg = state.record_storage_config.get().await;
+    if let Err(e) = services::record_storage::delete_object(
+        &storage_cfg,
+        &state.config.gin.resources_path,
+        &row.storage_backend,
+        &row.storage_key,
+        &row.filename,
+    )
+    .await
     {
-        match tokio::fs::remove_file(path).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!("failed to remove record file: {e}"),
-        }
+        tracing::warn!("failed to remove record object: {e}");
+    }
+    if let Err(e) = services::record_storage::cleanup_staging(
+        &storage_cfg,
+        &state.config.gin.resources_path,
+        &row.storage_backend,
+        &row.filename,
+    )
+    .await
+    {
+        tracing::warn!("failed to remove record staging file: {e}");
     }
     match services::record_file::delete(&state.db, f.id).await {
         Ok(_) => resp::success(Value::Null),
@@ -1267,12 +1316,16 @@ pub async fn record_file_download(
     let Some(row) = row else {
         return resp::fail(101, state.tr(&lang, "ItemNotFound"));
     };
-    let path =
-        match services::record_file::record_path(&state.config.gin.resources_path, &row.filename) {
-            Ok(path) => path,
-            Err(e) => return resp::fail(101, e),
-        };
-    match tokio::fs::read(path).await {
+    let storage_cfg = state.record_storage_config.get().await;
+    match services::record_storage::read_object(
+        &storage_cfg,
+        &state.config.gin.resources_path,
+        &row.storage_backend,
+        &row.storage_key,
+        &row.filename,
+    )
+    .await
+    {
         Ok(bytes) => {
             let mut response = Response::new(Body::from(bytes));
             *response.status_mut() = StatusCode::OK;
@@ -1288,7 +1341,7 @@ pub async fn record_file_download(
             }
             response
         }
-        Err(_) => resp::fail(101, state.tr(&lang, "ItemNotFound")),
+        Err(e) => resp::fail(101, e),
     }
 }
 

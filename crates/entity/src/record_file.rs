@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const STATUS_UPLOADING: i32 = 0;
 pub const STATUS_COMPLETE: i32 = 1;
+pub const STORAGE_LOCAL: &str = "local";
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "record_files")]
@@ -19,6 +20,10 @@ pub struct Model {
     pub size: i64,
     #[sea_orm(default_value = 0)]
     pub status: i32,
+    #[sea_orm(default_value = "local")]
+    pub storage_backend: String,
+    #[sea_orm(default_value = "")]
+    pub storage_key: String,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

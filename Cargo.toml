@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/entity", "crates/server"]
 
 [workspace.package]
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/czyt/rustdesk-console"
@@ -61,6 +61,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sha2 = "0.10"
 ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
 urlencoding = "2"
+url = "2"
 
 [profile.release]
 opt-level = "z"

@@ -24,6 +24,7 @@ use crate::services;
 use crate::state::AppState;
 use crate::support::jwt::Jwt;
 use crate::support::login_limiter::{LoginLimiter, SecurityPolicy};
+use crate::support::record_storage_config::RecordStorageConfigStore;
 use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{password, random};
 
@@ -71,7 +72,7 @@ pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
 
 /// Create any missing tables (≈ GORM AutoMigrate) and return whether the
 /// `versions` table existed beforehand.
-async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
+async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Result<()> {
     let backend = db.get_database_backend();
     let schema = Schema::new(backend);
 
@@ -105,6 +106,7 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(device_group::Entity);
     create!(active_connection::Entity);
     add_missing_columns(db).await?;
+    backfill_record_storage_keys(db, config).await?;
     Ok(())
 }
 
@@ -129,6 +131,32 @@ async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
             .table(audit_conn::Entity)
             .add_column(
                 ColumnDef::new(audit_conn::Column::Note)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "record_files", "storage_backend").await? {
+        let stmt = Table::alter()
+            .table(record_file::Entity)
+            .add_column(
+                ColumnDef::new(record_file::Column::StorageBackend)
+                    .string()
+                    .not_null()
+                    .default(record_file::STORAGE_LOCAL),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "record_files", "storage_key").await? {
+        let stmt = Table::alter()
+            .table(record_file::Entity)
+            .add_column(
+                ColumnDef::new(record_file::Column::StorageKey)
                     .string()
                     .not_null()
                     .default(""),
@@ -168,6 +196,28 @@ async fn column_exists(
         .is_some())
 }
 
+async fn backfill_record_storage_keys(
+    db: &DatabaseConnection,
+    config: &Config,
+) -> anyhow::Result<()> {
+    let rows = record_file::Entity::find().all(db).await?;
+    let root = services::record_file::record_root_for_config(
+        &config.gin.resources_path,
+        &config.record_storage.local_dir,
+    );
+    for row in rows
+        .into_iter()
+        .filter(|row| row.storage_key.trim().is_empty())
+    {
+        let filename = row.filename.clone();
+        let mut am: record_file::ActiveModel = row.into();
+        am.storage_backend = Set(record_file::STORAGE_LOCAL.to_string());
+        am.storage_key = Set(root.join(filename).to_string_lossy().to_string());
+        am.update(db).await?;
+    }
+    Ok(())
+}
+
 /// Run schema sync + version bookkeeping + first-run seed.
 pub async fn migrate_and_seed(
     db: &DatabaseConnection,
@@ -177,7 +227,7 @@ pub async fn migrate_and_seed(
 ) -> anyhow::Result<()> {
     let had_versions = version::Entity::find().count(db).await.unwrap_or(0) > 0;
 
-    create_tables(db).await?;
+    create_tables(db, config).await?;
 
     let latest = version::Entity::find()
         .order_by_desc(version::Column::Id)
@@ -278,12 +328,15 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
     let start_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
+    let record_storage = config.record_storage.clone();
+
     Ok(AppState {
         db,
         webclient_config: Arc::new(WebClientConfigStore::new(
-            config_path,
+            config_path.clone(),
             WebClientConfig::from(&config.rustdesk),
         )),
+        record_storage_config: Arc::new(RecordStorageConfigStore::new(config_path, record_storage)),
         config: Arc::new(config),
         jwt: Arc::new(jwt),
         limiter: Arc::new(limiter),

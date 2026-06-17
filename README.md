@@ -120,6 +120,11 @@ environment variable named `RUSTDESK_API_<PATH>` — uppercase the key path, joi
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
 | `app.register` | `RUSTDESK_API_APP_REGISTER` |
 | `app.disable-pwd-login` | `RUSTDESK_API_APP_DISABLE_PWD_LOGIN` |
+| `record-storage.type` | `RUSTDESK_API_RECORD_STORAGE_TYPE` (`local` / `s3` / `webdav`) |
+| `record-storage.local-dir` / `record-storage.temp-dir` | `RUSTDESK_API_RECORD_STORAGE_LOCAL_DIR` / `RUSTDESK_API_RECORD_STORAGE_TEMP_DIR` |
+| `record-storage.s3.endpoint` / `bucket` / `prefix` | `RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT` / `RUSTDESK_API_RECORD_STORAGE_S3_BUCKET` / `RUSTDESK_API_RECORD_STORAGE_S3_PREFIX` |
+| `record-storage.s3.access-key-id` / `secret-access-key` | `RUSTDESK_API_RECORD_STORAGE_S3_ACCESS_KEY_ID` / `RUSTDESK_API_RECORD_STORAGE_S3_SECRET_ACCESS_KEY` |
+| `record-storage.webdav.url` / `username` / `password` | `RUSTDESK_API_RECORD_STORAGE_WEBDAV_URL` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_USERNAME` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_PASSWORD` |
 | `logger.path` / `logger.level` | `RUSTDESK_API_LOGGER_PATH` / `RUSTDESK_API_LOGGER_LEVEL` |
 
 Database default is **SQLite** at `./data/rustdeskapi.db`. Logs go to `logger.path`
@@ -141,6 +146,45 @@ The embedded WebClient supports three WebSocket modes:
   WebSocket services are exposed as separate endpoints or ports, for example
   `wss://rd.example.com:21118` and `wss://rd.example.com:21119`. Explicit
   endpoints take precedence over `rustdesk.ws-host`.
+
+## Recording storage
+
+RustDesk recording upload keeps the client protocol unchanged: `new`, random-offset
+`part`, `tail`, and `remove` requests still go to `/api/record`. The server records
+the storage backend and object key on each `record_files` row, so downloads and
+deletes use the backend/key saved for that recording. Changing storage settings only
+affects new recordings.
+
+Supported backends:
+
+- `local`: writes directly to `record-storage.local-dir`, or
+  `<gin.resources-path>/record` when empty.
+- `s3`: stages chunks in `record-storage.temp-dir` and uploads the completed file
+  to `s3.prefix + filename` on `tail`.
+- `webdav`: stages chunks in `record-storage.temp-dir` and uploads the completed
+  file to `webdav.prefix + filename` on `tail`.
+
+S3 and WebDAV credentials are server-side only. The admin UI never returns saved
+secret values; leaving a secret field empty keeps the existing value.
+
+## RustDesk deployment commands
+
+The Client settings page can generate RustDesk deployment commands, including
+optional client-side access settings. These preview-only options can add:
+
+```bash
+sudo rustdesk --password 'MyStrongPassword'
+sudo rustdesk --option approve-mode 'password'
+sudo rustdesk --option verification-method 'use-permanent-password'
+```
+
+Supported `approve-mode` values are `password`, `click`, and `password-click`.
+Supported `verification-method` values are `use-temporary-password`,
+`use-permanent-password`, and `use-both-passwords`.
+
+The password and access-mode choices are not written to `conf/config.yaml`, the
+database, localStorage, encoded config, or installer filename. Run the generated
+commands on the client machine with administrator/root privileges.
 
 ## Observability
 

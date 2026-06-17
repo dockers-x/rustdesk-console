@@ -9,7 +9,6 @@ use sea_orm::Set;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use entity::{address_book, audit_file, group, login_log, peer};
 
@@ -988,12 +987,11 @@ pub async fn record(
         Ok(filename) => filename,
         Err(e) => return resp::error(e),
     };
-    let path = services::record_file::record_root(&state.config.gin.resources_path).join(&filename);
     let result = match q.record_type.as_str() {
-        "new" => record_new(&state, &filename, &path).await,
-        "part" => record_write(&state, &filename, &path, q.offset, q.length, body, false).await,
-        "tail" => record_write(&state, &filename, &path, q.offset, q.length, body, true).await,
-        "remove" => record_remove(&state, &filename, &path).await,
+        "new" => record_new(&state, &filename).await,
+        "part" => record_write(&state, &filename, q.offset, q.length, body, false).await,
+        "tail" => record_write(&state, &filename, q.offset, q.length, body, true).await,
+        "remove" => record_remove(&state, &filename).await,
         "" => Err("missing record type".to_string()),
         _ => Err("invalid record type".to_string()),
     };
@@ -1004,20 +1002,15 @@ pub async fn record(
     }
 }
 
-async fn record_new(
-    state: &AppState,
-    filename: &str,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    tokio::fs::create_dir_all(services::record_file::record_root(
-        &state.config.gin.resources_path,
-    ))
-    .await
-    .map_err(|_| "failed to create record directory".to_string())?;
-    tokio::fs::File::create(path)
-        .await
-        .map_err(|_| "failed to create record file".to_string())?;
-    if let Err(e) = services::record_file::start_upload(&state.db, filename).await {
+async fn record_new(state: &AppState, filename: &str) -> Result<(), String> {
+    let cfg = state.record_storage_config.get().await;
+    let location =
+        services::record_storage::start_upload(&cfg, &state.config.gin.resources_path, filename)
+            .await?;
+    if let Err(e) =
+        services::record_file::start_upload(&state.db, filename, &location.backend, &location.key)
+            .await
+    {
         tracing::warn!("failed to create record file row: {e}");
     }
     Ok(())
@@ -1026,7 +1019,6 @@ async fn record_new(
 async fn record_write(
     state: &AppState,
     filename: &str,
-    path: &std::path::Path,
     offset: Option<u64>,
     length: Option<usize>,
     body: Bytes,
@@ -1038,48 +1030,89 @@ async fn record_write(
             return Err("record length mismatch".to_string());
         }
     }
-    tokio::fs::create_dir_all(services::record_file::record_root(
+    let cfg = state.record_storage_config.get().await;
+    let location = match services::record_file::info_by_filename(&state.db, filename)
+        .await
+        .map_err(|_| "failed to query record file".to_string())?
+    {
+        Some(row) => services::record_storage::RecordStorageLocation {
+            backend: services::record_storage::normalize_backend(&row.storage_backend).to_string(),
+            key: row.storage_key,
+        },
+        None => services::record_storage::location_for(
+            &cfg,
+            &state.config.gin.resources_path,
+            filename,
+        )?,
+    };
+    let write = services::record_storage::write_chunk(
+        &cfg,
         &state.config.gin.resources_path,
-    ))
-    .await
-    .map_err(|_| "failed to create record directory".to_string())?;
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .open(path)
-        .await
-        .map_err(|_| "failed to open record file".to_string())?;
-    file.seek(std::io::SeekFrom::Start(offset))
-        .await
-        .map_err(|_| "failed to seek record file".to_string())?;
-    file.write_all(&body)
-        .await
-        .map_err(|_| "failed to write record file".to_string())?;
-    let size = services::record_file::file_size(path).await;
+        &location,
+        filename,
+        offset,
+        body,
+        complete,
+    )
+    .await?;
     let result = if complete {
-        services::record_file::complete_upload(&state.db, filename, size).await
+        services::record_file::complete_upload(&state.db, filename, write.size).await
     } else {
-        services::record_file::mark_uploading(&state.db, filename, size).await
+        services::record_file::mark_uploading(&state.db, filename, write.size).await
     };
     if let Err(e) = result {
         tracing::warn!("failed to update record file row: {e}");
     }
+    if let Err(e) =
+        services::record_file::bind_storage(&state.db, filename, &location.backend, &location.key)
+            .await
+    {
+        tracing::warn!("failed to bind record file storage: {e}");
+    }
     Ok(())
 }
 
-async fn record_remove(
-    state: &AppState,
-    filename: &str,
-    path: &std::path::Path,
-) -> Result<(), String> {
+async fn record_remove(state: &AppState, filename: &str) -> Result<(), String> {
+    let cfg = state.record_storage_config.get().await;
+    let row = services::record_file::info_by_filename(&state.db, filename)
+        .await
+        .map_err(|_| "failed to query record file".to_string())?;
+    let location = match row {
+        Some(row) => services::record_storage::RecordStorageLocation {
+            backend: services::record_storage::normalize_backend(&row.storage_backend).to_string(),
+            key: row.storage_key,
+        },
+        None => services::record_storage::location_for(
+            &cfg,
+            &state.config.gin.resources_path,
+            filename,
+        )?,
+    };
+    if let Err(e) = services::record_storage::delete_object(
+        &cfg,
+        &state.config.gin.resources_path,
+        &location.backend,
+        &location.key,
+        filename,
+    )
+    .await
+    {
+        tracing::warn!("failed to remove record object: {e}");
+    }
+    if let Err(e) = services::record_storage::cleanup_staging(
+        &cfg,
+        &state.config.gin.resources_path,
+        &location.backend,
+        filename,
+    )
+    .await
+    {
+        tracing::warn!("failed to remove record staging file: {e}");
+    }
     if let Err(e) = services::record_file::delete_by_filename(&state.db, filename).await {
         tracing::warn!("failed to delete record file row: {e}");
     }
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err("failed to remove record file".to_string()),
-    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -110,6 +110,11 @@ rustdesk-console reset-admin-pwd <新密码>
 | `jwt.key` | `RUSTDESK_API_JWT_KEY` |
 | `app.register` | `RUSTDESK_API_APP_REGISTER` |
 | `app.disable-pwd-login` | `RUSTDESK_API_APP_DISABLE_PWD_LOGIN` |
+| `record-storage.type` | `RUSTDESK_API_RECORD_STORAGE_TYPE`（`local` / `s3` / `webdav`） |
+| `record-storage.local-dir` / `record-storage.temp-dir` | `RUSTDESK_API_RECORD_STORAGE_LOCAL_DIR` / `RUSTDESK_API_RECORD_STORAGE_TEMP_DIR` |
+| `record-storage.s3.endpoint` / `bucket` / `prefix` | `RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT` / `RUSTDESK_API_RECORD_STORAGE_S3_BUCKET` / `RUSTDESK_API_RECORD_STORAGE_S3_PREFIX` |
+| `record-storage.s3.access-key-id` / `secret-access-key` | `RUSTDESK_API_RECORD_STORAGE_S3_ACCESS_KEY_ID` / `RUSTDESK_API_RECORD_STORAGE_S3_SECRET_ACCESS_KEY` |
+| `record-storage.webdav.url` / `username` / `password` | `RUSTDESK_API_RECORD_STORAGE_WEBDAV_URL` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_USERNAME` / `RUSTDESK_API_RECORD_STORAGE_WEBDAV_PASSWORD` |
 | `logger.path` / `logger.level` | `RUSTDESK_API_LOGGER_PATH` / `RUSTDESK_API_LOGGER_LEVEL` |
 
 数据库默认是 **SQLite**，文件 `./data/rustdeskapi.db`。日志写入 `logger.path`
@@ -129,6 +134,43 @@ rustdesk-console reset-admin-pwd <新密码>
   `rustdesk.ws-id-host` 和 `rustdesk.ws-relay-host`，例如
   `wss://rd.example.com:21118` 和 `wss://rd.example.com:21119`。显式端点优先于
   `rustdesk.ws-host`。
+
+## 录像存储
+
+RustDesk 录像上传协议保持不变：客户端仍通过 `/api/record` 发送 `new`、随机
+offset 的 `part`、`tail` 和 `remove`。服务端会在每条 `record_files` 记录里保存
+存储后端和对象 key，因此下载、删除时按该记录保存的类型和 key 读取；切换存储配置
+只影响新的录像。
+
+支持的后端：
+
+- `local`：直接写入 `record-storage.local-dir`，留空则写入
+  `<gin.resources-path>/record`。
+- `s3`：分片上传期间先暂存到 `record-storage.temp-dir`，收到 `tail` 后上传到
+  `s3.prefix + filename`。
+- `webdav`：分片上传期间先暂存到 `record-storage.temp-dir`，收到 `tail` 后上传到
+  `webdav.prefix + filename`。
+
+S3 和 WebDAV 凭据只在服务端保存。管理后台不会回显已保存的密钥；密钥输入框留空表示
+保留当前值。
+
+## RustDesk 部署命令
+
+客户端设置页面可以生成 RustDesk 部署命令，并可选生成客户端接入模式相关命令，例如：
+
+```bash
+sudo rustdesk --password 'MyStrongPassword'
+sudo rustdesk --option approve-mode 'password'
+sudo rustdesk --option verification-method 'use-permanent-password'
+```
+
+`approve-mode` 支持 `password`、`click`、`password-click`。
+`verification-method` 支持 `use-temporary-password`、`use-permanent-password`、
+`use-both-passwords`。
+
+固定密码和接入模式选择只用于本次命令预览，不会写入 `conf/config.yaml`、数据库、
+localStorage、导入配置串或安装包文件名。生成的命令需要在客户端本机以管理员/root
+权限执行。
 
 ## 可观测性
 

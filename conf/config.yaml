@@ -56,6 +56,23 @@ rustdesk:
   ws-host: ""  # Optional reverse-proxy base, eg: https://rd.example.com -> /ws/id and /ws/relay
   ws-id-host: ""  # Optional explicit ID WebSocket endpoint, eg: wss://rd.example.com:21118
   ws-relay-host: ""  # Optional explicit relay WebSocket endpoint, eg: wss://rd.example.com:21119
+record-storage:
+  type: "local" # local / s3 / webdav
+  local-dir: "" # empty = <gin.resources-path>/record
+  temp-dir: "" # staging dir for remote backends; empty = <gin.resources-path>/record/tmp
+  s3:
+    endpoint: "" # eg: https://s3.amazonaws.com or https://minio.example.com
+    region: "auto"
+    bucket: ""
+    prefix: "record/"
+    access-key-id: ""
+    secret-access-key: ""
+    force-path-style: false
+  webdav:
+    url: "" # eg: https://dav.example.com/remote.php/dav/files/user
+    username: ""
+    password: ""
+    prefix: "record/"
 logger:
   path: "./runtime/log.txt"
   level: "info" #trace,debug,info,warn,error,fatal

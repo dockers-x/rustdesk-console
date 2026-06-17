@@ -52,7 +52,12 @@ pub async fn info_by_id(
     record_file::Entity::find_by_id(id).one(db).await
 }
 
-pub async fn start_upload(db: &DatabaseConnection, filename: &str) -> Result<(), DbErr> {
+pub async fn start_upload(
+    db: &DatabaseConnection,
+    filename: &str,
+    storage_backend: &str,
+    storage_key: &str,
+) -> Result<(), DbErr> {
     let peer_id = parse_peer_id(filename);
     let direction = parse_direction(filename);
     if let Some(existing) = info_by_filename(db, filename).await? {
@@ -61,6 +66,8 @@ pub async fn start_upload(db: &DatabaseConnection, filename: &str) -> Result<(),
         am.direction = Set(direction);
         am.size = Set(0);
         am.status = Set(record_file::STATUS_UPLOADING);
+        am.storage_backend = Set(storage_backend.to_string());
+        am.storage_key = Set(storage_key.to_string());
         am.updated_at = Set(now());
         am.update(db).await?;
         return Ok(());
@@ -71,11 +78,29 @@ pub async fn start_upload(db: &DatabaseConnection, filename: &str) -> Result<(),
         direction: Set(direction),
         size: Set(0),
         status: Set(record_file::STATUS_UPLOADING),
+        storage_backend: Set(storage_backend.to_string()),
+        storage_key: Set(storage_key.to_string()),
         created_at: Set(now()),
         updated_at: Set(now()),
         ..Default::default()
     };
     am.insert(db).await?;
+    Ok(())
+}
+
+pub async fn bind_storage(
+    db: &DatabaseConnection,
+    filename: &str,
+    storage_backend: &str,
+    storage_key: &str,
+) -> Result<(), DbErr> {
+    if let Some(existing) = info_by_filename(db, filename).await? {
+        let mut am: record_file::ActiveModel = existing.into();
+        am.storage_backend = Set(storage_backend.to_string());
+        am.storage_key = Set(storage_key.to_string());
+        am.updated_at = Set(now());
+        am.update(db).await?;
+    }
     Ok(())
 }
 
@@ -145,6 +170,22 @@ pub fn record_root(resources_path: &str) -> PathBuf {
     PathBuf::from(base).join("record")
 }
 
+pub fn record_root_for_config(resources_path: &str, local_dir: &str) -> PathBuf {
+    if local_dir.trim().is_empty() {
+        record_root(resources_path)
+    } else {
+        PathBuf::from(local_dir.trim())
+    }
+}
+
+pub fn record_temp_root(resources_path: &str, temp_dir: &str) -> PathBuf {
+    if temp_dir.trim().is_empty() {
+        record_root(resources_path).join("tmp")
+    } else {
+        PathBuf::from(temp_dir.trim())
+    }
+}
+
 pub fn record_path(resources_path: &str, filename: &str) -> Result<PathBuf, String> {
     Ok(record_root(resources_path).join(sanitize_filename(filename)?))
 }
@@ -186,7 +227,7 @@ fn parse_peer_id(filename: &str) -> String {
     parts.next().unwrap_or_default().to_string()
 }
 
-async fn info_by_filename(
+pub async fn info_by_filename(
     db: &DatabaseConnection,
     filename: &str,
 ) -> Result<Option<record_file::Model>, DbErr> {

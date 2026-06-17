@@ -141,6 +141,10 @@ fn admin_routes() -> Router<AppState> {
             "/api/admin/config/deployment",
             get(admin::config_deployment).post(admin::config_deployment_preview),
         )
+        .route(
+            "/api/admin/config/record-storage",
+            get(admin::config_record_storage).patch(admin::config_record_storage_update),
+        )
         .route("/api/admin/config/app", get(admin::config_app))
         // user
         .route("/api/admin/user/current", get(admin::user_current))

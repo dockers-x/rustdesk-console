@@ -6,4 +6,5 @@ pub mod oauth_cache;
 pub mod oss;
 pub mod password;
 pub mod random;
+pub mod record_storage_config;
 pub mod webclient_config;
