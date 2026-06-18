@@ -55,6 +55,19 @@ const tagsCol = {
     );
   },
 };
+const noteCol = {
+  key: "note",
+  label: "note",
+  render: (r: Record<string, unknown>) => {
+    const note = String(r.note ?? "").trim();
+    if (!note) return "—";
+    return (
+      <span className="block max-w-64 truncate text-sm" title={note}>
+        {note}
+      </span>
+    );
+  },
+};
 const securityPill = (active: boolean, label: string) => (
   <span
     className={`inline-flex min-h-7 items-center rounded-md border px-2.5 text-xs font-medium ${
@@ -730,6 +743,8 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "username", label: "username" },
       { key: "hostname", label: "hostname" },
       { key: "platform", label: "platform" },
+      { key: "alias", label: "alias" },
+      noteCol,
       tagsCol,
       { key: "user_id", label: "userId" },
       { key: "collection_id", label: "collectionId" },
@@ -741,6 +756,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { name: "hostname", label: "hostname", type: "text" },
       { name: "platform", label: "platform", type: "text" },
       { name: "alias", label: "alias", type: "text" },
+      { name: "note", label: "note", type: "textarea" },
       {
         name: "user_id",
         label: "userId",
@@ -1067,6 +1083,7 @@ export const MY_RESOURCES: ResourceConfig[] = [
       { key: "hostname", label: "hostname" },
       { key: "platform", label: "platform" },
       { key: "alias", label: "alias" },
+      noteCol,
       tagsCol,
       { key: "collection_id", label: "collectionId" },
       webClientCol(true),
@@ -1077,6 +1094,7 @@ export const MY_RESOURCES: ResourceConfig[] = [
       { name: "hostname", label: "hostname", type: "text" },
       { name: "platform", label: "platform", type: "text" },
       { name: "alias", label: "alias", type: "text" },
+      { name: "note", label: "note", type: "textarea" },
       {
         name: "collection_id",
         label: "collectionId",

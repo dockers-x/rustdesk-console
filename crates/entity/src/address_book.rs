@@ -23,6 +23,9 @@ pub struct Model {
     pub alias: String,
     #[sea_orm(default_value = "")]
     #[serde(default)]
+    pub note: String,
+    #[sea_orm(default_value = "")]
+    #[serde(default)]
     pub platform: String,
     /// JSON array of tag names (Go `custom_types.AutoJson`). Always set on insert.
     #[sea_orm(column_type = "Json")]

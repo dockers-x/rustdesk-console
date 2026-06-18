@@ -3,8 +3,10 @@
 //! `InitGlobal` / `DatabaseAutoUpdate` / `Migrate` flow.
 
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, future::Future};
 
 use sea_orm::sea_query::{ColumnDef, Table};
 use sea_orm::{
@@ -33,7 +35,35 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 271;
+pub const DATABASE_VERSION: i32 = 272;
+
+type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
+type MigrationFn = for<'a> fn(&'a DatabaseConnection, &'a Config) -> MigrationFuture<'a>;
+
+struct SchemaMigration {
+    version: i32,
+    name: &'static str,
+    apply: MigrationFn,
+}
+
+impl fmt::Display for SchemaMigration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({})", self.version, self.name)
+    }
+}
+
+const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
+    SchemaMigration {
+        version: 271,
+        name: "legacy column reconciliation",
+        apply: migration_271,
+    },
+    SchemaMigration {
+        version: 272,
+        name: "address book peer notes",
+        apply: migration_272,
+    },
+];
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
@@ -74,9 +104,9 @@ pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
     Ok(db)
 }
 
-/// Create any missing tables and return whether the
-/// `versions` table existed beforehand.
-async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Result<()> {
+/// Create any missing tables. Existing tables are never altered here; schema
+/// evolution is handled by the ordered migrations below.
+async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     let backend = db.get_database_backend();
     let schema = Schema::new(backend);
 
@@ -122,12 +152,21 @@ async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Resu
     create!(server_cmd::Entity);
     create!(device_group::Entity);
     create!(active_connection::Entity);
-    add_missing_columns(db).await?;
-    backfill_record_storage_keys(db, config).await?;
     Ok(())
 }
 
-async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
+fn migration_271<'a>(db: &'a DatabaseConnection, config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move { migrate_271_legacy_columns(db, config).await })
+}
+
+fn migration_272<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move { migrate_272_address_book_notes(db).await })
+}
+
+async fn migrate_271_legacy_columns(
+    db: &DatabaseConnection,
+    config: &Config,
+) -> anyhow::Result<()> {
     let backend = db.get_database_backend();
 
     if !column_exists(db, "users", "must_change_password").await? {
@@ -307,6 +346,26 @@ async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
         db.execute(backend.build(&stmt)).await?;
     }
 
+    backfill_record_storage_keys(db, config).await?;
+    Ok(())
+}
+
+async fn migrate_272_address_book_notes(db: &DatabaseConnection) -> anyhow::Result<()> {
+    let backend = db.get_database_backend();
+
+    if !column_exists(db, "address_books", "note").await? {
+        let stmt = Table::alter()
+            .table(address_book::Entity)
+            .add_column(
+                ColumnDef::new(address_book::Column::Note)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
     Ok(())
 }
 
@@ -360,6 +419,49 @@ async fn backfill_record_storage_keys(
     Ok(())
 }
 
+async fn latest_schema_version(db: &DatabaseConnection) -> anyhow::Result<Option<i32>> {
+    Ok(version::Entity::find()
+        .order_by_desc(version::Column::Version)
+        .order_by_desc(version::Column::Id)
+        .one(db)
+        .await?
+        .map(|v| v.version))
+}
+
+async fn record_schema_version(db: &DatabaseConnection, schema_version: i32) -> anyhow::Result<()> {
+    let am = version::ActiveModel {
+        version: Set(schema_version),
+        created_at: Set(services::now()),
+        updated_at: Set(services::now()),
+        ..Default::default()
+    };
+    am.insert(db).await?;
+    Ok(())
+}
+
+async fn run_schema_migrations(db: &DatabaseConnection, config: &Config) -> anyhow::Result<()> {
+    let declared_latest = SCHEMA_MIGRATIONS
+        .last()
+        .map(|migration| migration.version)
+        .unwrap_or(0);
+    anyhow::ensure!(
+        declared_latest == DATABASE_VERSION,
+        "schema migration list latest version {declared_latest} does not match DATABASE_VERSION {DATABASE_VERSION}"
+    );
+
+    let current_version = latest_schema_version(db).await?.unwrap_or(0);
+    for migration in SCHEMA_MIGRATIONS {
+        if migration.version > current_version {
+            tracing::info!("Applying schema migration {}", migration);
+            (migration.apply)(db, config).await?;
+            record_schema_version(db, migration.version).await?;
+        } else {
+            (migration.apply)(db, config).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Run schema sync + version bookkeeping + first-run seed.
 pub async fn migrate_and_seed(
     db: &DatabaseConnection,
@@ -369,32 +471,14 @@ pub async fn migrate_and_seed(
 ) -> anyhow::Result<()> {
     let had_versions = version::Entity::find().count(db).await.unwrap_or(0) > 0;
 
-    create_tables(db, config).await?;
+    create_tables(db).await?;
+    run_schema_migrations(db, config).await?;
 
-    let latest = version::Entity::find()
-        .order_by_desc(version::Column::Id)
-        .one(db)
-        .await?;
-
-    let need_version_row = match &latest {
-        None => true,
-        Some(v) => v.version < DATABASE_VERSION,
-    };
-
-    if need_version_row {
-        tracing::info!("Migrating.... {}", DATABASE_VERSION);
-        let am = version::ActiveModel {
-            version: Set(DATABASE_VERSION),
-            created_at: Set(services::now()),
-            updated_at: Set(services::now()),
-            ..Default::default()
-        };
-        am.insert(db).await?;
-    }
-
-    // First run ever: seed default groups + admin user.
-    let version_count = version::Entity::find().count(db).await?;
-    if !had_versions && version_count == 1 {
+    // First run ever: seed default groups + admin user. This is based on users
+    // rather than version rows because fresh installs now record every schema
+    // migration in the version table.
+    let user_count = user::Entity::find().count(db).await.unwrap_or(0);
+    if !had_versions && user_count == 0 {
         seed(db, config, i18n, lang).await?;
     }
 
@@ -497,7 +581,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{Database, EntityTrait};
+    use sea_orm::{Database, DbBackend, EntityTrait};
 
     async fn memory_db() -> DatabaseConnection {
         let mut options = ConnectOptions::new("sqlite::memory:");
@@ -522,6 +606,10 @@ mod tests {
 
         assert_eq!(user::Entity::find().count(&db).await.unwrap(), 0);
         assert_eq!(group::Entity::find().count(&db).await.unwrap(), 2);
+        assert_eq!(
+            latest_schema_version(&db).await.unwrap(),
+            Some(DATABASE_VERSION)
+        );
     }
 
     #[tokio::test]
@@ -536,5 +624,67 @@ mod tests {
         assert_eq!(admin.username, "admin");
         assert!(admin.is_admin());
         assert!(crate::support::password::verify_password(&admin.password, "change-me").0);
+    }
+
+    #[tokio::test]
+    async fn fresh_install_records_schema_migration_versions() {
+        let db = memory_db().await;
+        let cfg = test_config("");
+        let i18n = I18n::load("en");
+
+        migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
+
+        let versions = version::Entity::find()
+            .order_by_asc(version::Column::Version)
+            .all(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.version)
+            .collect::<Vec<_>>();
+
+        assert_eq!(versions, vec![271, DATABASE_VERSION]);
+    }
+
+    #[tokio::test]
+    async fn existing_version_271_database_migrates_address_book_note_column() {
+        let db = memory_db().await;
+        let cfg = test_config("");
+        let i18n = I18n::load("en");
+        let backend = db.get_database_backend();
+
+        db.execute(
+            backend.build(
+                &Schema::new(DbBackend::Sqlite)
+                    .create_table_from_entity(version::Entity)
+                    .to_owned(),
+            ),
+        )
+        .await
+        .unwrap();
+        version::ActiveModel {
+            version: Set(271),
+            created_at: Set(services::now()),
+            updated_at: Set(services::now()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            backend,
+            "CREATE TABLE address_books (row_id INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL DEFAULT '')",
+        ))
+        .await
+        .unwrap();
+
+        migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
+
+        assert!(column_exists(&db, "address_books", "note").await.unwrap());
+        assert_eq!(
+            latest_schema_version(&db).await.unwrap(),
+            Some(DATABASE_VERSION)
+        );
+        assert_eq!(user::Entity::find().count(&db).await.unwrap(), 0);
     }
 }

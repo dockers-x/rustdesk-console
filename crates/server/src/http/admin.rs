@@ -2950,6 +2950,8 @@ pub struct AddressBookForm {
     #[serde(default)]
     pub alias: String,
     #[serde(default)]
+    pub note: String,
+    #[serde(default)]
     pub platform: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -2984,6 +2986,7 @@ impl AddressBookForm {
             password: self.password.clone(),
             hostname: self.hostname.clone(),
             alias: self.alias.clone(),
+            note: self.note.clone(),
             platform: self.platform.clone(),
             tags: serde_json::to_value(&self.tags).unwrap_or(Value::Array(vec![])),
             hash: self.hash.clone(),

@@ -1345,13 +1345,11 @@ async fn assign_peer_to_address_book(
     if let Some(alias) = option_text(&f.address_book_alias) {
         ab.alias = alias;
     }
+    if let Some(note) = option_text(&f.address_book_note) {
+        ab.note = note;
+    }
     if let Some(password) = option_text(&f.address_book_password) {
         ab.password = password;
-    }
-    if ab.alias.is_empty() {
-        if let Some(note) = option_text(&f.address_book_note) {
-            ab.alias = note;
-        }
     }
 
     if let Some(existing) = services::address_book::info_by_user_id_and_id_and_cid(
@@ -1735,10 +1733,13 @@ mod record_tests {
 // ---------- address book (legacy /ab) ----------
 
 pub async fn ab_get(State(state): State<AppState>, user: RustClientUser) -> Response {
-    let abs = services::address_book::list_by_user_and_collection(&state.db, user.user.id, 0)
+    let cid = services::address_book::client_personal_collection_id(&state.db, user.user.id)
+        .await
+        .unwrap_or(0);
+    let abs = services::address_book::list_by_user_and_collection(&state.db, user.user.id, cid)
         .await
         .unwrap_or_default();
-    let tags = services::tag::list_by_user_and_collection(&state.db, user.user.id, 0)
+    let tags = services::tag::list_by_user_and_collection(&state.db, user.user.id, cid)
         .await
         .unwrap_or_default();
     let mut tag_names = vec![];
@@ -1784,8 +1785,16 @@ pub async fn ab_update(
     };
     let tc: std::collections::HashMap<String, i64> =
         serde_json::from_str(&abd.tag_colors).unwrap_or_default();
-    if let Err(e) =
-        services::address_book::update_address_book(&state.db, abd.peers, user.user.id).await
+    let cid = services::address_book::client_personal_collection_id(&state.db, user.user.id)
+        .await
+        .unwrap_or(0);
+    if let Err(e) = services::address_book::update_address_book_collection(
+        &state.db,
+        abd.peers,
+        user.user.id,
+        cid,
+    )
+    .await
     {
         return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
@@ -1965,10 +1974,7 @@ pub async fn ab_personal(State(state): State<AppState>, user: RustClientUser) ->
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let cid = services::address_book::client_personal_collection_id(&state.db, user.user.id)
-        .await
-        .unwrap_or(0);
-    let guid = compose_guid(user.user.group_id, user.user.id, cid);
+    let guid = compose_guid(user.user.group_id, user.user.id, 0);
     Json(json!({ "guid": guid, "name": user.user.username, "rule": 3 })).into_response()
 }
 
@@ -2250,6 +2256,7 @@ fn merge_duplicate_address_book_peer(
         password,
         hostname,
         alias,
+        note,
         platform,
         tags,
         hash,
@@ -2280,6 +2287,7 @@ fn merge_duplicate_address_book_peer(
     prefer_peer_text(&mut current.password, password, candidate_is_newer);
     prefer_peer_text(&mut current.hostname, hostname, candidate_is_newer);
     prefer_peer_text(&mut current.alias, alias, candidate_is_newer);
+    prefer_peer_text(&mut current.note, note, candidate_is_newer);
     prefer_peer_text(&mut current.platform, platform, candidate_is_newer);
     prefer_peer_text(&mut current.hash, hash, candidate_is_newer);
     prefer_peer_text(&mut current.rdp_port, rdp_port, candidate_is_newer);
@@ -2374,6 +2382,7 @@ pub async fn ab_peer_add(
         password: g("password"),
         hostname,
         alias: g("alias"),
+        note: g("note"),
         platform,
         tags,
         hash: g("hash"),
@@ -2883,6 +2892,10 @@ mod pagination_tests {
             password: String::new(),
             hostname: "hpdev".to_string(),
             alias: alias.to_string(),
+            note: alias
+                .is_empty()
+                .then(String::new)
+                .unwrap_or_else(|| "机房 A 排 3".to_string()),
             platform: "Windows".to_string(),
             tags: serde_json::json!([]),
             hash: String::new(),
@@ -2903,6 +2916,7 @@ mod pagination_tests {
 
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].alias, "公司开发台式机");
+        assert_eq!(peers[0].note, "机房 A 排 3");
         assert_eq!(peers[0].row_id, 3);
     }
 }

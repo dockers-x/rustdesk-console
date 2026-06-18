@@ -168,6 +168,7 @@ fn merge_peer_for_add(target: &mut address_book::Model, source: address_book::Mo
     merge_non_empty_string(&mut target.password, source.password);
     merge_non_empty_string(&mut target.hostname, source.hostname);
     merge_non_empty_string(&mut target.alias, source.alias);
+    merge_non_empty_string(&mut target.note, source.note);
     merge_non_empty_string(&mut target.platform, source.platform);
     merge_non_empty_string(&mut target.hash, source.hash);
     merge_non_empty_string(&mut target.rdp_port, source.rdp_port);
@@ -232,6 +233,9 @@ fn apply_peer_update_fields(peer: &mut address_book::Model, fields: &Value) {
         if let Some(v) = obj.get("alias").and_then(|v| v.as_str()) {
             peer.alias = v.to_string();
         }
+        if let Some(v) = obj.get("note").and_then(|v| v.as_str()) {
+            peer.note = v.to_string();
+        }
         if let Some(v) = obj.get("tags") {
             peer.tags = v.clone();
         }
@@ -292,9 +296,19 @@ pub async fn update_address_book(
     peers: Vec<address_book::Model>,
     user_id: i32,
 ) -> Result<(), DbErr> {
+    update_address_book_collection(db, peers, user_id, 0).await
+}
+
+/// Reconcile one address book collection against `peers`.
+pub async fn update_address_book_collection(
+    db: &DatabaseConnection,
+    peers: Vec<address_book::Model>,
+    user_id: i32,
+    collection_id: i32,
+) -> Result<(), DbErr> {
     let existing = address_book::Entity::find()
         .filter(address_book::Column::UserId.eq(user_id))
-        .filter(address_book::Column::CollectionId.eq(0))
+        .filter(address_book::Column::CollectionId.eq(collection_id))
         .all(db)
         .await?;
     let existing_by_id: HashMap<String, address_book::Model> =
@@ -304,7 +318,7 @@ pub async fn update_address_book(
 
     for mut p in peers {
         p.user_id = user_id;
-        p.collection_id = 0;
+        p.collection_id = collection_id;
         match existing_by_id.get(&p.id) {
             None => {
                 if p.platform.is_empty() || p.username.is_empty() || p.hostname.is_empty() {
@@ -320,6 +334,7 @@ pub async fn update_address_book(
                     password: Set(p.password),
                     hostname: Set(p.hostname),
                     alias: Set(p.alias),
+                    note: Set(p.note),
                     platform: Set(p.platform),
                     tags: Set(p.tags),
                     hash: Set(p.hash),
@@ -338,12 +353,16 @@ pub async fn update_address_book(
                 am.insert(db).await?;
             }
             Some(existing) => {
+                if p.note.trim().is_empty() {
+                    p.note = existing.note.clone();
+                }
                 let am = address_book::ActiveModel {
                     row_id: Set(existing.row_id),
                     username: Set(p.username),
                     password: Set(p.password),
                     hostname: Set(p.hostname),
                     alias: Set(p.alias),
+                    note: Set(p.note),
                     platform: Set(p.platform),
                     tags: Set(p.tags),
                     hash: Set(p.hash),
@@ -635,6 +654,7 @@ fn to_active(m: address_book::Model) -> address_book::ActiveModel {
         password: Set(m.password),
         hostname: Set(m.hostname),
         alias: Set(m.alias),
+        note: Set(m.note),
         platform: Set(m.platform),
         tags: Set(m.tags),
         hash: Set(m.hash),
@@ -690,6 +710,7 @@ pub fn from_peer(p: &::entity::peer::Model) -> address_book::Model {
         password: String::new(),
         hostname: p.hostname.clone(),
         alias: String::new(),
+        note: String::new(),
         platform: platform_from_os(&p.os),
         tags: serde_json::Value::Array(vec![]),
         hash: String::new(),
@@ -1065,6 +1086,7 @@ mod tests {
                 password: String::new(),
                 hostname: "hpdev".to_string(),
                 alias: String::new(),
+                note: String::new(),
                 platform: "Windows".to_string(),
                 tags: serde_json::json!([]),
                 hash: String::new(),
@@ -1091,6 +1113,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_or_update_preserves_existing_note_when_incoming_note_is_empty() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("1380385931".to_string()),
+            user_id: Set(1),
+            collection_id: Set(7),
+            note: Set("机房 A 排 3".to_string()),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let saved = add_or_update(
+            &db,
+            address_book::Model {
+                row_id: 0,
+                id: "1380385931".to_string(),
+                username: "czyt".to_string(),
+                password: String::new(),
+                hostname: "hpdev".to_string(),
+                alias: String::new(),
+                note: String::new(),
+                platform: "Windows".to_string(),
+                tags: serde_json::json!([]),
+                hash: String::new(),
+                user_id: 1,
+                force_always_relay: false,
+                rdp_port: String::new(),
+                rdp_username: String::new(),
+                online: false,
+                login_name: String::new(),
+                same_server: false,
+                collection_id: 7,
+                created_at: None,
+                updated_at: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(saved.note, "机房 A 排 3");
+        assert_eq!(address_book::Entity::find().count(&db).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_fields_by_identity_updates_note() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("1380385931".to_string()),
+            user_id: Set(1),
+            collection_id: Set(7),
+            note: Set("old".to_string()),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let updated = update_fields_by_identity(
+            &db,
+            1,
+            "1380385931",
+            7,
+            &serde_json::json!({ "id": "1380385931", "note": "new note" }),
+        )
+        .await
+        .unwrap();
+
+        let row = info_by_user_id_and_id_and_cid(&db, 1, "1380385931", 7)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(updated);
+        assert_eq!(row.note, "new note");
+    }
+
+    #[tokio::test]
     async fn add_or_update_keeps_same_id_in_different_collections_separate() {
         let db = setup_address_book_db().await;
 
@@ -1101,6 +1206,7 @@ mod tests {
             password: String::new(),
             hostname: "hpdev".to_string(),
             alias: alias.to_string(),
+            note: String::new(),
             platform: "Windows".to_string(),
             tags: serde_json::json!([]),
             hash: String::new(),
@@ -1165,6 +1271,7 @@ mod tests {
                 password: String::new(),
                 hostname: "host".to_string(),
                 alias: "new".to_string(),
+                note: "legacy note".to_string(),
                 platform: "Linux".to_string(),
                 tags: serde_json::json!([]),
                 hash: String::new(),
@@ -1193,6 +1300,62 @@ mod tests {
             .iter()
             .any(|row| row.collection_id == 9 && row.id == "shared-peer"));
         assert!(!rows.iter().any(|row| row.id == "legacy-old"));
+    }
+
+    #[tokio::test]
+    async fn update_address_book_collection_preserves_existing_note_when_client_omits_it() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("work-peer".to_string()),
+            user_id: Set(1),
+            collection_id: Set(8),
+            alias: Set("work".to_string()),
+            note: Set("rack 2".to_string()),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        update_address_book_collection(
+            &db,
+            vec![address_book::Model {
+                row_id: 0,
+                id: "work-peer".to_string(),
+                username: "user".to_string(),
+                password: String::new(),
+                hostname: "host".to_string(),
+                alias: "updated alias".to_string(),
+                note: String::new(),
+                platform: "Linux".to_string(),
+                tags: serde_json::json!([]),
+                hash: String::new(),
+                user_id: 99,
+                force_always_relay: false,
+                rdp_port: String::new(),
+                rdp_username: String::new(),
+                online: false,
+                login_name: String::new(),
+                same_server: false,
+                collection_id: 99,
+                created_at: None,
+                updated_at: None,
+            }],
+            1,
+            8,
+        )
+        .await
+        .unwrap();
+
+        let row = info_by_user_id_and_id_and_cid(&db, 1, "work-peer", 8)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.alias, "updated alias");
+        assert_eq!(row.note, "rack 2");
     }
 
     #[tokio::test]
