@@ -9,6 +9,7 @@ use crate::services::{now, paginate};
 pub const DEFAULT_PRIORITY: i32 = 100;
 
 pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
+    "access-mode",
     "enable-keyboard",
     "enable-clipboard",
     "enable-file-transfer",
@@ -26,6 +27,34 @@ pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
     "auto-disconnect-timeout",
     "whitelist",
     "allow-remote-config-modification",
+    "enable-remote-printer",
+    "temporary-password-length",
+    "allow-numeric-one-time-password",
+    "allow-auto-record-incoming",
+    "enable-abr",
+    "allow-remove-wallpaper",
+    "allow-always-software-render",
+    "allow-linux-headless",
+    "enable-hwcodec",
+    "enable-directx-capture",
+    "enable-trusted-devices",
+    "keep-awake-during-incoming-sessions",
+    "allow-auto-update",
+    "enable-lan-discovery",
+    "direct-server",
+    "direct-access-port",
+    "allow-only-conn-window-open",
+    "custom-rendezvous-server",
+    "relay-server",
+    "api-server",
+    "key",
+    "allow-websocket",
+    "disable-udp",
+    "ice-servers",
+    "proxy-url",
+    "proxy-username",
+    "proxy-password",
+    "allow-insecure-tls-fallback",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,6 +416,25 @@ mod tests {
     fn decodes_empty_maps() {
         assert!(decode_string_map("").unwrap().is_empty());
         assert!(decode_string_map("{}").unwrap().is_empty());
+    }
+
+    #[test]
+    fn accepts_client_heartbeat_config_options() {
+        let mut options = HashMap::new();
+        options.insert("access-mode".to_string(), "view".to_string());
+        options.insert("enable-remote-printer".to_string(), "N".to_string());
+        options.insert("custom-rendezvous-server".to_string(), "hbbs.example".to_string());
+        options.insert("proxy-password".to_string(), "secret".to_string());
+
+        let encoded = encode_config_options(options).unwrap();
+        let decoded = decode_string_map(&encoded).unwrap();
+        assert_eq!(decoded.get("access-mode"), Some(&"view".to_string()));
+        assert_eq!(decoded.get("enable-remote-printer"), Some(&"N".to_string()));
+        assert_eq!(
+            decoded.get("custom-rendezvous-server"),
+            Some(&"hbbs.example".to_string())
+        );
+        assert_eq!(decoded.get("proxy-password"), Some(&"secret".to_string()));
     }
 
     #[tokio::test]

@@ -115,6 +115,19 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
         "modified_at": modified_at,
         "strategy": strategy,
     });
+    if let Some(p) = &peer {
+        if p.force_sysinfo_refresh {
+            res["sysinfo"] = json!(true);
+            let am = peer::ActiveModel {
+                row_id: Set(p.row_id),
+                force_sysinfo_refresh: Set(false),
+                ..Default::default()
+            };
+            if let Err(e) = services::peer::update(&state.db, am).await {
+                tracing::warn!("failed to clear sysinfo refresh flag for {}: {e}", p.id);
+            }
+        }
+    }
     let disconnect = state.disconnect_store.pending(&disconnect_key);
     if !disconnect.is_empty() {
         res["disconnect"] = json!(disconnect);
@@ -247,6 +260,12 @@ pub struct LoginForm {
     pub username: String,
     #[serde(default)]
     pub password: String,
+    #[serde(default, rename = "verificationCode")]
+    pub verification_code: String,
+    #[serde(default, rename = "tfaCode")]
+    pub tfa_code: String,
+    #[serde(default)]
+    pub secret: String,
 }
 
 pub async fn login(
@@ -258,6 +277,52 @@ pub async fn login(
 ) -> Response {
     if state.config.app.disable_pwd_login {
         return resp::error(state.tr(&lang, "PwdLoginDisabled"));
+    }
+    if !form.secret.trim().is_empty() {
+        let (user, device) = match services::login_security::verify_login_challenge(
+            &state.db,
+            &form.secret,
+            Some(&form.verification_code),
+            Some(&form.tfa_code),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                state.limiter.record_failed_attempt(&ip);
+                return resp::error(e);
+            }
+        };
+        if !user.is_enabled() {
+            return resp::error(state.tr(&lang, "UserDisabled"));
+        }
+        let ut = match services::user::login(
+            &state.db,
+            &state.jwt,
+            &state.config,
+            &user,
+            services::user::LoginEvent {
+                client: device.client_type,
+                device_id: device.id,
+                uuid: device.uuid,
+                ip,
+                login_type: login_log::TYPE_ACCOUNT.to_string(),
+                platform: device.os,
+            },
+        )
+        .await
+        {
+            Ok(ut) => ut,
+            Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        };
+        return Json(LoginRes {
+            r#type: "access_token".into(),
+            access_token: ut.token,
+            user: UserPayload::from_user(&user),
+            secret: String::new(),
+            tfa_type: String::new(),
+        })
+        .into_response();
     }
     if form.username.len() < 2 || form.password.len() < 4 {
         state.limiter.record_failed_attempt(&ip);
@@ -283,6 +348,32 @@ pub async fn login(
     // referer => web client login
     if headers.get("referer").is_some() {
         form.device_info.r#type = login_log::CLIENT_WEB.to_string();
+    }
+    let device = client_login_device_info(&form, &ip);
+    match services::login_security::required_verification(&state.db, &user, &device).await {
+        Ok(Some(kind)) => {
+            let challenge = match services::login_security::create_login_challenge(
+                &state.db,
+                &user,
+                &device,
+                kind,
+            )
+            .await
+            {
+                Ok(challenge) => challenge,
+                Err(e) => return resp::error(e),
+            };
+            return Json(LoginRes {
+                r#type: "email_check".into(),
+                access_token: String::new(),
+                user: UserPayload::from_user(&user),
+                secret: challenge.secret,
+                tfa_type: challenge.kind.response_tfa_type().to_string(),
+            })
+            .into_response();
+        }
+        Ok(None) => {}
+        Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
     let ut = match services::user::login(
         &state.db,
@@ -311,6 +402,21 @@ pub async fn login(
         tfa_type: String::new(),
     })
     .into_response()
+}
+
+fn client_login_device_info(
+    form: &LoginForm,
+    ip: &str,
+) -> services::login_security::DeviceLoginInfo {
+    services::login_security::DeviceLoginInfo {
+        id: form.id.clone(),
+        uuid: form.uuid.clone(),
+        name: form.device_info.name.clone(),
+        os: form.device_info.os.clone(),
+        client_type: form.device_info.r#type.clone(),
+        ip: ip.to_string(),
+        auto_login: form.auto_login,
+    }
 }
 
 pub async fn login_options(State(state): State<AppState>) -> Response {
@@ -352,7 +458,7 @@ pub async fn user_info(user: RustClientUser) -> Response {
 
 // ---------- sysinfo ----------
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 pub struct PeerForm {
     #[serde(default)]
     pub cpu: String,
@@ -370,6 +476,28 @@ pub struct PeerForm {
     pub uuid: String,
     #[serde(default)]
     pub version: String,
+    #[serde(default, rename = "preset-user-name")]
+    pub preset_user_name: Option<String>,
+    #[serde(default, rename = "preset-strategy-name")]
+    pub preset_strategy_name: Option<String>,
+    #[serde(default, rename = "preset-device-group-name")]
+    pub preset_device_group_name: Option<String>,
+    #[serde(default, rename = "preset-address-book-name")]
+    pub preset_address_book_name: Option<String>,
+    #[serde(default, rename = "preset-address-book-tag")]
+    pub preset_address_book_tag: Option<String>,
+    #[serde(default, rename = "preset-address-book-alias")]
+    pub preset_address_book_alias: Option<String>,
+    #[serde(default, rename = "preset-address-book-password")]
+    pub preset_address_book_password: Option<String>,
+    #[serde(default, rename = "preset-address-book-note")]
+    pub preset_address_book_note: Option<String>,
+    #[serde(default, rename = "preset-device-username")]
+    pub preset_device_username: Option<String>,
+    #[serde(default, rename = "preset-device-name")]
+    pub preset_device_name: Option<String>,
+    #[serde(default, rename = "preset-note")]
+    pub preset_note: Option<String>,
 }
 
 pub async fn sysinfo(
@@ -381,54 +509,186 @@ pub async fn sysinfo(
         Ok(p) => p,
         Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     };
-    match existing {
+    let preset_user_id = resolve_sysinfo_preset_user_id(&state, &f).await;
+    let preset_group_id = resolve_sysinfo_preset_device_group_id(&state, &f).await;
+    let saved_peer = match existing {
         None => {
-            let user_id = services::user::find_latest_user_id_by_uuid(&state.db, &f.uuid, &f.id)
-                .await
-                .unwrap_or(0);
+            let user_id = match preset_user_id {
+                Some(user_id) => user_id,
+                None => services::user::find_latest_user_id_by_uuid(&state.db, &f.uuid, &f.id)
+                    .await
+                    .unwrap_or(0),
+            };
             let am = peer::ActiveModel {
                 id: Set(f.id.clone()),
-                cpu: Set(f.cpu),
-                hostname: Set(f.hostname),
-                memory: Set(f.memory),
-                os: Set(f.os),
-                username: Set(f.username),
-                uuid: Set(f.uuid),
-                version: Set(f.version),
+                cpu: Set(f.cpu.clone()),
+                hostname: Set(sysinfo_hostname(&f)),
+                memory: Set(f.memory.clone()),
+                os: Set(f.os.clone()),
+                username: Set(sysinfo_username(&f)),
+                uuid: Set(f.uuid.clone()),
+                version: Set(f.version.clone()),
                 user_id: Set(user_id),
+                group_id: Set(preset_group_id.unwrap_or(0)),
+                alias: Set(option_text(&f.preset_note).unwrap_or_default()),
                 ..Default::default()
             };
-            if let Err(e) = services::peer::create(&state.db, am).await {
-                return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+            match services::peer::create(&state.db, am).await {
+                Ok(peer) => peer,
+                Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
             }
         }
         Some(p) => {
-            let user_id = if p.user_id == 0 {
+            let user_id = if let Some(user_id) = preset_user_id {
+                user_id
+            } else if p.user_id == 0 {
                 services::user::find_latest_user_id_by_uuid(&state.db, &f.uuid, &f.id)
                     .await
                     .unwrap_or(0)
             } else {
                 p.user_id
             };
-            let am = peer::ActiveModel {
+            let mut am = peer::ActiveModel {
                 row_id: Set(p.row_id),
-                id: Set(f.id),
-                cpu: Set(f.cpu),
-                hostname: Set(f.hostname),
-                memory: Set(f.memory),
-                os: Set(f.os),
-                username: Set(f.username),
-                uuid: Set(f.uuid),
-                version: Set(f.version),
+                id: Set(f.id.clone()),
+                cpu: Set(f.cpu.clone()),
+                hostname: Set(sysinfo_hostname(&f)),
+                memory: Set(f.memory.clone()),
+                os: Set(f.os.clone()),
+                username: Set(sysinfo_username(&f)),
+                uuid: Set(f.uuid.clone()),
+                version: Set(f.version.clone()),
                 user_id: Set(user_id),
                 ..Default::default()
             };
+            if let Some(group_id) = preset_group_id {
+                am.group_id = Set(group_id);
+            }
+            if let Some(note) = option_text(&f.preset_note) {
+                am.alias = Set(note);
+            }
             if let Err(e) = services::peer::update(&state.db, am).await {
                 return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
             }
+            match services::peer::find_by_id(&state.db, &f.id).await {
+                Ok(Some(peer)) => peer,
+                Ok(None) => return resp::error(state.tr(&lang, "ItemNotFound")),
+                Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+            }
+        }
+    };
+    apply_sysinfo_preset_assignment(&state, &f, &saved_peer).await;
+    "SYSINFO_UPDATED".into_response()
+}
+
+fn sysinfo_hostname(f: &PeerForm) -> String {
+    option_text(&f.preset_device_name).unwrap_or_else(|| f.hostname.clone())
+}
+
+fn sysinfo_username(f: &PeerForm) -> String {
+    option_text(&f.preset_device_username).unwrap_or_else(|| f.username.clone())
+}
+
+async fn resolve_sysinfo_preset_user_id(state: &AppState, f: &PeerForm) -> Option<i32> {
+    let name = option_text(&f.preset_user_name)?;
+    match services::user::info_by_username(&state.db, &name).await {
+        Ok(Some(user)) => Some(user.id),
+        Ok(None) => {
+            tracing::warn!("sysinfo preset user not found: {name}");
+            None
+        }
+        Err(e) => {
+            tracing::warn!("failed to resolve sysinfo preset user {name}: {e}");
+            None
         }
     }
-    "SYSINFO_UPDATED".into_response()
+}
+
+async fn resolve_sysinfo_preset_device_group_id(state: &AppState, f: &PeerForm) -> Option<i32> {
+    let name = option_text(&f.preset_device_group_name)?;
+    match services::group::device_group_info_by_name(&state.db, &name).await {
+        Ok(Some(group)) => Some(group.id),
+        Ok(None) => {
+            tracing::warn!("sysinfo preset device group not found: {name}");
+            None
+        }
+        Err(e) => {
+            tracing::warn!("failed to resolve sysinfo preset device group {name}: {e}");
+            None
+        }
+    }
+}
+
+async fn apply_sysinfo_preset_assignment(state: &AppState, f: &PeerForm, peer: &peer::Model) {
+    let target_user = resolve_sysinfo_target_user(state, f, peer).await;
+
+    if let Some(address_book_name) = option_text(&f.preset_address_book_name) {
+        match &target_user {
+            Some(user) => {
+                let cli = DeviceCliForm {
+                    id: f.id.clone(),
+                    uuid: f.uuid.clone(),
+                    address_book_name: Some(address_book_name.clone()),
+                    address_book_tag: f.preset_address_book_tag.clone(),
+                    address_book_alias: f.preset_address_book_alias.clone(),
+                    address_book_password: f.preset_address_book_password.clone(),
+                    address_book_note: f.preset_address_book_note.clone(),
+                    ..Default::default()
+                };
+                if let Err(e) = assign_peer_to_address_book(state, user, peer, &address_book_name, &cli).await {
+                    tracing::warn!(
+                        "failed to apply sysinfo preset address book {} for {}: {}",
+                        address_book_name,
+                        peer.id,
+                        e
+                    );
+                }
+            }
+            None => tracing::warn!(
+                "skip sysinfo preset address book {} for {}: target user not resolved",
+                address_book_name,
+                peer.id
+            ),
+        }
+    }
+
+    if let Some(strategy_name) = option_text(&f.preset_strategy_name) {
+        if let Err(e) =
+            services::strategy::assign_peer_by_strategy_name(&state.db, &peer.id, &strategy_name)
+                .await
+        {
+            tracing::warn!(
+                "failed to apply sysinfo preset strategy {} for {}: {}",
+                strategy_name,
+                peer.id,
+                e
+            );
+        }
+    }
+}
+
+async fn resolve_sysinfo_target_user(
+    state: &AppState,
+    f: &PeerForm,
+    peer: &peer::Model,
+) -> Option<entity::user::Model> {
+    if let Some(name) = option_text(&f.preset_user_name) {
+        match services::user::info_by_username(&state.db, &name).await {
+            Ok(Some(user)) => return Some(user),
+            Ok(None) => tracing::warn!("sysinfo preset user not found: {name}"),
+            Err(e) => tracing::warn!("failed to resolve sysinfo preset user {name}: {e}"),
+        }
+    }
+    if peer.user_id <= 0 {
+        return None;
+    }
+    match services::user::info_by_id(&state.db, peer.user_id).await {
+        Ok(user) => user,
+        Err(e) => {
+            tracing::warn!("failed to resolve sysinfo peer user {}: {e}", peer.user_id);
+            None
+        }
+    }
 }
 
 pub async fn sysinfo_ver(State(state): State<AppState>) -> Response {

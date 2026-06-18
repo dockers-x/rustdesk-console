@@ -51,6 +51,12 @@ pub struct LoginForm {
     pub captcha_id: String,
     #[serde(default)]
     pub platform: String,
+    #[serde(default, rename = "verificationCode")]
+    pub verification_code: String,
+    #[serde(default, rename = "tfaCode")]
+    pub tfa_code: String,
+    #[serde(default)]
+    pub secret: String,
 }
 
 pub async fn login(
@@ -61,6 +67,46 @@ pub async fn login(
 ) -> Response {
     if state.config.app.disable_pwd_login {
         return resp::fail(101, state.tr(&lang, "PwdLoginDisabled"));
+    }
+    if !f.secret.trim().is_empty() {
+        let (user, device) = match services::login_security::verify_login_challenge(
+            &state.db,
+            &f.secret,
+            Some(&f.verification_code),
+            Some(&f.tfa_code),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                state.limiter.record_failed_attempt(&ip);
+                return resp::fail(101, e);
+            }
+        };
+        if !user.is_enabled() {
+            return resp::fail(101, state.tr(&lang, "UserDisabled"));
+        }
+        let ut = match services::user::login(
+            &state.db,
+            &state.jwt,
+            &state.config,
+            &user,
+            services::user::LoginEvent {
+                client: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
+                device_id: device.id,
+                uuid: device.uuid,
+                ip: ip.clone(),
+                login_type: entity::login_log::TYPE_ACCOUNT.to_string(),
+                platform: device.os,
+            },
+        )
+        .await
+        {
+            Ok(ut) => ut,
+            Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        };
+        state.limiter.remove_attempts(&ip);
+        return resp::success(AdminLoginPayload::from_user(&user, ut.token));
     }
     let (_banned, need_captcha) = state.limiter.check_security_status(&ip);
 
@@ -95,6 +141,41 @@ pub async fn login(
     if !user.is_enabled() {
         let code = if need_captcha { 110 } else { 101 };
         return resp::fail(code, state.tr(&lang, "UserDisabled"));
+    }
+    let device = services::login_security::DeviceLoginInfo {
+        id: String::new(),
+        uuid: String::new(),
+        name: "Admin console".to_string(),
+        os: f.platform.clone(),
+        client_type: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
+        ip: ip.clone(),
+        auto_login: true,
+    };
+    match services::login_security::required_verification(&state.db, &user, &device).await {
+        Ok(Some(kind)) => {
+            let challenge = match services::login_security::create_login_challenge(
+                &state.db,
+                &user,
+                &device,
+                kind,
+            )
+            .await
+            {
+                Ok(challenge) => challenge,
+                Err(e) => return resp::fail(101, e),
+            };
+            return resp::success(json!({
+                "type": "email_check",
+                "tfa_type": challenge.kind.response_tfa_type(),
+                "secret": challenge.secret,
+                "user": {
+                    "username": user.username,
+                    "email": user.email,
+                }
+            }));
+        }
+        Ok(None) => {}
+        Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
     let ut = match services::user::login(
         &state.db,
@@ -216,6 +297,11 @@ pub async fn setup_initialize(
         is_admin: Some(true),
         status: user::STATUS_ENABLE,
         must_change_password: false,
+        tfa_secret: String::new(),
+        tfa_enabled: false,
+        tfa_enforced: false,
+        email_verification_enabled: false,
+        login_device_verification_enabled: false,
         remark: String::new(),
         created_at: None,
         updated_at: None,
@@ -296,6 +382,79 @@ pub async fn config_admin_update(
             resp::success(cfg)
         }
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct LoginSecurityConfigForm {
+    #[serde(default)]
+    pub login: services::login_security::LoginSecuritySettings,
+    #[serde(default)]
+    pub email: services::login_security::EmailSettingsUpdate,
+}
+
+pub async fn login_security_config(State(state): State<AppState>, _user: AdminUser) -> Response {
+    match services::login_security::config_view(&state.db).await {
+        Ok(view) => resp::success(view),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn login_security_config_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<LoginSecurityConfigForm>,
+) -> Response {
+    if f.email.host.chars().count() > 255
+        || f.email.username.chars().count() > 255
+        || f.email.password.chars().count() > 500
+        || f.email.from.chars().count() > 255
+    {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    if let Err(e) = services::login_security::save_login_settings(&state.db, f.login).await {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+    }
+    match services::login_security::save_email_settings(&state.db, f.email).await {
+        Ok(_) => match services::login_security::config_view(&state.db).await {
+            Ok(view) => resp::success(view),
+            Err(e) => resp::fail(101, e.to_string()),
+        },
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct TestEmailForm {
+    #[serde(default)]
+    pub to: String,
+}
+
+pub async fn login_security_test_email(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: AdminUser,
+    Json(f): Json<TestEmailForm>,
+) -> Response {
+    let to = if f.to.trim().is_empty() {
+        user.user.email.trim()
+    } else {
+        f.to.trim()
+    };
+    if to.is_empty() || !to.contains('@') {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::send_test_email(
+        &state.db,
+        to,
+        "RustDesk Console test email",
+        "This is a RustDesk Console SMTP configuration test email.",
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e),
     }
 }
 
@@ -552,6 +711,11 @@ impl UserForm {
             is_admin: self.is_admin,
             status: self.status,
             must_change_password: false,
+            tfa_secret: String::new(),
+            tfa_enabled: false,
+            tfa_enforced: false,
+            email_verification_enabled: false,
+            login_device_verification_enabled: false,
             remark: self.remark.clone(),
             created_at: None,
             updated_at: None,
@@ -572,7 +736,25 @@ pub async fn user_list(
     )
     .await
     {
-        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Ok(r) => {
+            let mut list = Vec::with_capacity(r.list.len());
+            for row in r.list {
+                let trusted_device_count =
+                    services::login_security::trusted_device_count_for_user(&state.db, row.id)
+                        .await
+                        .unwrap_or(0);
+                let mut value = match serde_json::to_value(&row) {
+                    Ok(Value::Object(map)) => map,
+                    _ => serde_json::Map::new(),
+                };
+                value.insert(
+                    "trusted_device_count".to_string(),
+                    Value::from(trusted_device_count),
+                );
+                list.push(Value::Object(value));
+            }
+            list_json(list, r.page, r.total, r.page_size)
+        }
         Err(e) => resp::fail(101, e.to_string()),
     }
 }
@@ -662,6 +844,188 @@ pub async fn user_change_pwd(
 
 pub async fn user_current(State(_state): State<AppState>, user: BackendUser) -> Response {
     resp::success(AdminLoginPayload::from_user(&user.user, user.token))
+}
+
+pub async fn my_security(State(state): State<AppState>, user: BackendUser) -> Response {
+    let trusted_devices = services::login_security::trusted_devices_for_user(
+        &state.db,
+        user.user.id,
+    )
+    .await
+    .unwrap_or_default();
+    resp::success(json!({
+        "tfa_enabled": user.user.tfa_enabled,
+        "tfa_enforced": user.user.tfa_enforced,
+        "email_verification_enabled": user.user.email_verification_enabled,
+        "login_device_verification_enabled": user.user.login_device_verification_enabled,
+        "trusted_device_count": trusted_devices.len(),
+    }))
+}
+
+pub async fn my_tfa_setup(State(_state): State<AppState>, user: BackendUser) -> Response {
+    let secret = services::login_security::generate_totp_secret();
+    resp::success(json!({
+        "secret": secret,
+        "uri": services::login_security::totp_uri(&user.user.username, &secret),
+    }))
+}
+
+#[derive(Deserialize, Default)]
+pub struct TfaCodeForm {
+    #[serde(default)]
+    pub secret: String,
+    #[serde(default)]
+    pub code: String,
+}
+
+pub async fn my_tfa_enable(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<TfaCodeForm>,
+) -> Response {
+    if f.secret.trim().is_empty() || f.code.trim().is_empty() {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::enable_user_totp(
+        &state.db,
+        &user.user,
+        f.secret.trim(),
+        f.code.trim(),
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+pub async fn my_tfa_disable(
+    State(state): State<AppState>,
+    user: BackendUser,
+    Json(f): Json<TfaCodeForm>,
+) -> Response {
+    match services::login_security::disable_user_totp(&state.db, &user.user, Some(&f.code)).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+pub async fn my_trusted_login_devices(State(state): State<AppState>, user: BackendUser) -> Response {
+    match services::login_security::trusted_devices_for_user(&state.db, user.user.id).await {
+        Ok(list) => resp::success(list),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct TrustedDeviceForm {
+    #[serde(default)]
+    pub id: i32,
+}
+
+pub async fn my_trusted_login_device_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<TrustedDeviceForm>,
+) -> Response {
+    if f.id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::delete_trusted_device(&state.db, Some(user.user.id), f.id).await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct UserSecurityForm {
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub tfa_enforced: bool,
+    #[serde(default)]
+    pub email_verification_enabled: bool,
+    #[serde(default)]
+    pub login_device_verification_enabled: bool,
+}
+
+pub async fn user_security_update(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<UserSecurityForm>,
+) -> Response {
+    let target = match services::user::info_by_id(&state.db, f.id).await {
+        Ok(Some(user)) => user,
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::login_security::update_user_login_security(
+        &state.db,
+        &target,
+        f.tfa_enforced,
+        f.email_verification_enabled,
+        f.login_device_verification_enabled,
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+pub async fn user_tfa_reset(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    let target = match services::user::info_by_id(&state.db, f.id).await {
+        Ok(Some(user)) => user,
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::login_security::reset_user_totp(&state.db, &target).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct TrustedDevicesQuery {
+    #[serde(default)]
+    pub user_id: i32,
+}
+
+pub async fn user_trusted_login_devices(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Query(q): Query<TrustedDevicesQuery>,
+) -> Response {
+    if q.user_id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::trusted_devices_for_user(&state.db, q.user_id).await {
+        Ok(list) => resp::success(list),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn user_trusted_login_device_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<TrustedDeviceForm>,
+) -> Response {
+    if f.id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::delete_trusted_device(&state.db, None, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -1475,6 +1839,30 @@ pub async fn peer_batch_delete(
 ) -> Response {
     match services::peer::batch_delete(&state.db, &f.row_ids).await {
         Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn peer_request_sysinfo_refresh(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<AbRowIdForm>,
+) -> Response {
+    if f.row_id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    let peer = match services::peer::info_by_row_id(&state.db, f.row_id).await {
+        Ok(Some(peer)) => peer,
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    let am = peer::ActiveModel {
+        row_id: Set(peer.row_id),
+        force_sysinfo_refresh: Set(true),
+        ..Default::default()
+    };
+    match services::peer::update(&state.db, am).await {
+        Ok(_) => resp::success(json!({ "peer_id": peer.id })),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
 }

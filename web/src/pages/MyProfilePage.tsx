@@ -30,6 +30,7 @@ import { InlineMessage } from "../components/InlineMessage";
 import { TableState } from "../components/TableState";
 import { apiGet, apiPost, ApiError } from "../lib/api";
 import { clearToken } from "../lib/auth";
+import { formatUnixSeconds } from "../lib/dateFormat";
 
 interface CurrentUser {
   username: string;
@@ -70,6 +71,30 @@ interface MessageLatest {
   unread: number;
 }
 
+interface SecurityStatus {
+  tfa_enabled: boolean;
+  tfa_enforced: boolean;
+  email_verification_enabled: boolean;
+  login_device_verification_enabled: boolean;
+  trusted_device_count: number;
+}
+
+interface TfaSetup {
+  secret: string;
+  uri: string;
+}
+
+interface TrustedLoginDevice {
+  id: number;
+  device_id: string;
+  device_uuid: string;
+  device_name: string;
+  device_os: string;
+  device_type: string;
+  ip: string;
+  last_seen_at: number;
+}
+
 export function MyProfilePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -85,6 +110,13 @@ export function MyProfilePage() {
   const [bindingTarget, setBindingTarget] = useState("");
   const [refreshOnFocus, setRefreshOnFocus] = useState(false);
   const [unbindTarget, setUnbindTarget] = useState("");
+  const [securityMessage, setSecurityMessage] = useState("");
+  const [securityError, setSecurityError] = useState("");
+  const [tfaSetup, setTfaSetup] = useState<TfaSetup | null>(null);
+  const [tfaCode, setTfaCode] = useState("");
+  const [tfaDisableCode, setTfaDisableCode] = useState("");
+  const [trustedDeleteTarget, setTrustedDeleteTarget] =
+    useState<TrustedLoginDevice | null>(null);
 
   const user = useQuery({
     queryKey: ["current-user"],
@@ -97,6 +129,15 @@ export function MyProfilePage() {
   const latestMessages = useQuery({
     queryKey: ["profile-latest-messages"],
     queryFn: () => apiGet<MessageLatest>("/api/admin/my/message/latest"),
+  });
+  const security = useQuery({
+    queryKey: ["my-security"],
+    queryFn: () => apiGet<SecurityStatus>("/api/admin/user/mySecurity"),
+  });
+  const trustedDevices = useQuery({
+    queryKey: ["my-trusted-login-devices"],
+    queryFn: () =>
+      apiGet<TrustedLoginDevice[]>("/api/admin/user/myTrustedLoginDevices"),
   });
 
   const changePwd = useMutation({
@@ -147,6 +188,70 @@ export function MyProfilePage() {
       void qc.invalidateQueries({ queryKey: ["my-oauth"] });
     },
   });
+  const startTfaSetup = useMutation({
+    mutationFn: () => apiPost<TfaSetup>("/api/admin/user/myTfaSetup"),
+    onSuccess: (res) => {
+      setTfaSetup(res);
+      setTfaCode("");
+      setSecurityMessage("");
+      setSecurityError("");
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setSecurityError(ae.message || t("operationFailed"));
+    },
+  });
+  const enableTfa = useMutation({
+    mutationFn: () =>
+      apiPost("/api/admin/user/myTfaEnable", {
+        secret: tfaSetup?.secret ?? "",
+        code: tfaCode.trim(),
+      }),
+    onSuccess: () => {
+      setTfaSetup(null);
+      setTfaCode("");
+      setSecurityMessage(t("totpEnabled"));
+      setSecurityError("");
+      void qc.invalidateQueries({ queryKey: ["my-security"] });
+      void qc.invalidateQueries({ queryKey: ["current-user"] });
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setSecurityError(ae.message || t("operationFailed"));
+    },
+  });
+  const disableTfa = useMutation({
+    mutationFn: () =>
+      apiPost("/api/admin/user/myTfaDisable", {
+        code: tfaDisableCode.trim(),
+      }),
+    onSuccess: () => {
+      setTfaDisableCode("");
+      setSecurityMessage(t("totpDisabled"));
+      setSecurityError("");
+      void qc.invalidateQueries({ queryKey: ["my-security"] });
+      void qc.invalidateQueries({ queryKey: ["current-user"] });
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setSecurityError(ae.message || t("operationFailed"));
+    },
+  });
+  const deleteTrustedDevice = useMutation({
+    mutationFn: (id: number) =>
+      apiPost("/api/admin/user/myTrustedLoginDevice/delete", { id }),
+    onSuccess: () => {
+      setTrustedDeleteTarget(null);
+      setSecurityMessage(t("trustedDeviceDeleted"));
+      setSecurityError("");
+      void qc.invalidateQueries({ queryKey: ["my-security"] });
+      void qc.invalidateQueries({ queryKey: ["my-trusted-login-devices"] });
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setSecurityError(ae.message || t("operationFailed"));
+    },
+  });
 
   useEffect(() => {
     if (!refreshOnFocus) return;
@@ -189,6 +294,16 @@ export function MyProfilePage() {
   const currentUser = user.data;
   const boundCount = (oauth.data ?? []).filter((row) => row.status === 1).length;
   const passwordScoreValue = passwordScore(newPassword);
+  const copySecurityText = async (value: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setSecurityMessage(t("copied"));
+      setSecurityError("");
+    } catch (err) {
+      setSecurityError((err as Error).message || t("operationFailed"));
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -265,6 +380,304 @@ export function MyProfilePage() {
               loading={oauth.isLoading}
             />
           </dl>
+        </section>
+
+        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
+                <ShieldCheck size={18} />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold">{t("accountSecurity")}</h2>
+                <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+                  {t("accountSecurityHint")}
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setSecurityMessage("");
+                setSecurityError("");
+                void qc.invalidateQueries({ queryKey: ["my-security"] });
+                void qc.invalidateQueries({
+                  queryKey: ["my-trusted-login-devices"],
+                });
+              }}
+            >
+              <ArrowClockwise size={16} />
+              {t("refresh")}
+            </Button>
+          </div>
+
+          {securityMessage && (
+            <InlineMessage tone="success" className="mb-3">
+              {securityMessage}
+            </InlineMessage>
+          )}
+          {securityError && (
+            <InlineMessage tone="error" className="mb-3">
+              {securityError}
+            </InlineMessage>
+          )}
+          {security.isLoading && <TableState tone="loading">{t("loading")}</TableState>}
+          {security.error && (
+            <TableState tone="error">
+              {(security.error as Error).message || t("operationFailed")}
+            </TableState>
+          )}
+
+          {security.data && (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <SecurityStateTile
+                  label={t("totpVerification")}
+                  value={
+                    security.data.tfa_enabled
+                      ? security.data.tfa_enforced
+                        ? t("enforced")
+                        : t("enabled")
+                      : t("disabled")
+                  }
+                  tone={security.data.tfa_enabled ? "success" : "default"}
+                />
+                <SecurityStateTile
+                  label={t("emailVerification")}
+                  value={
+                    security.data.email_verification_enabled
+                      ? t("enabled")
+                      : t("disabled")
+                  }
+                  tone={
+                    security.data.email_verification_enabled ? "success" : "default"
+                  }
+                />
+                <SecurityStateTile
+                  label={t("deviceVerification")}
+                  value={
+                    security.data.login_device_verification_enabled
+                      ? t("enabled")
+                      : t("disabled")
+                  }
+                  tone={
+                    security.data.login_device_verification_enabled
+                      ? "success"
+                      : "default"
+                  }
+                />
+                <SecurityStateTile
+                  label={t("trustedLoginDevices")}
+                  value={String(security.data.trusted_device_count ?? 0)}
+                  tone={
+                    (security.data.trusted_device_count ?? 0) > 0
+                      ? "success"
+                      : "default"
+                  }
+                />
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold">
+                        {t("totpVerification")}
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+                        {security.data.tfa_enabled
+                          ? t("totpEnabledHint")
+                          : t("totpSetupHint")}
+                      </p>
+                    </div>
+                    {!security.data.tfa_enabled && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        loading={startTfaSetup.isPending}
+                        onClick={() => startTfaSetup.mutate()}
+                      >
+                        {t("setupTotp")}
+                      </Button>
+                    )}
+                  </div>
+
+                  {tfaSetup && (
+                    <div className="mt-4 space-y-3">
+                      <div className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2">
+                        <div className="text-xs font-medium text-kumo-subtle">
+                          {t("totpSecret")}
+                        </div>
+                        <code className="mt-1 block break-all font-mono text-xs">
+                          {tfaSetup.secret}
+                        </code>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => void copySecurityText(tfaSetup.secret)}
+                          >
+                            {t("copy")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => void copySecurityText(tfaSetup.uri)}
+                          >
+                            {t("copyTotpUri")}
+                          </Button>
+                        </div>
+                      </div>
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-medium">
+                          {t("verificationCode")}
+                        </span>
+                        <Input
+                          aria-label={t("verificationCode")}
+                          value={tfaCode}
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          onChange={(e) => {
+                            setTfaCode(e.target.value);
+                            setSecurityError("");
+                          }}
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          loading={enableTfa.isPending}
+                          disabled={!tfaCode.trim()}
+                          onClick={() => enableTfa.mutate()}
+                        >
+                          {t("enableTotp")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setTfaSetup(null);
+                            setTfaCode("");
+                          }}
+                        >
+                          {t("cancel")}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {security.data.tfa_enabled && (
+                    <div className="mt-4 space-y-3">
+                      {security.data.tfa_enforced && (
+                        <p className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm leading-6 text-kumo-subtle">
+                          {t("totpEnforcedSelfHint")}
+                        </p>
+                      )}
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-medium">
+                          {t("verificationCode")}
+                        </span>
+                        <Input
+                          aria-label={t("verificationCode")}
+                          value={tfaDisableCode}
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          disabled={security.data.tfa_enforced}
+                          onChange={(e) => {
+                            setTfaDisableCode(e.target.value);
+                            setSecurityError("");
+                          }}
+                        />
+                      </label>
+                      <Button
+                        size="sm"
+                        variant="secondary-destructive"
+                        loading={disableTfa.isPending}
+                        disabled={
+                          security.data.tfa_enforced || !tfaDisableCode.trim()
+                        }
+                        onClick={() => disableTfa.mutate()}
+                      >
+                        {t("disableTotp")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
+                  <div className="mb-3">
+                    <h3 className="text-sm font-semibold">
+                      {t("trustedLoginDevices")}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+                      {t("trustedLoginDevicesHint")}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-kumo-line bg-kumo-elevated">
+                    <div className="divide-y divide-kumo-line">
+                      {(trustedDevices.data ?? []).map((device) => (
+                        <div
+                          key={device.id}
+                          className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="min-w-0">
+                            <div className="break-words text-sm font-semibold">
+                              {device.device_name ||
+                                device.device_id ||
+                                device.device_uuid ||
+                                t("unknownDevice")}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-kumo-subtle">
+                              {device.device_os && (
+                                <span className="rounded border border-kumo-line px-2 py-1">
+                                  {device.device_os}
+                                </span>
+                              )}
+                              {device.ip && (
+                                <span className="rounded border border-kumo-line px-2 py-1">
+                                  {device.ip}
+                                </span>
+                              )}
+                              <span className="rounded border border-kumo-line px-2 py-1">
+                                {formatUnixSeconds(device.last_seen_at)}
+                              </span>
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="secondary-destructive"
+                            onClick={() => {
+                              deleteTrustedDevice.reset();
+                              setTrustedDeleteTarget(device);
+                            }}
+                          >
+                            {t("delete")}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                    {trustedDevices.isLoading && (
+                      <TableState tone="loading">{t("loading")}</TableState>
+                    )}
+                    {trustedDevices.error && (
+                      <TableState tone="error">
+                        {(trustedDevices.error as Error).message ||
+                          t("operationFailed")}
+                      </TableState>
+                    )}
+                    {!trustedDevices.isLoading &&
+                      !trustedDevices.error &&
+                      (trustedDevices.data ?? []).length === 0 && (
+                        <TableState tone="empty">
+                          {t("trustedDeviceEmpty")}
+                        </TableState>
+                      )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
@@ -521,6 +934,31 @@ export function MyProfilePage() {
           if (unbindTarget) unbind.mutate(unbindTarget);
         }}
       />
+
+      <ConfirmDialog
+        open={trustedDeleteTarget !== null}
+        title={t("confirmDeleteTrustedDeviceTitle")}
+        description={t("confirmDeleteTrustedDeviceDescription")}
+        confirmLabel={t("delete")}
+        cancelLabel={t("cancel")}
+        error={
+          deleteTrustedDevice.error
+            ? (deleteTrustedDevice.error as Error).message || t("operationFailed")
+            : undefined
+        }
+        loading={deleteTrustedDevice.isPending}
+        onOpenChange={(next) => {
+          if (!next) {
+            setTrustedDeleteTarget(null);
+            deleteTrustedDevice.reset();
+          }
+        }}
+        onConfirm={() => {
+          if (trustedDeleteTarget) {
+            deleteTrustedDevice.mutate(trustedDeleteTarget.id);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -649,6 +1087,32 @@ function OAuthMethodRow({
             {t("toBind")}
           </Button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function SecurityStateTile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "default" | "success";
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border border-kumo-line bg-kumo-base px-3 py-3">
+      <div className="truncate text-xs font-medium text-kumo-subtle">{label}</div>
+      <div className="mt-2 flex items-center gap-2">
+        <span
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            tone === "success" ? "bg-kumo-success" : "bg-kumo-fill",
+          )}
+          aria-hidden="true"
+        />
+        <span className="min-w-0 break-words text-sm font-semibold">{value}</span>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ pub mod deployment;
 pub mod diagnostics;
 pub mod group;
 pub mod ldap;
+pub mod login_security;
 pub mod login_log;
 pub mod message;
 pub mod oauth;

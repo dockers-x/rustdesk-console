@@ -222,6 +222,14 @@ fn admin_routes() -> Router<AppState> {
             get(admin::config_admin_manage).patch(admin::config_admin_update),
         )
         .route(
+            "/api/admin/config/login-security",
+            get(admin::login_security_config).patch(admin::login_security_config_update),
+        )
+        .route(
+            "/api/admin/config/login-security/test-email",
+            post(admin::login_security_test_email),
+        )
+        .route(
             "/api/admin/config/server",
             get(admin::config_server).patch(admin::config_server_update),
         )
@@ -236,6 +244,18 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/config/app", get(admin::config_app))
         // user
         .route("/api/admin/user/current", get(admin::user_current))
+        .route("/api/admin/user/mySecurity", get(admin::my_security))
+        .route("/api/admin/user/myTfaSetup", post(admin::my_tfa_setup))
+        .route("/api/admin/user/myTfaEnable", post(admin::my_tfa_enable))
+        .route("/api/admin/user/myTfaDisable", post(admin::my_tfa_disable))
+        .route(
+            "/api/admin/user/myTrustedLoginDevices",
+            get(admin::my_trusted_login_devices),
+        )
+        .route(
+            "/api/admin/user/myTrustedLoginDevice/delete",
+            post(admin::my_trusted_login_device_delete),
+        )
         .route(
             "/api/admin/user/changeCurPwd",
             post(admin::user_change_cur_pwd),
@@ -248,6 +268,16 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/user/update", post(admin::user_update))
         .route("/api/admin/user/delete", post(admin::user_delete))
         .route("/api/admin/user/changePwd", post(admin::user_change_pwd))
+        .route("/api/admin/user/security", post(admin::user_security_update))
+        .route("/api/admin/user/tfa/reset", post(admin::user_tfa_reset))
+        .route(
+            "/api/admin/user/trusted-login-devices",
+            get(admin::user_trusted_login_devices),
+        )
+        .route(
+            "/api/admin/user/trusted-login-device/delete",
+            post(admin::user_trusted_login_device_delete),
+        )
         // messages
         .route("/api/admin/message/list", get(admin::message_list))
         .route("/api/admin/message/create", post(admin::message_create))
@@ -349,6 +379,10 @@ fn admin_routes() -> Router<AppState> {
             post(admin::peer_batch_delete),
         )
         .route("/api/admin/peer/disconnect", post(admin::peer_disconnect))
+        .route(
+            "/api/admin/peer/sysinfo-refresh",
+            post(admin::peer_request_sysinfo_refresh),
+        )
         .route(
             "/api/admin/active_connection/list",
             get(admin::active_connection_list),

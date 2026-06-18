@@ -5,6 +5,7 @@ import { OAuthProviderActions } from "../components/OAuthProviderActions";
 import { PeerQuickActions } from "../components/PeerQuickActions";
 import { OAuthProviderBadge } from "../components/OAuthProviderBadge";
 import { RecordFileActions } from "../components/RecordFileActions";
+import { UserSecurityActions } from "../components/UserSecurityActions";
 import { WebClientActions } from "../components/WebClientActions";
 import { renderStrategyOptionsSummary } from "./strategyOptions";
 import type { ResourceConfig } from "./types";
@@ -20,6 +21,59 @@ const boolCol = (key: string, label: string) => ({
   label,
   render: (r: Record<string, unknown>) => (r[key] ? "✓" : "—"),
 });
+const securityPill = (active: boolean, label: string) => (
+  <span
+    className={`inline-flex min-h-7 items-center rounded-md border px-2.5 text-xs font-medium ${
+      active
+        ? "border-kumo-success/25 bg-kumo-success-tint/60 text-kumo-success"
+        : "border-kumo-line bg-kumo-base text-kumo-subtle"
+    }`}
+  >
+    {label}
+  </span>
+);
+const userTotpCol = {
+  key: "__totp_status",
+  label: "totpVerification",
+  render: (r: Record<string, unknown>, t: (k: string) => string) => {
+    const enabled = Boolean(r.tfa_enabled);
+    const enforced = Boolean(r.tfa_enforced);
+    const label = enabled
+      ? enforced
+        ? t("enforced")
+        : t("enabled")
+      : enforced
+        ? t("pendingSetup")
+        : t("disabled");
+    return securityPill(enabled, label);
+  },
+};
+const userEmailSecurityCol = {
+  key: "__email_security",
+  label: "emailVerification",
+  render: (r: Record<string, unknown>, t: (k: string) => string) =>
+    securityPill(Boolean(r.email_verification_enabled), t(
+      r.email_verification_enabled ? "enabled" : "disabled",
+    )),
+};
+const userTrustedDeviceCol = {
+  key: "__trusted_devices",
+  label: "trustedLoginDevices",
+  render: (r: Record<string, unknown>, t: (k: string) => string) => {
+    const count = Number(r.trusted_device_count ?? 0);
+    const deviceVerification = Boolean(r.login_device_verification_enabled);
+    return (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {securityPill(deviceVerification, t(
+          deviceVerification ? "deviceVerificationOn" : "deviceVerificationOff",
+        ))}
+        <span className="rounded-md border border-kumo-line bg-kumo-base px-2.5 py-1 text-xs text-kumo-subtle">
+          {t("trustedDeviceCount").replace("{{count}}", String(count))}
+        </span>
+      </div>
+    );
+  },
+};
 const monoCol = (key: string, label: string, width = "max-w-44") => ({
   key,
   label,
@@ -168,6 +222,9 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "nickname", label: "nickname" },
       adminCol,
       statusCol,
+      userTotpCol,
+      userEmailSecurityCol,
+      userTrustedDeviceCol,
       { key: "created_at", label: "createdAt" },
     ],
     fields: [
@@ -199,6 +256,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         defaultValue: 1,
       },
     ],
+    rowActions: (row) => <UserSecurityActions row={row} />,
   },
   {
     name: "groups",

@@ -24,6 +24,12 @@ pub struct UserPayload {
 
 impl UserPayload {
     pub fn from_user(u: &user::Model) -> Self {
+        let mut info = Map::new();
+        info.insert(
+            "email_verification".to_string(),
+            Value::Bool(u.email_verification_enabled),
+        );
+        info.insert("login_device_whitelist".to_string(), Value::Array(vec![]));
         UserPayload {
             guid: u.id.to_string(),
             name: u.username.clone(),
@@ -35,7 +41,7 @@ impl UserPayload {
             verifier: None,
             is_admin: u.is_admin,
             status: u.status,
-            info: Map::new(),
+            info,
         }
     }
 }
@@ -163,6 +169,10 @@ pub struct AdminLoginPayload {
     pub route_names: Vec<String>,
     pub nickname: String,
     pub must_change_password: bool,
+    pub tfa_enabled: bool,
+    pub tfa_enforced: bool,
+    pub email_verification_enabled: bool,
+    pub login_device_verification_enabled: bool,
 }
 
 impl AdminLoginPayload {
@@ -191,6 +201,10 @@ impl AdminLoginPayload {
             route_names,
             nickname: u.nickname.clone(),
             must_change_password: u.must_change_password,
+            tfa_enabled: u.tfa_enabled,
+            tfa_enforced: u.tfa_enforced,
+            email_verification_enabled: u.email_verification_enabled,
+            login_device_verification_enabled: u.login_device_verification_enabled,
         }
     }
 }

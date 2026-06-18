@@ -323,6 +323,11 @@ pub async fn create(
             model.status
         }),
         must_change_password: Set(model.must_change_password),
+        tfa_secret: Set(model.tfa_secret),
+        tfa_enabled: Set(model.tfa_enabled),
+        tfa_enforced: Set(model.tfa_enforced),
+        email_verification_enabled: Set(model.email_verification_enabled),
+        login_device_verification_enabled: Set(model.login_device_verification_enabled),
         remark: Set(model.remark),
         created_at: Set(now()),
         updated_at: Set(now()),
@@ -337,6 +342,26 @@ pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), 
         .as_ref()
         .map(|u| u.must_change_password)
         .unwrap_or(model.must_change_password);
+    let tfa_secret = current
+        .as_ref()
+        .map(|u| u.tfa_secret.clone())
+        .unwrap_or_else(|| model.tfa_secret.clone());
+    let tfa_enabled = current
+        .as_ref()
+        .map(|u| u.tfa_enabled)
+        .unwrap_or(model.tfa_enabled);
+    let tfa_enforced = current
+        .as_ref()
+        .map(|u| u.tfa_enforced)
+        .unwrap_or(model.tfa_enforced);
+    let email_verification_enabled = current
+        .as_ref()
+        .map(|u| u.email_verification_enabled)
+        .unwrap_or(model.email_verification_enabled);
+    let login_device_verification_enabled = current
+        .as_ref()
+        .map(|u| u.login_device_verification_enabled)
+        .unwrap_or(model.login_device_verification_enabled);
     if let Some(current) = &current {
         if current.is_admin() {
             let count = admin_user_count(db).await.map_err(|e| e.to_string())?;
@@ -355,6 +380,11 @@ pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), 
         is_admin: Set(model.is_admin),
         status: Set(model.status),
         must_change_password: Set(must_change_password),
+        tfa_secret: Set(tfa_secret),
+        tfa_enabled: Set(tfa_enabled),
+        tfa_enforced: Set(tfa_enforced),
+        email_verification_enabled: Set(email_verification_enabled),
+        login_device_verification_enabled: Set(login_device_verification_enabled),
         remark: Set(model.remark.clone()),
         updated_at: Set(now()),
         ..Default::default()
@@ -493,6 +523,11 @@ pub async fn register(
         is_admin: Some(false),
         status,
         must_change_password: false,
+        tfa_secret: String::new(),
+        tfa_enabled: false,
+        tfa_enforced: false,
+        email_verification_enabled: false,
+        login_device_verification_enabled: false,
         remark: String::new(),
         created_at: None,
         updated_at: None,

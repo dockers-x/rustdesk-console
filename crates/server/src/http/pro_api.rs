@@ -603,6 +603,11 @@ pub async fn user_create(
         is_admin: Some(false),
         status: user::STATUS_ENABLE,
         must_change_password: false,
+        tfa_secret: String::new(),
+        tfa_enabled: false,
+        tfa_enforced: false,
+        email_verification_enabled: false,
+        login_device_verification_enabled: false,
         remark: f.note,
         created_at: None,
         updated_at: None,
@@ -666,6 +671,11 @@ pub async fn user_invite(
         is_admin: Some(false),
         status: user::STATUS_ENABLE,
         must_change_password: true,
+        tfa_secret: String::new(),
+        tfa_enabled: false,
+        tfa_enforced: false,
+        email_verification_enabled: false,
+        login_device_verification_enabled: false,
         remark: f.note,
         created_at: None,
         updated_at: None,
@@ -691,23 +701,55 @@ pub struct UserGuidListForm {
 }
 
 pub async fn user_tfa_enforce(
-    _state: State<AppState>,
+    State(state): State<AppState>,
     user: RustClientUser,
-    Json(_f): Json<UserGuidListForm>,
+    Json(f): Json<UserGuidListForm>,
 ) -> Response {
     if !user.user.is_admin() {
         return resp::error("Permission denied");
+    }
+    for guid in f.user_guids {
+        let Some(row) = find_user_by_guidish(&state.db, &guid).await else {
+            return resp::error(format!("user not found: {guid}"));
+        };
+        if let Err(e) = services::login_security::update_user_login_security(
+            &state.db,
+            &row,
+            f.enforce,
+            row.email_verification_enabled,
+            row.login_device_verification_enabled,
+        )
+        .await
+        {
+            return resp::error(e);
+        }
     }
     Json(json!({ "success": true })).into_response()
 }
 
 pub async fn user_disable_login_verification(
-    _state: State<AppState>,
+    State(state): State<AppState>,
     user: RustClientUser,
-    Json(_f): Json<UserGuidListForm>,
+    Json(f): Json<UserGuidListForm>,
 ) -> Response {
     if !user.user.is_admin() {
         return resp::error("Permission denied");
+    }
+    for guid in f.user_guids {
+        let Some(row) = find_user_by_guidish(&state.db, &guid).await else {
+            return resp::error(format!("user not found: {guid}"));
+        };
+        if let Err(e) = services::login_security::update_user_login_security(
+            &state.db,
+            &row,
+            false,
+            false,
+            false,
+        )
+        .await
+        {
+            return resp::error(e);
+        }
     }
     Json(json!({ "success": true })).into_response()
 }

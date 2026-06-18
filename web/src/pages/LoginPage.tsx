@@ -20,8 +20,15 @@ interface Captcha {
   b64: string;
 }
 interface LoginResult {
-  token: string;
+  token?: string;
   must_change_password?: boolean;
+  type?: string;
+  tfa_type?: string;
+  secret?: string;
+  user?: {
+    username?: string;
+    email?: string;
+  };
 }
 interface LoginOptions {
   ops: string[];
@@ -38,6 +45,12 @@ interface SetupStatus {
   initialized: boolean;
   can_initialize: boolean;
   title?: string;
+}
+interface LoginChallenge {
+  secret: string;
+  tfaType: string;
+  username?: string;
+  email?: string;
 }
 
 type SignalIcon = ComponentType<{
@@ -125,6 +138,8 @@ export function LoginPage() {
   const [setupEmail, setSetupEmail] = useState("");
   const [setupPassword, setSetupPassword] = useState("");
   const [setupConfirmPassword, setSetupConfirmPassword] = useState("");
+  const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
+  const [verificationCode, setVerificationCode] = useState("");
 
   const passwordEnabled = !options.disable_pwd;
   const oidcEnabled = options.ops.length > 0;
@@ -145,6 +160,10 @@ export function LoginPage() {
       : "";
 
   const finishLogin = (res: LoginResult, fallbackPath: string) => {
+    if (!res.token) {
+      setError(t("loginFailed"));
+      return;
+    }
     const changeRequired = Boolean(res.must_change_password);
     setToken(res.token, changeRequired);
     const target = loginRedirectPath || fallbackPath;
@@ -241,6 +260,10 @@ export function LoginPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (challenge) {
+      await submitChallenge();
+      return;
+    }
     setError("");
     setMessage("");
     setLoading(true);
@@ -250,7 +273,23 @@ export function LoginPage() {
         password,
         captcha,
         captchaId: captchaInfo?.id ?? "",
+        platform: platformName(),
       });
+      if (res.type === "email_check" && res.secret) {
+        setChallenge({
+          secret: res.secret,
+          tfaType: res.tfa_type || "email_check",
+          username: res.user?.username || username,
+          email: res.user?.email,
+        });
+        setVerificationCode("");
+        setMessage(
+          res.tfa_type === "tfa_check"
+            ? t("totpChallengeHint")
+            : t("emailChallengeHint"),
+        );
+        return;
+      }
       finishLogin(res, "/overview");
     } catch (err) {
       const ae = err as ApiError;
@@ -262,6 +301,41 @@ export function LoginPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const submitChallenge = async () => {
+    if (!challenge) return;
+    const code = verificationCode.trim();
+    if (!code) {
+      setError(t("verificationCodeRequired"));
+      return;
+    }
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      const isTotp = challenge.tfaType === "tfa_check";
+      const res = await apiPost<LoginResult>("/api/admin/login", {
+        type: isTotp ? "tfa_check" : "email_code",
+        secret: challenge.secret,
+        verificationCode: isTotp ? "" : code,
+        tfaCode: isTotp ? code : "",
+        platform: platformName(),
+      });
+      finishLogin(res, "/overview");
+    } catch (err) {
+      const ae = err as ApiError;
+      setError(ae.message || t("loginFailed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetChallenge = () => {
+    setChallenge(null);
+    setVerificationCode("");
+    setMessage("");
+    setError("");
   };
 
   const submitSetup = async (e: React.FormEvent) => {
@@ -374,10 +448,18 @@ export function LoginPage() {
                 <span>{setupMode ? t("setupWizardTag") : t("adminAccess")}</span>
               </div>
               <h2 className="mt-3 text-2xl font-semibold">
-                {setupMode ? t("initialSetup") : t("login")}
+                {setupMode
+                  ? t("initialSetup")
+                  : challenge
+                    ? t("loginVerification")
+                    : t("login")}
               </h2>
               <p className="mt-2 text-sm text-kumo-subtle">
-                {setupMode ? t("initialSetupSubtitle") : t("loginFormSubtitle")}
+                {setupMode
+                  ? t("initialSetupSubtitle")
+                  : challenge
+                    ? t("loginVerificationSubtitle")
+                    : t("loginFormSubtitle")}
               </p>
             </div>
 
@@ -493,7 +575,63 @@ export function LoginPage() {
                   </Button>
                 </>
               )}
-              {setupChecked && !setupMode && !options.disable_pwd && (
+              {setupChecked && !setupMode && challenge && (
+                <>
+                  <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-3 text-sm leading-6">
+                    <div className="font-medium">
+                      {challenge.tfaType === "tfa_check"
+                        ? t("totpVerification")
+                        : t("emailVerification")}
+                    </div>
+                    <div className="mt-1 break-words text-kumo-subtle">
+                      {challenge.tfaType === "tfa_check"
+                        ? t("totpChallengeDescription")
+                        : t("emailChallengeDescription", {
+                            email: challenge.email || challenge.username || t("account"),
+                          })}
+                    </div>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("verificationCode")}
+                    </span>
+                    <Input
+                      aria-label={t("verificationCode")}
+                      value={verificationCode}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      autoFocus
+                      className="w-full"
+                      onChange={(e) => {
+                        setVerificationCode(e.target.value);
+                        setError("");
+                      }}
+                    />
+                  </label>
+                  {message && (
+                    <InlineMessage tone="success">{message}</InlineMessage>
+                  )}
+                  {error && <InlineMessage tone="error">{error}</InlineMessage>}
+                  <Button
+                    type="submit"
+                    className="w-full justify-center"
+                    disabled={loading}
+                    loading={loading}
+                  >
+                    {t("verifyAndLogin")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full justify-center"
+                    disabled={loading}
+                    onClick={resetChallenge}
+                  >
+                    {t("backToLogin")}
+                  </Button>
+                </>
+              )}
+              {setupChecked && !setupMode && !challenge && !options.disable_pwd && (
                 <>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-medium">
@@ -523,7 +661,7 @@ export function LoginPage() {
                   </label>
                 </>
               )}
-              {setupChecked && !setupMode && !options.disable_pwd && captchaInfo && (
+              {setupChecked && !setupMode && !challenge && !options.disable_pwd && captchaInfo && (
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-medium">
                     {t("captcha")}
@@ -550,7 +688,7 @@ export function LoginPage() {
                   </div>
                 </label>
               )}
-              {setupChecked && !setupMode && (
+              {setupChecked && !setupMode && !challenge && (
                 <>
                   {message && (
                     <InlineMessage tone="success">{message}</InlineMessage>

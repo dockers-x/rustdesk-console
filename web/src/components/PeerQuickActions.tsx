@@ -22,6 +22,7 @@ export function PeerQuickActions({
   const { t } = useTranslation();
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const addToAddressBook = async () => {
     if (!rowId) {
@@ -42,6 +43,24 @@ export function PeerQuickActions({
       setMessage(ae.message || t("operationFailed"));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const requestSysinfoRefresh = async () => {
+    if (!rowId) {
+      setMessage(t("missingPeerRow"));
+      return;
+    }
+    setRefreshing(true);
+    setMessage("");
+    try {
+      await apiPost("/api/admin/peer/sysinfo-refresh", { row_id: rowId });
+      setMessage(t("refreshDeviceInfoSent"));
+    } catch (err) {
+      const ae = err as ApiError;
+      setMessage(ae.message || t("operationFailed"));
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -72,6 +91,14 @@ export function PeerQuickActions({
         onClick={addToAddressBook}
       >
         {t("addToAddressBook")}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={refreshing}
+        onClick={requestSysinfoRefresh}
+      >
+        {t("refreshDeviceInfo")}
       </Button>
       {message && <span className="text-xs text-kumo-subtle">{message}</span>}
     </div>

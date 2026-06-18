@@ -5,7 +5,13 @@ import { Check, Minus, X } from "@phosphor-icons/react";
 
 type StrategyOptionMap = Record<string, string>;
 
-type StrategyOptionType = "tri_state" | "select" | "number" | "whitelist";
+type StrategyOptionType =
+  | "tri_state"
+  | "select"
+  | "number"
+  | "text"
+  | "secret"
+  | "whitelist";
 
 interface StrategyOptionChoice {
   value: string;
@@ -26,6 +32,9 @@ interface StrategyOptionDefinition {
   choices?: readonly StrategyOptionChoice[];
   defaultValue?: string;
   placeholder?: string;
+  min?: number;
+  max?: number;
+  sensitive?: boolean;
 }
 
 const STRATEGY_OPTION_GROUPS: readonly StrategyOptionGroup[] = [
@@ -33,6 +42,9 @@ const STRATEGY_OPTION_GROUPS: readonly StrategyOptionGroup[] = [
   { key: "permissions", label: "strategyOptionGroupPermissions" },
   { key: "security", label: "strategyOptionGroupSecurity" },
   { key: "session", label: "strategyOptionGroupSession" },
+  { key: "performance", label: "strategyOptionGroupPerformance" },
+  { key: "device", label: "strategyOptionGroupDevice" },
+  { key: "network", label: "strategyOptionGroupNetwork" },
 ];
 
 const ACCESS_MODE_CHOICES = [
@@ -135,6 +147,12 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     type: "tri_state",
   },
   {
+    key: "enable-remote-printer",
+    label: "strategyRemotePrinter",
+    group: "permissions",
+    type: "tri_state",
+  },
+  {
     key: "approve-mode",
     label: "strategyApproveMode",
     group: "security",
@@ -147,6 +165,29 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     group: "security",
     type: "select",
     choices: VERIFICATION_METHOD_CHOICES,
+  },
+  {
+    key: "temporary-password-length",
+    label: "strategyTemporaryPasswordLength",
+    hint: "strategyTemporaryPasswordLengthHint",
+    group: "security",
+    type: "number",
+    defaultValue: "6",
+    min: 6,
+    max: 10,
+  },
+  {
+    key: "allow-numeric-one-time-password",
+    label: "strategyNumericOneTimePassword",
+    group: "security",
+    type: "tri_state",
+  },
+  {
+    key: "enable-trusted-devices",
+    label: "strategyTrustedDevices",
+    hint: "strategyTrustedDevicesHint",
+    group: "security",
+    type: "tri_state",
   },
   {
     key: "whitelist",
@@ -169,6 +210,168 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     group: "session",
     type: "number",
     defaultValue: "10",
+  },
+  {
+    key: "allow-auto-record-incoming",
+    label: "strategyAutoRecordIncoming",
+    group: "session",
+    type: "tri_state",
+  },
+  {
+    key: "keep-awake-during-incoming-sessions",
+    label: "strategyKeepAwakeIncoming",
+    group: "session",
+    type: "tri_state",
+  },
+  {
+    key: "allow-only-conn-window-open",
+    label: "strategyOnlyConnWindowOpen",
+    group: "session",
+    type: "tri_state",
+  },
+  {
+    key: "enable-abr",
+    label: "strategyAdaptiveBitrate",
+    group: "performance",
+    type: "tri_state",
+  },
+  {
+    key: "allow-remove-wallpaper",
+    label: "strategyRemoveWallpaper",
+    group: "performance",
+    type: "tri_state",
+  },
+  {
+    key: "allow-always-software-render",
+    label: "strategyAlwaysSoftwareRender",
+    group: "performance",
+    type: "tri_state",
+  },
+  {
+    key: "enable-hwcodec",
+    label: "strategyHardwareCodec",
+    group: "performance",
+    type: "tri_state",
+  },
+  {
+    key: "enable-directx-capture",
+    label: "strategyDirectxCapture",
+    group: "performance",
+    type: "tri_state",
+  },
+  {
+    key: "allow-linux-headless",
+    label: "strategyLinuxHeadless",
+    group: "device",
+    type: "tri_state",
+  },
+  {
+    key: "allow-auto-update",
+    label: "strategyAutoUpdate",
+    group: "device",
+    type: "tri_state",
+  },
+  {
+    key: "enable-lan-discovery",
+    label: "strategyLanDiscovery",
+    group: "device",
+    type: "tri_state",
+  },
+  {
+    key: "direct-server",
+    label: "strategyDirectServer",
+    hint: "strategyDirectServerHint",
+    group: "device",
+    type: "text",
+    placeholder: "strategyDirectServerPlaceholder",
+  },
+  {
+    key: "direct-access-port",
+    label: "strategyDirectAccessPort",
+    group: "device",
+    type: "number",
+    defaultValue: "21118",
+    min: 0,
+    max: 65535,
+  },
+  {
+    key: "custom-rendezvous-server",
+    label: "strategyCustomRendezvousServer",
+    hint: "strategyNetworkMigrationHint",
+    group: "network",
+    type: "text",
+    placeholder: "strategyServerPlaceholder",
+  },
+  {
+    key: "relay-server",
+    label: "strategyRelayServer",
+    hint: "strategyNetworkMigrationHint",
+    group: "network",
+    type: "text",
+    placeholder: "strategyServerPlaceholder",
+  },
+  {
+    key: "api-server",
+    label: "strategyApiServer",
+    hint: "strategyNetworkMigrationHint",
+    group: "network",
+    type: "text",
+    placeholder: "strategyApiServerPlaceholder",
+  },
+  {
+    key: "key",
+    label: "strategyServerKey",
+    hint: "strategyNetworkMigrationHint",
+    group: "network",
+    type: "secret",
+    sensitive: true,
+  },
+  {
+    key: "allow-websocket",
+    label: "strategyAllowWebSocket",
+    group: "network",
+    type: "tri_state",
+  },
+  {
+    key: "disable-udp",
+    label: "strategyDisableUdp",
+    group: "network",
+    type: "tri_state",
+  },
+  {
+    key: "ice-servers",
+    label: "strategyIceServers",
+    hint: "strategyIceServersHint",
+    group: "network",
+    type: "text",
+    placeholder: "strategyIceServersPlaceholder",
+  },
+  {
+    key: "proxy-url",
+    label: "strategyProxyUrl",
+    group: "network",
+    type: "text",
+    placeholder: "strategyProxyUrlPlaceholder",
+  },
+  {
+    key: "proxy-username",
+    label: "strategyProxyUsername",
+    group: "network",
+    type: "text",
+  },
+  {
+    key: "proxy-password",
+    label: "strategyProxyPassword",
+    group: "network",
+    type: "secret",
+    sensitive: true,
+  },
+  {
+    key: "allow-insecure-tls-fallback",
+    label: "strategyInsecureTlsFallback",
+    hint: "strategyInsecureTlsFallbackHint",
+    group: "network",
+    type: "tri_state",
   },
 ];
 
@@ -224,7 +427,11 @@ export function renderStrategyOptionsSummary(
           <span
             key={key}
             className="inline-flex max-w-full items-center gap-1 rounded border border-kumo-line bg-kumo-elevated px-1.5 py-0.5 text-xs"
-            title={`${key}=${optionValue}`}
+            title={
+              definition?.sensitive
+                ? `${definition ? t(definition.label) : key}=${t("strategyConfigured")}`
+                : `${definition ? t(definition.label) : key}=${optionValue}`
+            }
           >
             <span className="truncate">
               {definition ? t(definition.label) : key}
@@ -431,6 +638,8 @@ function StrategyOptionControl({
 
   if (definition.type === "number") {
     const configured = value !== undefined && value !== "";
+    const min = definition.min ?? 0;
+    const max = definition.max ?? 65535;
     return (
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
         <select
@@ -453,8 +662,8 @@ function StrategyOptionControl({
             aria-label={t(definition.label)}
             className="min-w-0 flex-1"
             type="number"
-            min={0}
-            max={65535}
+            min={min}
+            max={max}
             value={value}
             onChange={(e) => {
               const raw = e.target.value.trim();
@@ -464,9 +673,40 @@ function StrategyOptionControl({
               }
               const numeric = Number(raw);
               if (!Number.isFinite(numeric)) return;
-              const clamped = Math.max(0, Math.min(65535, Math.trunc(numeric)));
+              const clamped = Math.max(min, Math.min(max, Math.trunc(numeric)));
               onChange(String(clamped));
             }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (definition.type === "text" || definition.type === "secret") {
+    const configured = value !== undefined && value !== "";
+    return (
+      <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+        <select
+          className="h-9 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand sm:w-32"
+          value={configured ? "set" : ""}
+          aria-label={t(definition.label)}
+          onChange={(e) =>
+            onChange(e.target.value === "" ? undefined : (definition.defaultValue ?? ""))
+          }
+        >
+          <option value="">{t("strategyNotConfigured")}</option>
+          <option value="set">{t("strategySetValue")}</option>
+        </select>
+        {configured && (
+          <Input
+            aria-label={t(definition.label)}
+            className="min-w-0 flex-1"
+            type={definition.type === "secret" ? "password" : "text"}
+            value={value}
+            placeholder={
+              definition.placeholder ? t(definition.placeholder) : undefined
+            }
+            onChange={(e) => onChange(e.target.value.trim())}
           />
         )}
       </div>
@@ -522,7 +762,14 @@ function optionValueLabel(
   if (definition.type === "select") {
     return t(definition.choices?.find((choice) => choice.value === value)?.label ?? "strategyConfigured");
   }
-  if (definition.type === "number") return `${value} ${t("strategyMinutes")}`;
+  if (definition.type === "number") {
+    if (definition.key === "auto-disconnect-timeout") {
+      return `${value} ${t("strategyMinutes")}`;
+    }
+    return value;
+  }
+  if (definition.type === "text") return value;
+  if (definition.type === "secret") return t("strategyConfigured");
   return t("strategyConfigured");
 }
 

@@ -31,6 +31,17 @@ pub struct Model {
     #[sea_orm(default_value = false)]
     pub must_change_password: bool,
     #[sea_orm(default_value = "")]
+    #[serde(skip_serializing)]
+    pub tfa_secret: String,
+    #[sea_orm(default_value = false)]
+    pub tfa_enabled: bool,
+    #[sea_orm(default_value = false)]
+    pub tfa_enforced: bool,
+    #[sea_orm(default_value = false)]
+    pub email_verification_enabled: bool,
+    #[sea_orm(default_value = false)]
+    pub login_device_verification_enabled: bool,
+    #[sea_orm(default_value = "")]
     pub remark: String,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,

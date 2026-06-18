@@ -15,8 +15,9 @@ use sea_orm::{
 use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
     audit_conn, audit_file, deployment_event, deployment_token, device_group, group, login_log,
-    message, message_read, oauth, peer, record_file, server_cmd, share_record, strategy,
-    strategy_assignment, tag, user, user_third, user_token, version,
+    login_verification, message, message_read, oauth, peer, record_file, server_cmd, share_record,
+    strategy, strategy_assignment, system_setting, tag, trusted_login_device, user, user_third,
+    user_token, version,
 };
 
 use crate::config::{self, Config};
@@ -31,7 +32,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 270;
+pub const DATABASE_VERSION: i32 = 271;
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
@@ -91,6 +92,8 @@ async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Resu
     create!(version::Entity);
     create!(user::Entity);
     create!(user_token::Entity);
+    create!(login_verification::Entity);
+    create!(trusted_login_device::Entity);
     create!(tag::Entity);
     create!(address_book::Entity);
     create!(peer::Entity);
@@ -108,6 +111,7 @@ async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Resu
     create!(deployment_event::Entity);
     create!(strategy::Entity);
     create!(strategy_assignment::Entity);
+    create!(system_setting::Entity);
     create!(address_book_collection::Entity);
     create!(address_book_collection_rule::Entity);
     create!(server_cmd::Entity);
@@ -126,6 +130,71 @@ async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
             .table(user::Entity)
             .add_column(
                 ColumnDef::new(user::Column::MustChangePassword)
+                    .boolean()
+                    .not_null()
+                    .default(false),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "users", "tfa_secret").await? {
+        let stmt = Table::alter()
+            .table(user::Entity)
+            .add_column(
+                ColumnDef::new(user::Column::TfaSecret)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "users", "tfa_enabled").await? {
+        let stmt = Table::alter()
+            .table(user::Entity)
+            .add_column(
+                ColumnDef::new(user::Column::TfaEnabled)
+                    .boolean()
+                    .not_null()
+                    .default(false),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "users", "tfa_enforced").await? {
+        let stmt = Table::alter()
+            .table(user::Entity)
+            .add_column(
+                ColumnDef::new(user::Column::TfaEnforced)
+                    .boolean()
+                    .not_null()
+                    .default(false),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "users", "email_verification_enabled").await? {
+        let stmt = Table::alter()
+            .table(user::Entity)
+            .add_column(
+                ColumnDef::new(user::Column::EmailVerificationEnabled)
+                    .boolean()
+                    .not_null()
+                    .default(false),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "users", "login_device_verification_enabled").await? {
+        let stmt = Table::alter()
+            .table(user::Entity)
+            .add_column(
+                ColumnDef::new(user::Column::LoginDeviceVerificationEnabled)
                     .boolean()
                     .not_null()
                     .default(false),
@@ -215,6 +284,19 @@ async fn add_missing_columns(db: &DatabaseConnection) -> anyhow::Result<()> {
                     .integer()
                     .not_null()
                     .default(user::STATUS_ENABLE),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    if !column_exists(db, "peers", "force_sysinfo_refresh").await? {
+        let stmt = Table::alter()
+            .table(peer::Entity)
+            .add_column(
+                ColumnDef::new(peer::Column::ForceSysinfoRefresh)
+                    .boolean()
+                    .not_null()
+                    .default(false),
             )
             .to_owned();
         db.execute(backend.build(&stmt)).await?;
