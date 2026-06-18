@@ -1,23 +1,47 @@
 //! Server-command service — ports `service/serverCmd.go`. CRUD over stored
 //! commands plus live dispatch to the RustDesk id/relay server over TCP.
 
+use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use sea_orm::*;
-use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 
-use ::entity::server_cmd;
+use ::entity::{server_cmd, system_setting};
+use rustdesk_server_control as control;
 
 use crate::config::Config;
 use crate::services::{now, paginate};
+
+const RELAY_POOL_SETTING_KEY: &str = "rustdesk_relay_pool";
+const DEFAULT_RELAY_PORT: u16 = crate::config::DEFAULT_RELAY_SERVER_PORT as u16;
 
 pub struct ServerCmdListResult {
     pub list: Vec<server_cmd::Model>,
     pub page: i64,
     pub page_size: i64,
     pub total: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RelayPoolSetting {
+    pub servers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RelayPoolView {
+    pub servers: Vec<String>,
+    pub value: String,
+    pub persisted: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RelayServerCheck {
+    pub server: String,
+    pub ok: bool,
+    pub message: String,
 }
 
 pub async fn list(
@@ -91,6 +115,251 @@ pub async fn update(
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
     server_cmd::Entity::delete_by_id(id).exec(db).await?;
     Ok(())
+}
+
+pub fn normalize_relay_pool(input: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in input
+        .split(|ch| ch == ',' || ch == '\n' || ch == '\r' || ch == ';')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let server = normalize_relay_server(raw)?;
+        if seen.insert(server.to_lowercase()) {
+            out.push(server);
+        }
+    }
+    if out.len() > 50 {
+        return Err("relay server count must not exceed 50".to_string());
+    }
+    Ok(out)
+}
+
+fn normalize_relay_server(raw: &str) -> Result<String, String> {
+    if raw.contains("://") || raw.contains('/') || raw.chars().any(char::is_whitespace) {
+        return Err(format!("invalid relay server: {raw}"));
+    }
+    if raw.starts_with('[') {
+        return normalize_bracketed_host(raw);
+    }
+
+    let colon_count = raw.matches(':').count();
+    if colon_count > 1 {
+        return Ok(format!("[{raw}]:{DEFAULT_RELAY_PORT}"));
+    }
+    if colon_count == 1 {
+        let (host, port) = raw.rsplit_once(':').unwrap_or((raw, ""));
+        validate_host(host, raw)?;
+        validate_port(port, raw)?;
+        return Ok(format!("{host}:{}", port.trim()));
+    }
+    validate_host(raw, raw)?;
+    Ok(format!("{raw}:{DEFAULT_RELAY_PORT}"))
+}
+
+fn normalize_bracketed_host(raw: &str) -> Result<String, String> {
+    let Some(close) = raw.find(']') else {
+        return Err(format!("invalid relay server: {raw}"));
+    };
+    let host = &raw[1..close];
+    validate_host(host, raw)?;
+    let rest = &raw[close + 1..];
+    if rest.is_empty() {
+        return Ok(format!("[{host}]:{DEFAULT_RELAY_PORT}"));
+    }
+    let Some(port) = rest.strip_prefix(':') else {
+        return Err(format!("invalid relay server: {raw}"));
+    };
+    validate_port(port, raw)?;
+    Ok(format!("[{host}]:{}", port.trim()))
+}
+
+fn validate_host(host: &str, raw: &str) -> Result<(), String> {
+    let host = host.trim();
+    if host.is_empty() || host.len() > 253 {
+        return Err(format!("invalid relay server: {raw}"));
+    }
+    if host
+        .chars()
+        .any(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':')))
+    {
+        return Err(format!("invalid relay server: {raw}"));
+    }
+    Ok(())
+}
+
+fn validate_port(port: &str, raw: &str) -> Result<(), String> {
+    let Ok(port) = port.trim().parse::<u16>() else {
+        return Err(format!("invalid relay server port: {raw}"));
+    };
+    if port == 0 {
+        return Err(format!("invalid relay server port: {raw}"));
+    }
+    Ok(())
+}
+
+pub async fn load_relay_pool(db: &DatabaseConnection) -> Result<RelayPoolView, DbErr> {
+    let row = system_setting::Entity::find()
+        .filter(system_setting::Column::Key.eq(RELAY_POOL_SETTING_KEY))
+        .one(db)
+        .await?;
+    let Some(row) = row else {
+        return Ok(RelayPoolView {
+            servers: Vec::new(),
+            value: String::new(),
+            persisted: false,
+        });
+    };
+    let setting = serde_json::from_str::<RelayPoolSetting>(&row.value).unwrap_or_default();
+    if setting.servers.is_empty() {
+        return Ok(RelayPoolView {
+            servers: Vec::new(),
+            value: String::new(),
+            persisted: false,
+        });
+    }
+    Ok(RelayPoolView {
+        value: setting.servers.join(","),
+        servers: setting.servers,
+        persisted: true,
+    })
+}
+
+pub async fn save_relay_pool(
+    db: &DatabaseConnection,
+    input: &str,
+) -> Result<RelayPoolView, String> {
+    let servers = normalize_relay_pool(input)?;
+    if servers.is_empty() {
+        system_setting::Entity::delete_many()
+            .filter(system_setting::Column::Key.eq(RELAY_POOL_SETTING_KEY))
+            .exec(db)
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(RelayPoolView {
+            value: String::new(),
+            servers,
+            persisted: false,
+        });
+    }
+    let encoded = serde_json::to_string(&RelayPoolSetting {
+        servers: servers.clone(),
+    })
+    .map_err(|e| e.to_string())?;
+    match system_setting::Entity::find()
+        .filter(system_setting::Column::Key.eq(RELAY_POOL_SETTING_KEY))
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(row) => {
+            let mut am: system_setting::ActiveModel = row.into();
+            am.value = Set(encoded);
+            am.updated_at = Set(now());
+            am.update(db).await.map_err(|e| e.to_string())?;
+        }
+        None => {
+            system_setting::ActiveModel {
+                key: Set(RELAY_POOL_SETTING_KEY.to_string()),
+                value: Set(encoded),
+                created_at: Set(now()),
+                updated_at: Set(now()),
+                ..Default::default()
+            }
+            .insert(db)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(RelayPoolView {
+        value: servers.join(","),
+        servers,
+        persisted: true,
+    })
+}
+
+pub async fn save_and_sync_relay_pool(
+    db: &DatabaseConnection,
+    config: &Config,
+    input: &str,
+) -> Result<(RelayPoolView, String), String> {
+    let view = save_relay_pool(db, input).await?;
+    if !view.persisted {
+        return Ok((
+            view,
+            "relay pool override removed; hbbs runtime configuration was not changed".to_string(),
+        ));
+    }
+    let response = sync_relay_pool(config, &view.servers).await?;
+    Ok((view, response))
+}
+
+pub async fn sync_saved_relay_pool(db: &DatabaseConnection, config: &Config) -> Result<(), String> {
+    let pool = load_relay_pool(db).await.map_err(|e| e.to_string())?;
+    if !pool.persisted {
+        return Ok(());
+    }
+    sync_relay_pool(config, &pool.servers).await.map(|_| ())
+}
+
+pub fn spawn_saved_relay_pool_sync(db: DatabaseConnection, config: Arc<Config>) {
+    tokio::spawn(async move {
+        for attempt in 1..=10 {
+            match sync_saved_relay_pool(&db, &config).await {
+                Ok(()) => {
+                    tracing::info!("synced persisted relay pool to hbbs");
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "failed to sync persisted relay pool to hbbs (attempt {attempt}): {e}"
+                    );
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+            }
+        }
+    });
+}
+
+pub async fn check_relay_pool(input: &str) -> Result<Vec<RelayServerCheck>, String> {
+    let servers = normalize_relay_pool(input)?;
+    let mut checks = Vec::with_capacity(servers.len());
+    for server in servers {
+        checks.push(check_one_relay_server(server).await);
+    }
+    Ok(checks)
+}
+
+async fn check_one_relay_server(server: String) -> RelayServerCheck {
+    let target = normalize_tcp_target(&server);
+    match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&target)).await {
+        Ok(Ok(_)) => RelayServerCheck {
+            server,
+            ok: true,
+            message: "tcp reachable".to_string(),
+        },
+        Ok(Err(e)) => RelayServerCheck {
+            server,
+            ok: false,
+            message: format!("connect {target} failed: {e}"),
+        },
+        Err(_) => RelayServerCheck {
+            server,
+            ok: false,
+            message: format!("connect {target} timed out"),
+        },
+    }
+}
+
+fn normalize_tcp_target(server: &str) -> String {
+    if server.starts_with('[') {
+        server.to_string()
+    } else if server.matches(':').count() > 1 {
+        format!("[{server}]")
+    } else {
+        server.to_string()
+    }
 }
 
 /// The built-in system commands `CmdList` prepends (mirrors `model.Sys*Cmds`).
@@ -220,29 +489,11 @@ pub struct RustdeskStructuredStatus {
 }
 
 pub fn target_port(config: &Config, target: &str) -> Option<u16> {
-    let port = if target == server_cmd::TARGET_ID_SERVER {
-        config.admin.id_server_port - 1
-    } else if target == server_cmd::TARGET_RELAY_SERVER {
-        config.admin.relay_server_port
-    } else {
-        return None;
-    };
-
-    if (1..=u16::MAX as i32).contains(&port) {
-        Some(port as u16)
-    } else {
-        None
-    }
+    control::target_port(control_ports(config), target)
 }
 
 pub fn target_label(target: &str) -> &'static str {
-    if target == server_cmd::TARGET_ID_SERVER {
-        "ID"
-    } else if target == server_cmd::TARGET_RELAY_SERVER {
-        "Relay"
-    } else {
-        "Unknown"
-    }
+    control::target_label(target)
 }
 
 pub async fn structured_status(config: &Config) -> RustdeskStructuredStatus {
@@ -270,32 +521,13 @@ pub async fn structured_status(config: &Config) -> RustdeskStructuredStatus {
 }
 
 async fn target_status(config: &Config, target: &str) -> RustdeskTargetStatus {
-    let port = target_port(config, target);
-    let Some(port) = port else {
-        return RustdeskTargetStatus {
-            target: target.to_string(),
-            label: target_label(target).to_string(),
-            port,
-            available: false,
-            message: "port is not configured".to_string(),
-        };
-    };
-
-    match send_cmd(port, "h", "").await {
-        Ok(_) => RustdeskTargetStatus {
-            target: target.to_string(),
-            label: target_label(target).to_string(),
-            port: Some(port),
-            available: true,
-            message: "command endpoint is available".to_string(),
-        },
-        Err(e) => RustdeskTargetStatus {
-            target: target.to_string(),
-            label: target_label(target).to_string(),
-            port: Some(port),
-            available: false,
-            message: e,
-        },
+    let status = control::target_status(control_ports(config), target).await;
+    RustdeskTargetStatus {
+        target: status.target,
+        label: status.label,
+        port: status.port,
+        available: status.available,
+        message: status.message,
     }
 }
 
@@ -305,38 +537,28 @@ pub async fn send_target_cmd(
     cmd: &str,
     arg: &str,
 ) -> Result<String, String> {
-    let Some(port) = target_port(config, target) else {
-        return Err("target port is not configured".to_string());
-    };
-    send_cmd(port, cmd, arg).await
+    control::send_target_cmd(control_ports(config), target, cmd, arg).await
+}
+
+async fn sync_relay_pool(config: &Config, servers: &[String]) -> Result<String, String> {
+    if servers.is_empty() {
+        return Ok(String::new());
+    }
+    let arg = servers.join(",");
+    send_target_cmd(config, server_cmd::TARGET_ID_SERVER, "relay-servers", &arg).await
 }
 
 /// Send a command to the local id/relay server, trying IPv6 then IPv4
 /// (mirrors `SendCmd` / `SendSocketCmd`).
 pub async fn send_cmd(port: u16, cmd: &str, arg: &str) -> Result<String, String> {
-    let full = format!("{cmd} {arg}");
-    match send_socket_cmd("[::1]", port, &full).await {
-        Ok(r) => Ok(r),
-        Err(_) => send_socket_cmd("127.0.0.1", port, &full).await,
-    }
+    control::send_cmd(port, cmd, arg).await
 }
 
-async fn send_socket_cmd(addr: &str, port: u16, cmd: &str) -> Result<String, String> {
-    let target = format!("{addr}:{port}");
-    let mut conn = TcpStream::connect(&target)
-        .await
-        .map_err(|e| format!("connect {target} failed: {e}"))?;
-    conn.write_all(cmd.as_bytes())
-        .await
-        .map_err(|e| format!("send cmd failed: {e}"))?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut buf = vec![0u8; 1024];
-    let n = match tokio::time::timeout(Duration::from_secs(3), conn.read(&mut buf)).await {
-        Ok(Ok(n)) => n,
-        Ok(Err(e)) => return Err(format!("read response failed: {e}")),
-        Err(_) => 0, // timeout: treat as empty response
-    };
-    Ok(String::from_utf8_lossy(&buf[..n]).to_string())
+fn control_ports(config: &Config) -> control::ControlPorts {
+    control::ControlPorts::from_config_ports(
+        config.admin.id_server_port,
+        config.admin.relay_server_port,
+    )
 }
 
 #[cfg(test)]
@@ -348,5 +570,17 @@ mod tests {
         assert_eq!(target_label(server_cmd::TARGET_ID_SERVER), "ID");
         assert_eq!(target_label(server_cmd::TARGET_RELAY_SERVER), "Relay");
         assert_eq!(target_label("x"), "Unknown");
+    }
+
+    #[test]
+    fn relay_pool_normalization_adds_default_port_and_deduplicates() {
+        let servers =
+            normalize_relay_pool("relay.example.com\nrelay.example.com:21117,10.0.0.2").unwrap();
+        assert_eq!(servers, vec!["relay.example.com:21117", "10.0.0.2:21117"]);
+    }
+
+    #[test]
+    fn relay_pool_rejects_urls() {
+        assert!(normalize_relay_pool("https://relay.example.com:21117").is_err());
     }
 }

@@ -22,6 +22,7 @@ pub mod share_record;
 pub mod strategy;
 pub mod tag;
 pub mod user;
+pub mod webhook;
 
 use chrono::Utc;
 use sea_orm::prelude::DateTime;

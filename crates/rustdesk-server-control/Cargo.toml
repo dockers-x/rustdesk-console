@@ -1,0 +1,10 @@
+[package]
+name = "rustdesk-server-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Loopback command-channel client for RustDesk hbbs/hbbr"
+
+[dependencies]
+serde = { workspace = true }
+tokio = { workspace = true }

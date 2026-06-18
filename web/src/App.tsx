@@ -13,6 +13,7 @@ import { ForceChangePasswordPage } from "./pages/ForceChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MessageCenterPage } from "./pages/MessageCenterPage";
 import { MyProfilePage } from "./pages/MyProfilePage";
+import { NotificationRoutingPage } from "./pages/NotificationRoutingPage";
 import { OAuthActionPage } from "./pages/OAuthActionPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -76,6 +77,7 @@ export default function App() {
           <Route path="/diagnostics" element={<DiagnosticsPage />} />
           <Route path="/my" element={<MyProfilePage />} />
           <Route path="/messages" element={<MessageCenterPage />} />
+          <Route path="/notification-routing" element={<NotificationRoutingPage />} />
           <Route path="/settings" element={<SystemSettingsPage />} />
           <Route path="/serverCmd" element={<ServerCommandsPage />} />
           <Route path="/webclient-settings" element={<WebClientSettingsPage />} />

@@ -81,6 +81,7 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
             };
             let _ = services::peer::update(&state.db, am).await;
         }
+        services::webhook::spawn_device_seen(state.db.clone(), p.clone());
     }
     let disconnect_key = heartbeat_disconnect_key(&info.uuid, &rustdesk_id);
     if let Some(conns) = &info.conns {

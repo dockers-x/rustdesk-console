@@ -15,6 +15,7 @@ pub mod audit_file;
 pub mod deployment_event;
 pub mod deployment_token;
 pub mod device_group;
+pub mod device_presence_state;
 pub mod group;
 pub mod login_log;
 pub mod login_verification;
@@ -35,6 +36,8 @@ pub mod user;
 pub mod user_third;
 pub mod user_token;
 pub mod version;
+pub mod webhook_delivery;
+pub mod webhook_subscription;
 
 use serde::Serialize;
 

@@ -6,6 +6,7 @@ import { Input } from "@cloudflare/kumo/components/input";
 import { Table } from "@cloudflare/kumo/components/table";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Switch } from "@cloudflare/kumo/components/switch";
+import { AvatarPreview } from "../components/AvatarPreview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InlineMessage } from "../components/InlineMessage";
 import { OAUTH_PROVIDER_OPTIONS } from "../components/OAuthProviderBadge";
@@ -858,27 +859,16 @@ function AvatarInput({
     },
   });
 
-  const previewable =
-    avatar.startsWith("http://") ||
-    avatar.startsWith("https://") ||
-    avatar.startsWith("data:image/") ||
-    avatar.startsWith("/");
-
   return (
     <div className="rounded-lg border border-kumo-line bg-kumo-base p-3">
       <span className="mb-2 block text-sm">{t(field.label)}</span>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-kumo-line bg-kumo-elevated text-xs text-kumo-subtle">
-          {previewable ? (
-            <img
-              src={avatar}
-              alt={t("avatarPreview")}
-              className="size-full object-cover"
-            />
-          ) : (
-            t("avatar")
-          )}
-        </div>
+        <AvatarPreview
+          src={avatar}
+          alt={t("avatarPreview")}
+          fallback={t("avatar")}
+          className="size-16 bg-kumo-elevated"
+        />
         <div className="min-w-0 flex-1">
           <Input
             aria-label={t(field.label)}

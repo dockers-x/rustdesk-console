@@ -5,19 +5,21 @@
 use axum::extract::{Query, State};
 use axum::response::Response;
 use axum::Json;
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{
+    ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::http::admin::{
-    list_json, AddressBookForm, AddressBookQuery, CollectionForm, IdForm, IdsForm, PeerQuery,
-    RuleForm, RuleQuery, TagForm, UserIdPageQuery,
+    list_json, AbRowIdForm, AddressBookForm, AddressBookQuery, CollectionForm, IdForm, IdsForm,
+    PeerQuery, RuleForm, RuleQuery, TagForm, UserIdPageQuery,
 };
 use crate::http::middleware::{AcceptLang, BackendUser};
 use crate::http::response as resp;
 use crate::services;
 use crate::state::AppState;
-use ::entity::user as user_entity;
+use ::entity::{peer, user as user_entity};
 
 // ---------- my/share_record ----------
 
@@ -238,6 +240,56 @@ pub async fn address_book_batch_create_from_peers(
         let _ = services::address_book::create(&state.db, ab).await;
     }
     resp::success(Value::Null)
+}
+
+pub async fn peer_request_sysinfo_refresh(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<AbRowIdForm>,
+) -> Response {
+    if f.row_id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    let peer = match services::peer::info_by_row_id(&state.db, f.row_id).await {
+        Ok(Some(peer)) if peer.user_id == user.user.id => peer,
+        Ok(Some(_)) => return resp::fail(101, state.tr(&lang, "NoAccess")),
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    let am = peer::ActiveModel {
+        row_id: Set(peer.row_id),
+        force_sysinfo_refresh: Set(true),
+        ..Default::default()
+    };
+    match services::peer::update(&state.db, am).await {
+        Ok(_) => resp::success(json!({ "peer_id": peer.id })),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn peer_enable_trusted_devices(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<AbRowIdForm>,
+) -> Response {
+    if f.row_id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    let peer = match services::peer::info_by_row_id(&state.db, f.row_id).await {
+        Ok(Some(peer)) if peer.user_id == user.user.id => peer,
+        Ok(Some(_)) => return resp::fail(101, state.tr(&lang, "NoAccess")),
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::strategy::ensure_trusted_devices_enabled_for_peer(&state.db, &peer).await {
+        Ok(result) => resp::success(json!({
+            "peer_id": peer.id,
+            "strategy_id": result.strategy_id,
+            "strategy_name": result.strategy_name,
+            "already_enabled": result.already_enabled,
+        })),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
 }
 
 #[derive(Deserialize, Default)]

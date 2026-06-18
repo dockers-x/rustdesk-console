@@ -61,6 +61,8 @@ interface DeploymentConfig {
   };
 }
 
+type WebSocketRoutes = DeploymentConfig["webclient_ws_routes"];
+
 interface RecordStorageConfig {
   type: RecordStorageType;
   local_dir: string;
@@ -249,6 +251,27 @@ function writeWebClientOptions(config: WebClientConfig, localOverride: boolean) 
 
 function valueOrEmpty(value: string, emptyLabel: string) {
   return value ? value : emptyLabel;
+}
+
+function normalizeWsBase(value: string) {
+  const trimmed = value.trim().replace(/\/+$/g, "");
+  if (!trimmed) return "";
+  if (trimmed.startsWith("http://")) return `ws://${trimmed.slice(7)}`;
+  if (trimmed.startsWith("https://")) return `wss://${trimmed.slice(8)}`;
+  return trimmed;
+}
+
+function webSocketRoutesForConfig(config: WebClientConfig): WebSocketRoutes {
+  const explicitId = normalizeWsBase(config.ws_id_host);
+  const explicitRelay = normalizeWsBase(config.ws_relay_host);
+  if (explicitId || explicitRelay) {
+    return { id: explicitId, relay: explicitRelay };
+  }
+  const base = normalizeWsBase(config.ws_host);
+  return {
+    id: base ? `${base}/ws/id` : "",
+    relay: base ? `${base}/ws/relay` : "",
+  };
 }
 
 function detectWsMode(config: WebClientConfig): WsMode {
@@ -487,6 +510,9 @@ export function WebClientSettingsPage() {
       : serverConfig.data
         ? normalizeConfig(serverConfig.data)
         : undefined;
+  const effectiveWebSocketRoutes = effectiveConfig
+    ? webSocketRoutesForConfig(effectiveConfig)
+    : undefined;
   const deploymentLoading =
     serverConfig.isLoading ||
     !formReady ||
@@ -629,6 +655,7 @@ export function WebClientSettingsPage() {
               <ConfigSummary
                 title={t("currentEffectiveConfig")}
                 config={effectiveConfig ?? emptyConfig}
+                routes={effectiveWebSocketRoutes}
                 emptyLabel={t("emptyValue")}
               />
             </aside>
@@ -947,10 +974,12 @@ function SensitiveConfigField({
 function ConfigSummary({
   title,
   config,
+  routes,
   emptyLabel,
 }: {
   title: string;
   config: WebClientConfig;
+  routes?: WebSocketRoutes;
   emptyLabel: string;
 }) {
   const { t } = useTranslation();
@@ -976,11 +1005,11 @@ function ConfigSummary({
         />
         <SummaryRow
           label={t("wsIdHost")}
-          value={valueOrEmpty(config.ws_id_host, emptyLabel)}
+          value={valueOrEmpty(routes?.id ?? "", emptyLabel)}
         />
         <SummaryRow
           label={t("wsRelayHost")}
-          value={valueOrEmpty(config.ws_relay_host, emptyLabel)}
+          value={valueOrEmpty(routes?.relay ?? "", emptyLabel)}
         />
         <SummaryRow
           label={t("publicKey")}

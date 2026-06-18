@@ -392,6 +392,16 @@ pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), 
     am.update(db).await.map(|_| ()).map_err(|e| e.to_string())
 }
 
+pub async fn update_avatar(db: &DatabaseConnection, id: i32, avatar: &str) -> Result<(), String> {
+    let am = user::ActiveModel {
+        id: Set(id),
+        avatar: Set(avatar.trim().to_string()),
+        updated_at: Set(now()),
+        ..Default::default()
+    };
+    am.update(db).await.map(|_| ()).map_err(|e| e.to_string())
+}
+
 pub async fn delete(db: &DatabaseConnection, u: &user::Model) -> Result<(), String> {
     let count = admin_user_count(db).await.map_err(|e| e.to_string())?;
     if count <= 1 && u.is_admin() {

@@ -38,11 +38,12 @@ const userTotpCol = {
   render: (r: Record<string, unknown>, t: (k: string) => string) => {
     const enabled = Boolean(r.tfa_enabled);
     const enforced = Boolean(r.tfa_enforced);
+    const systemRequired = Boolean(r.system_require_totp) && enabled;
     const label = enabled
-      ? enforced
+      ? enforced || systemRequired
         ? t("enforced")
         : t("enabled")
-      : enforced
+      : enforced || systemRequired
         ? t("pendingSetup")
         : t("disabled");
     return securityPill(enabled, label);
@@ -51,22 +52,37 @@ const userTotpCol = {
 const userEmailSecurityCol = {
   key: "__email_security",
   label: "emailVerification",
-  render: (r: Record<string, unknown>, t: (k: string) => string) =>
-    securityPill(Boolean(r.email_verification_enabled), t(
-      r.email_verification_enabled ? "enabled" : "disabled",
-    )),
+  render: (r: Record<string, unknown>, t: (k: string) => string) => {
+    const systemRequired = Boolean(r.system_require_email_verification);
+    const active = Boolean(
+      r.effective_email_verification_enabled ?? r.email_verification_enabled,
+    );
+    return securityPill(
+      active,
+      systemRequired
+        ? t("systemRequired")
+        : t(r.email_verification_enabled ? "enabled" : "disabled"),
+    );
+  },
 };
 const userTrustedDeviceCol = {
   key: "__trusted_devices",
   label: "trustedLoginDevices",
   render: (r: Record<string, unknown>, t: (k: string) => string) => {
     const count = Number(r.trusted_device_count ?? 0);
-    const deviceVerification = Boolean(r.login_device_verification_enabled);
+    const systemRequired = Boolean(r.system_require_device_verification);
+    const deviceVerification = Boolean(
+      r.effective_login_device_verification_enabled ??
+        r.login_device_verification_enabled,
+    );
     return (
       <div className="flex flex-wrap items-center gap-1.5">
-        {securityPill(deviceVerification, t(
-          deviceVerification ? "deviceVerificationOn" : "deviceVerificationOff",
-        ))}
+        {securityPill(
+          deviceVerification,
+          systemRequired
+            ? t("systemRequired")
+            : t(deviceVerification ? "deviceVerificationOn" : "deviceVerificationOff"),
+        )}
         <span className="rounded-md border border-kumo-line bg-kumo-base px-2.5 py-1 text-xs text-kumo-subtle">
           {t("trustedDeviceCount").replace("{{count}}", String(count))}
         </span>
@@ -103,6 +119,18 @@ const webClientCol = (share = false) => ({
     <WebClientActions peerId={String(r.id ?? "")} share={share} />
   ),
 });
+const peerActionsCol = {
+  key: "__peer_actions",
+  label: "quickActions",
+  render: (r: Record<string, unknown>) => (
+    <PeerQuickActions
+      peerId={String(r.id ?? "")}
+      rowId={Number(r.row_id ?? 0)}
+      scope="admin"
+      showAddressBook={false}
+    />
+  ),
+};
 const myPeerActionsCol = {
   key: "__my_peer_actions",
   label: "quickActions",
@@ -504,7 +532,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "last_online_ip", label: "ip" },
       { key: "group_id", label: "groupId" },
       { key: "alias", label: "alias" },
-      webClientCol(false),
+      peerActionsCol,
     ],
     fields: [
       { name: "alias", label: "alias", type: "text" },

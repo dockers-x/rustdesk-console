@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const KIND_TOTP: &str = "totp";
 pub const KIND_EMAIL: &str = "email";
+pub const KIND_PASSWORD_RESET: &str = "password_reset";
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "login_verifications")]

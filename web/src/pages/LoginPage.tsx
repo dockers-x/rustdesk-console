@@ -53,6 +53,12 @@ interface LoginChallenge {
   email?: string;
 }
 
+interface PasswordResetStart {
+  secret: string;
+}
+
+type PasswordResetStep = "idle" | "request" | "confirm";
+
 type SignalIcon = ComponentType<{
   size?: number;
   weight?: "regular" | "fill";
@@ -140,6 +146,12 @@ export function LoginPage() {
   const [setupConfirmPassword, setSetupConfirmPassword] = useState("");
   const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const [verificationCode, setVerificationCode] = useState("");
+  const [resetStep, setResetStep] = useState<PasswordResetStep>("idle");
+  const [resetAccount, setResetAccount] = useState("");
+  const [resetSecret, setResetSecret] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
 
   const passwordEnabled = !options.disable_pwd;
   const oidcEnabled = options.ops.length > 0;
@@ -338,6 +350,94 @@ export function LoginPage() {
     setError("");
   };
 
+  const startPasswordReset = () => {
+    setChallenge(null);
+    setVerificationCode("");
+    setResetStep("request");
+    setResetAccount(username);
+    setResetSecret("");
+    setResetCode("");
+    setResetPassword("");
+    setResetConfirmPassword("");
+    setMessage("");
+    setError("");
+  };
+
+  const backToLogin = () => {
+    setResetStep("idle");
+    setResetSecret("");
+    setResetCode("");
+    setResetPassword("");
+    setResetConfirmPassword("");
+    setMessage("");
+    setError("");
+  };
+
+  const submitPasswordResetRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const account = resetAccount.trim();
+    if (!account) {
+      setError(t("accountRequired"));
+      return;
+    }
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      const res = await apiPost<PasswordResetStart>(
+        "/api/admin/password-reset/request",
+        { account },
+      );
+      setResetSecret(res.secret);
+      setResetStep("confirm");
+      setMessage(t("passwordResetCodeSent"));
+    } catch (err) {
+      const ae = err as ApiError;
+      setError(ae.message || t("operationFailed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitPasswordResetConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetCode.trim()) {
+      setError(t("verificationCodeRequired"));
+      return;
+    }
+    if (resetPassword.length < 4) {
+      setError(t("passwordMinLength"));
+      return;
+    }
+    if (resetPassword !== resetConfirmPassword) {
+      setError(t("passwordMismatch"));
+      return;
+    }
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      await apiPost("/api/admin/password-reset/confirm", {
+        secret: resetSecret,
+        code: resetCode,
+        password: resetPassword,
+        confirmPassword: resetConfirmPassword,
+      });
+      setPassword("");
+      setResetStep("idle");
+      setResetSecret("");
+      setResetCode("");
+      setResetPassword("");
+      setResetConfirmPassword("");
+      setMessage(t("passwordResetDone"));
+    } catch (err) {
+      const ae = err as ApiError;
+      setError(ae.message || t("operationFailed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const submitSetup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -368,6 +468,28 @@ export function LoginPage() {
       setLoading(false);
     }
   };
+
+  const submitActiveForm = (e: React.FormEvent) => {
+    if (setupMode) return void submitSetup(e);
+    if (resetStep === "request") return void submitPasswordResetRequest(e);
+    if (resetStep === "confirm") return void submitPasswordResetConfirm(e);
+    return void submit(e);
+  };
+
+  const formTitle = setupMode
+    ? t("initialSetup")
+    : resetStep !== "idle"
+      ? t("passwordReset")
+      : challenge
+        ? t("loginVerification")
+        : t("login");
+  const formSubtitle = setupMode
+    ? t("initialSetupSubtitle")
+    : resetStep !== "idle"
+      ? t("passwordResetSubtitle")
+      : challenge
+        ? t("loginVerificationSubtitle")
+        : t("loginFormSubtitle");
 
   return (
     <div className="relative min-h-full overflow-auto bg-kumo-base px-4 py-6 text-kumo-default sm:px-6 lg:px-8">
@@ -439,7 +561,7 @@ export function LoginPage() {
           </section>
 
           <form
-            onSubmit={setupMode ? submitSetup : submit}
+            onSubmit={submitActiveForm}
             className="border-t border-kumo-line bg-kumo-base p-6 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
           >
             <div className="mb-8">
@@ -447,19 +569,9 @@ export function LoginPage() {
                 <Key size={16} aria-hidden />
                 <span>{setupMode ? t("setupWizardTag") : t("adminAccess")}</span>
               </div>
-              <h2 className="mt-3 text-2xl font-semibold">
-                {setupMode
-                  ? t("initialSetup")
-                  : challenge
-                    ? t("loginVerification")
-                    : t("login")}
-              </h2>
+              <h2 className="mt-3 text-2xl font-semibold">{formTitle}</h2>
               <p className="mt-2 text-sm text-kumo-subtle">
-                {setupMode
-                  ? t("initialSetupSubtitle")
-                  : challenge
-                    ? t("loginVerificationSubtitle")
-                    : t("loginFormSubtitle")}
+                {formSubtitle}
               </p>
             </div>
 
@@ -575,7 +687,7 @@ export function LoginPage() {
                   </Button>
                 </>
               )}
-              {setupChecked && !setupMode && challenge && (
+              {setupChecked && !setupMode && resetStep === "idle" && challenge && (
                 <>
                   <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-3 text-sm leading-6">
                     <div className="font-medium">
@@ -631,7 +743,131 @@ export function LoginPage() {
                   </Button>
                 </>
               )}
-              {setupChecked && !setupMode && !challenge && !options.disable_pwd && (
+              {setupChecked && !setupMode && resetStep === "request" && (
+                <>
+                  <p className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm leading-6 text-kumo-subtle">
+                    {t("passwordResetRequestHint")}
+                  </p>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("account")}
+                    </span>
+                    <Input
+                      aria-label={t("account")}
+                      value={resetAccount}
+                      onChange={(e) => {
+                        setResetAccount(e.target.value);
+                        setError("");
+                      }}
+                      autoComplete="username"
+                      autoFocus
+                      className="w-full"
+                    />
+                  </label>
+                  {message && (
+                    <InlineMessage tone="success">{message}</InlineMessage>
+                  )}
+                  {error && <InlineMessage tone="error">{error}</InlineMessage>}
+                  <Button
+                    type="submit"
+                    className="w-full justify-center"
+                    disabled={loading}
+                    loading={loading}
+                  >
+                    {t("sendResetCode")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full justify-center"
+                    disabled={loading}
+                    onClick={backToLogin}
+                  >
+                    {t("backToLogin")}
+                  </Button>
+                </>
+              )}
+              {setupChecked && !setupMode && resetStep === "confirm" && (
+                <>
+                  <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-3 text-sm leading-6">
+                    <div className="font-medium">{t("passwordResetCodeTitle")}</div>
+                    <div className="mt-1 text-kumo-subtle">
+                      {t("passwordResetConfirmHint")}
+                    </div>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("verificationCode")}
+                    </span>
+                    <Input
+                      aria-label={t("verificationCode")}
+                      value={resetCode}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      autoFocus
+                      className="w-full"
+                      onChange={(e) => {
+                        setResetCode(e.target.value);
+                        setError("");
+                      }}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("newPassword")}
+                    </span>
+                    <Input
+                      aria-label={t("newPassword")}
+                      type="password"
+                      value={resetPassword}
+                      autoComplete="new-password"
+                      className="w-full"
+                      onChange={(e) => {
+                        setResetPassword(e.target.value);
+                        setError("");
+                      }}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("confirmPassword")}
+                    </span>
+                    <Input
+                      aria-label={t("confirmPassword")}
+                      type="password"
+                      value={resetConfirmPassword}
+                      autoComplete="new-password"
+                      className="w-full"
+                      onChange={(e) => {
+                        setResetConfirmPassword(e.target.value);
+                        setError("");
+                      }}
+                    />
+                  </label>
+                  {message && (
+                    <InlineMessage tone="success">{message}</InlineMessage>
+                  )}
+                  {error && <InlineMessage tone="error">{error}</InlineMessage>}
+                  <Button
+                    type="submit"
+                    className="w-full justify-center"
+                    disabled={loading}
+                    loading={loading}
+                  >
+                    {t("resetPassword")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full justify-center"
+                    disabled={loading}
+                    onClick={backToLogin}
+                  >
+                    {t("backToLogin")}
+                  </Button>
+                </>
+              )}
+              {setupChecked && !setupMode && resetStep === "idle" && !challenge && !options.disable_pwd && (
                 <>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-medium">
@@ -661,7 +897,7 @@ export function LoginPage() {
                   </label>
                 </>
               )}
-              {setupChecked && !setupMode && !challenge && !options.disable_pwd && captchaInfo && (
+              {setupChecked && !setupMode && resetStep === "idle" && !challenge && !options.disable_pwd && captchaInfo && (
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-medium">
                     {t("captcha")}
@@ -688,21 +924,32 @@ export function LoginPage() {
                   </div>
                 </label>
               )}
-              {setupChecked && !setupMode && !challenge && (
+              {setupChecked && !setupMode && resetStep === "idle" && !challenge && (
                 <>
                   {message && (
                     <InlineMessage tone="success">{message}</InlineMessage>
                   )}
                   {error && <InlineMessage tone="error">{error}</InlineMessage>}
                   {!options.disable_pwd && (
-                    <Button
-                      type="submit"
-                      className="w-full justify-center"
-                      disabled={loading}
-                      loading={loading}
-                    >
-                      {t("login")}
-                    </Button>
+                    <>
+                      <Button
+                        type="submit"
+                        className="w-full justify-center"
+                        disabled={loading}
+                        loading={loading}
+                      >
+                        {t("login")}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="w-full justify-center"
+                        disabled={loading}
+                        onClick={startPasswordReset}
+                      >
+                        {t("forgotPassword")}
+                      </Button>
+                    </>
                   )}
                   {options.register && (
                     <Link

@@ -7,6 +7,7 @@ use ::entity::{peer, strategy, strategy_assignment};
 use crate::services::{now, paginate};
 
 pub const DEFAULT_PRIORITY: i32 = 100;
+const TRUSTED_DEVICES_OPTION: &str = "enable-trusted-devices";
 
 pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
     "access-mode",
@@ -303,6 +304,87 @@ pub async fn assign_peer_by_strategy_name(
         DEFAULT_PRIORITY,
     )
     .await
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerTrustedDevicesStrategyResult {
+    pub strategy_id: i32,
+    pub strategy_name: String,
+    pub already_enabled: bool,
+}
+
+pub async fn ensure_trusted_devices_enabled_for_peer(
+    db: &DatabaseConnection,
+    p: &peer::Model,
+) -> Result<PeerTrustedDevicesStrategyResult, DbErr> {
+    if p.id.trim().is_empty() {
+        return Err(DbErr::Custom("peer id is required".to_string()));
+    }
+
+    if let Some(existing) = effective_for_peer(db, p).await? {
+        if existing
+            .config_options
+            .get(TRUSTED_DEVICES_OPTION)
+            .map(|value| value.eq_ignore_ascii_case("Y"))
+            .unwrap_or(false)
+        {
+            let name = info_by_id(db, existing.id)
+                .await?
+                .map(|row| row.name)
+                .unwrap_or_else(|| format!("Strategy {}", existing.id));
+            return Ok(PeerTrustedDevicesStrategyResult {
+                strategy_id: existing.id,
+                strategy_name: name,
+                already_enabled: true,
+            });
+        }
+    }
+
+    let mut config_options = effective_for_peer(db, p)
+        .await?
+        .map(|strategy| strategy.config_options)
+        .unwrap_or_default();
+    config_options.insert(TRUSTED_DEVICES_OPTION.to_string(), "Y".to_string());
+
+    let name = unique_peer_strategy_name(db, &p.id).await?;
+    let note = format!(
+        "Auto-created by console to enable RustDesk trusted-device behavior for peer {}.",
+        p.id
+    );
+    let row = create(
+        db,
+        &name,
+        &note,
+        strategy::STATUS_ENABLE,
+        config_options,
+        HashMap::new(),
+    )
+    .await?;
+    assign(db, row.id, strategy_assignment::TARGET_PEER, &p.id, 1).await?;
+    Ok(PeerTrustedDevicesStrategyResult {
+        strategy_id: row.id,
+        strategy_name: row.name,
+        already_enabled: false,
+    })
+}
+
+async fn unique_peer_strategy_name(
+    db: &DatabaseConnection,
+    peer_id: &str,
+) -> Result<String, DbErr> {
+    let base = format!("Trusted devices · {peer_id}");
+    if info_by_name(db, &base).await?.is_none() {
+        return Ok(base);
+    }
+    for suffix in 2..1000 {
+        let name = format!("{base} · {suffix}");
+        if info_by_name(db, &name).await?.is_none() {
+            return Ok(name);
+        }
+    }
+    Err(DbErr::Custom(
+        "unable to allocate strategy name".to_string(),
+    ))
 }
 
 pub async fn effective_for_peer(

@@ -2646,6 +2646,7 @@ dependencies = [
  "rsa",
  "rust-embed",
  "rustdesk-client-config",
+ "rustdesk-server-control",
  "rustdesk-uri",
  "sea-orm",
  "serde",
@@ -2664,6 +2665,14 @@ dependencies = [
  "urlencoding",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "rustdesk-server-control"
+version = "0.2.20"
+dependencies = [
+ "serde",
+ "tokio",
 ]
 
 [[package]]

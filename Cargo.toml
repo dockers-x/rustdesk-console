@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/entity",
     "crates/rustdesk-client-config",
+    "crates/rustdesk-server-control",
     "crates/rustdesk-uri",
     "crates/server",
 ]

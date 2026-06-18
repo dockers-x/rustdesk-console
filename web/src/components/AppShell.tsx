@@ -55,6 +55,7 @@ const NAV_ICONS: Record<string, IconType> = {
   overview: ChartBar,
   myInfo: User,
   messageCenter: Bell,
+  notificationRouting: Bell,
   myPeers: Desktop,
   myAddressBook: AddressBook,
   myCollections: BookBookmark,
@@ -127,7 +128,10 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
   },
   {
     key: "messageNotifications",
-    items: [{ to: "/messages", key: "messageCenter" }],
+    items: [
+      { to: "/messages", key: "messageCenter" },
+      { to: "/notification-routing", key: "notificationRouting" },
+    ],
   },
   {
     key: "deviceAccess",

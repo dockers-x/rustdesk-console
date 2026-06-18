@@ -246,6 +246,63 @@ pub async fn login_options(
     }))
 }
 
+#[derive(Deserialize, Default)]
+pub struct PasswordResetRequestForm {
+    #[serde(default)]
+    pub account: String,
+}
+
+pub async fn password_reset_request(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    Json(f): Json<PasswordResetRequestForm>,
+) -> Response {
+    if f.account.trim().is_empty() {
+        return resp::fail(101, "ParamsError");
+    }
+    match services::login_security::request_password_reset(&state.db, &f.account, &ip).await {
+        Ok(secret) => resp::success(json!({ "secret": secret })),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct PasswordResetConfirmForm {
+    #[serde(default)]
+    pub secret: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default, rename = "confirmPassword")]
+    pub confirm_password: String,
+}
+
+pub async fn password_reset_confirm(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    Json(f): Json<PasswordResetConfirmForm>,
+) -> Response {
+    if f.secret.trim().is_empty()
+        || f.code.trim().is_empty()
+        || f.password.len() < 4
+        || f.password != f.confirm_password
+    {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::confirm_password_reset(
+        &state.db,
+        &f.secret,
+        &f.code,
+        &f.password,
+    )
+    .await
+    {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
 pub async fn setup_status(State(state): State<AppState>) -> Response {
     let initialized = services::user::has_admin(&state.db).await.unwrap_or(true);
     resp::success(json!({
@@ -887,6 +944,9 @@ pub async fn user_list(
     .await
     {
         Ok(r) => {
+            let login_settings = services::login_security::login_settings(&state.db)
+                .await
+                .unwrap_or_default();
             let mut list = Vec::with_capacity(r.list.len());
             for row in r.list {
                 let trusted_device_count =
@@ -900,6 +960,41 @@ pub async fn user_list(
                 value.insert(
                     "trusted_device_count".to_string(),
                     Value::from(trusted_device_count),
+                );
+                value.insert(
+                    "system_require_totp".to_string(),
+                    Value::from(login_settings.require_totp),
+                );
+                value.insert(
+                    "system_require_email_verification".to_string(),
+                    Value::from(login_settings.require_email_verification),
+                );
+                value.insert(
+                    "system_require_device_verification".to_string(),
+                    Value::from(login_settings.require_device_verification),
+                );
+                value.insert(
+                    "system_allow_trusted_login_devices".to_string(),
+                    Value::from(login_settings.allow_trusted_login_devices),
+                );
+                value.insert(
+                    "effective_tfa_required".to_string(),
+                    Value::from(
+                        row.tfa_enabled && (row.tfa_enforced || login_settings.require_totp),
+                    ),
+                );
+                value.insert(
+                    "effective_email_verification_enabled".to_string(),
+                    Value::from(
+                        login_settings.require_email_verification || row.email_verification_enabled,
+                    ),
+                );
+                value.insert(
+                    "effective_login_device_verification_enabled".to_string(),
+                    Value::from(
+                        login_settings.require_device_verification
+                            || row.login_device_verification_enabled,
+                    ),
                 );
                 list.push(Value::Object(value));
             }
@@ -996,16 +1091,64 @@ pub async fn user_current(State(_state): State<AppState>, user: BackendUser) -> 
     resp::success(AdminLoginPayload::from_user(&user.user, user.token))
 }
 
-pub async fn my_security(State(state): State<AppState>, user: BackendUser) -> Response {
+#[derive(Deserialize, Default)]
+pub struct MyAvatarForm {
+    #[serde(default)]
+    pub avatar: String,
+}
+
+fn valid_user_avatar(avatar: &str) -> bool {
+    let avatar = avatar.trim();
+    avatar.is_empty()
+        || avatar.starts_with("/upload/")
+        || avatar.starts_with("http://")
+        || avatar.starts_with("https://")
+        || avatar.starts_with("data:image/")
+}
+
+pub async fn user_update_my_avatar(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+    Json(f): Json<MyAvatarForm>,
+) -> Response {
+    let avatar = f.avatar.trim();
+    if !valid_user_avatar(avatar) {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::user::update_avatar(&state.db, user.user.id, avatar).await {
+        Ok(_) => resp::success(json!({ "avatar": avatar })),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn my_security(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+) -> Response {
     let trusted_devices =
         services::login_security::trusted_devices_for_user(&state.db, user.user.id)
             .await
             .unwrap_or_default();
+    let settings = match services::login_security::login_settings(&state.db).await {
+        Ok(settings) => settings,
+        Err(e) => {
+            return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+        }
+    };
     resp::success(json!({
         "tfa_enabled": user.user.tfa_enabled,
         "tfa_enforced": user.user.tfa_enforced,
         "email_verification_enabled": user.user.email_verification_enabled,
         "login_device_verification_enabled": user.user.login_device_verification_enabled,
+        "system_require_totp": settings.require_totp,
+        "system_require_email_verification": settings.require_email_verification,
+        "system_require_device_verification": settings.require_device_verification,
+        "system_allow_trusted_login_devices": settings.allow_trusted_login_devices,
+        "effective_tfa_required": user.user.tfa_enabled && (user.user.tfa_enforced || settings.require_totp),
+        "effective_email_verification_enabled": settings.require_email_verification || user.user.email_verification_enabled,
+        "effective_login_device_verification_enabled": settings.require_device_verification || user.user.login_device_verification_enabled,
         "trusted_device_count": trusted_devices.len(),
     }))
 }
@@ -1224,6 +1367,103 @@ pub async fn user_group_users(State(state): State<AppState>, _user: BackendUser)
 pub async fn user_my_oauth(State(_state): State<AppState>, _user: BackendUser) -> Response {
     // OAuth wired in a later phase; no providers configured.
     resp::success(Vec::<Value>::new())
+}
+
+// ---------- webhook / notification routing ----------
+
+#[derive(Deserialize, Default)]
+pub struct WebhookQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+}
+
+pub async fn webhook_subscription_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<WebhookQuery>,
+) -> Response {
+    match services::webhook::list_subscriptions(
+        &state.db,
+        q.page.unwrap_or(1),
+        q.page_size.unwrap_or(20),
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn webhook_subscription_save(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<services::webhook::WebhookSubscriptionInput>,
+) -> Response {
+    match services::webhook::save_subscription(&state.db, f).await {
+        Ok(saved) => resp::success(saved),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn webhook_subscription_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    if f.id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::webhook::delete_subscription(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn webhook_subscription_test(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    if f.id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::webhook::test_subscription(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
+        Err(e) => resp::fail(101, e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct WebhookDeliveryQuery {
+    #[serde(default)]
+    pub page: Option<u64>,
+    #[serde(default)]
+    pub page_size: Option<u64>,
+    #[serde(default)]
+    pub subscription_id: Option<i32>,
+}
+
+pub async fn webhook_delivery_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<WebhookDeliveryQuery>,
+) -> Response {
+    match services::webhook::list_deliveries(
+        &state.db,
+        q.page.unwrap_or(1),
+        q.page_size.unwrap_or(20),
+        q.subscription_id,
+    )
+    .await
+    {
+        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
 }
 
 // ---------- group CRUD ----------
@@ -2014,6 +2254,30 @@ pub async fn peer_request_sysinfo_refresh(
     };
     match services::peer::update(&state.db, am).await {
         Ok(_) => resp::success(json!({ "peer_id": peer.id })),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn peer_enable_trusted_devices(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<AbRowIdForm>,
+) -> Response {
+    if f.row_id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    let peer = match services::peer::info_by_row_id(&state.db, f.row_id).await {
+        Ok(Some(peer)) => peer,
+        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    };
+    match services::strategy::ensure_trusted_devices_enabled_for_peer(&state.db, &peer).await {
+        Ok(result) => resp::success(json!({
+            "peer_id": peer.id,
+            "strategy_id": result.strategy_id,
+            "strategy_name": result.strategy_name,
+            "already_enabled": result.already_enabled,
+        })),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
 }
@@ -3382,10 +3646,28 @@ pub async fn rustdesk_status(State(state): State<AppState>, _user: AdminUser) ->
     resp::success(services::server_cmd::structured_status(&state.config).await)
 }
 
+pub async fn rustdesk_relay_pool(State(state): State<AppState>, _user: AdminUser) -> Response {
+    match services::server_cmd::load_relay_pool(&state.db).await {
+        Ok(pool) => resp::success(pool),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct RelayServersForm {
     #[serde(default)]
     pub value: String,
+}
+
+pub async fn rustdesk_check_relay_pool(
+    State(_state): State<AppState>,
+    _user: AdminUser,
+    Json(f): Json<RelayServersForm>,
+) -> Response {
+    match services::server_cmd::check_relay_pool(&f.value).await {
+        Ok(checks) => resp::success(checks),
+        Err(e) => resp::fail(101, e),
+    }
 }
 
 pub async fn rustdesk_update_relay_servers(
@@ -3393,15 +3675,8 @@ pub async fn rustdesk_update_relay_servers(
     _user: AdminUser,
     Json(f): Json<RelayServersForm>,
 ) -> Response {
-    match services::server_cmd::send_target_cmd(
-        &state.config,
-        entity::server_cmd::TARGET_ID_SERVER,
-        "relay-servers",
-        &f.value,
-    )
-    .await
-    {
-        Ok(r) => resp::success(r),
+    match services::server_cmd::save_and_sync_relay_pool(&state.db, &state.config, &f.value).await {
+        Ok((pool, response)) => resp::success(json!({ "pool": pool, "response": response })),
         Err(e) => resp::fail(101, e),
     }
 }

@@ -201,6 +201,14 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/captcha", get(admin::captcha))
         .route("/api/admin/logout", post(admin::logout))
         .route("/api/admin/login-options", get(admin::login_options))
+        .route(
+            "/api/admin/password-reset/request",
+            post(admin::password_reset_request),
+        )
+        .route(
+            "/api/admin/password-reset/confirm",
+            post(admin::password_reset_confirm),
+        )
         .route("/api/admin/setup/status", get(admin::setup_status))
         .route("/api/admin/setup/initialize", post(admin::setup_initialize))
         .route("/api/admin/oidc/auth", post(oauth::admin_oidc_auth))
@@ -264,6 +272,10 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/config/app", get(admin::config_app))
         // user
         .route("/api/admin/user/current", get(admin::user_current))
+        .route(
+            "/api/admin/user/myAvatar",
+            post(admin::user_update_my_avatar),
+        )
         .route("/api/admin/user/mySecurity", get(admin::my_security))
         .route("/api/admin/user/myTfaSetup", post(admin::my_tfa_setup))
         .route("/api/admin/user/myTfaEnable", post(admin::my_tfa_enable))
@@ -306,6 +318,22 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/message/create", post(admin::message_create))
         .route("/api/admin/message/status", post(admin::message_status))
         .route("/api/admin/message/delete", post(admin::message_delete))
+        .route(
+            "/api/admin/webhook/subscriptions",
+            get(admin::webhook_subscription_list).post(admin::webhook_subscription_save),
+        )
+        .route(
+            "/api/admin/webhook/subscription/delete",
+            post(admin::webhook_subscription_delete),
+        )
+        .route(
+            "/api/admin/webhook/subscription/test",
+            post(admin::webhook_subscription_test),
+        )
+        .route(
+            "/api/admin/webhook/deliveries",
+            get(admin::webhook_delivery_list),
+        )
         // group
         .route("/api/admin/group/list", get(admin::group_list))
         .route("/api/admin/group/detail/:id", get(admin::group_detail))
@@ -405,6 +433,10 @@ fn admin_routes() -> Router<AppState> {
         .route(
             "/api/admin/peer/sysinfo-refresh",
             post(admin::peer_request_sysinfo_refresh),
+        )
+        .route(
+            "/api/admin/peer/trusted-devices/enable",
+            post(admin::peer_enable_trusted_devices),
         )
         .route(
             "/api/admin/active_connection/list",
@@ -561,8 +593,16 @@ fn admin_routes() -> Router<AppState> {
         // rustdesk server commands
         .route("/api/admin/rustdesk/status", get(admin::rustdesk_status))
         .route(
+            "/api/admin/rustdesk/relayPool",
+            get(admin::rustdesk_relay_pool),
+        )
+        .route(
             "/api/admin/rustdesk/relayServers",
             patch(admin::rustdesk_update_relay_servers),
+        )
+        .route(
+            "/api/admin/rustdesk/relayServers/check",
+            post(admin::rustdesk_check_relay_pool),
         )
         .route(
             "/api/admin/rustdesk/alwaysUseRelay",
@@ -667,6 +707,14 @@ fn admin_routes() -> Router<AppState> {
             post(my::rule_delete),
         )
         .route("/api/admin/my/peer/list", get(my::peer_list))
+        .route(
+            "/api/admin/my/peer/sysinfo-refresh",
+            post(my::peer_request_sysinfo_refresh),
+        )
+        .route(
+            "/api/admin/my/peer/trusted-devices/enable",
+            post(my::peer_enable_trusted_devices),
+        )
         .route("/api/admin/my/message/list", get(my::message_list))
         .route("/api/admin/my/message/latest", get(my::message_latest))
         .route(

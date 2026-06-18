@@ -45,6 +45,23 @@ interface RustdeskStatus {
   always_use_relay?: string | null;
 }
 
+interface RelayPoolView {
+  servers: string[];
+  value: string;
+  persisted: boolean;
+}
+
+interface RelayPoolSaveResult {
+  pool: RelayPoolView;
+  response: string;
+}
+
+interface RelayServerCheck {
+  server: string;
+  ok: boolean;
+  message: string;
+}
+
 interface CommandForm {
   id?: number;
   cmd: string;
@@ -68,6 +85,14 @@ function targetLabel(target: string) {
   return target || "—";
 }
 
+function relayLines(value: string) {
+  return value
+    .split(/[,\n\r;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function parseAlwaysUseRelay(value?: string | null) {
   const normalized = (value ?? "").toLowerCase();
   return normalized.includes("true") || normalized.includes("y");
@@ -84,6 +109,7 @@ export function ServerCommandsPage() {
   const [sendResult, setSendResult] = useState("");
   const [sendError, setSendError] = useState("");
   const [relayServers, setRelayServers] = useState("");
+  const [relayChecks, setRelayChecks] = useState<RelayServerCheck[]>([]);
   const [alwaysUseRelay, setAlwaysUseRelay] = useState(false);
   const [controlMessage, setControlMessage] = useState("");
   const [controlError, setControlError] = useState("");
@@ -106,6 +132,11 @@ export function ServerCommandsPage() {
     queryFn: () => apiGet<RustdeskStatus>("/api/admin/rustdesk/status"),
   });
 
+  const relayPool = useQuery({
+    queryKey: ["rustdesk-relay-pool"],
+    queryFn: () => apiGet<RelayPoolView>("/api/admin/rustdesk/relayPool"),
+  });
+
   useEffect(() => {
     if (!structured.data) return;
     const next: Record<string, boolean | null> = {
@@ -116,9 +147,13 @@ export function ServerCommandsPage() {
       next[target.target] = target.available;
     }
     setStatus(next);
-    setRelayServers(structured.data.relay_servers ?? "");
     setAlwaysUseRelay(parseAlwaysUseRelay(structured.data.always_use_relay));
   }, [structured.data]);
+
+  useEffect(() => {
+    if (!relayPool.data) return;
+    setRelayServers(relayPool.data.persisted ? relayPool.data.servers.join("\n") : "");
+  }, [relayPool.data]);
 
   const save = useMutation({
     mutationFn: () =>
@@ -158,14 +193,33 @@ export function ServerCommandsPage() {
   });
 
   const updateRelayServers = useMutation({
-    mutationFn: () =>
-      apiPatch<string>("/api/admin/rustdesk/relayServers", {
-        value: relayServers,
+    mutationFn: (value?: string) =>
+      apiPatch<RelayPoolSaveResult>("/api/admin/rustdesk/relayServers", {
+        value: value ?? relayServers,
       }),
     onSuccess: (res) => {
       setControlError("");
-      setControlMessage(res || t("operationSuccess"));
+      setControlMessage(res.response || t("operationSuccess"));
+      setRelayServers(res.pool.persisted ? res.pool.servers.join("\n") : "");
+      setRelayChecks([]);
+      void relayPool.refetch();
       void structured.refetch();
+    },
+    onError: (err) => {
+      const ae = err as ApiError;
+      setControlError(ae.message || t("operationFailed"));
+    },
+  });
+
+  const checkRelayServers = useMutation({
+    mutationFn: (value: string) =>
+      apiPost<RelayServerCheck[]>("/api/admin/rustdesk/relayServers/check", {
+        value,
+      }),
+    onSuccess: (res) => {
+      setRelayChecks(res);
+      setControlError("");
+      setControlMessage(t("relayPoolCheckComplete"));
     },
     onError: (err) => {
       const ae = err as ApiError;
@@ -262,7 +316,7 @@ export function ServerCommandsPage() {
         </div>
       </div>
 
-      <section className="mb-4 rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+      <section className="mb-4">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-base font-semibold">{t("structuredControls")}</h2>
@@ -279,28 +333,120 @@ export function ServerCommandsPage() {
           </Button>
         </div>
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <label className="block">
-              <span className="mb-1 block text-sm">{t("relayServersValue")}</span>
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                <Input
+          <div className="grid gap-4">
+            <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold">{t("relayPool")}</h3>
+                    <Badge variant={relayPool.data?.persisted ? "success" : "secondary"}>
+                      {relayPool.data?.persisted
+                        ? t("relayPoolPersisted")
+                        : t("relayPoolDefault")}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-kumo-subtle">
+                    {t("relayPoolHint")}
+                  </p>
+                </div>
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-sm">{t("relayServersValue")}</span>
+                <textarea
                   aria-label={t("relayServersValue")}
+                  className="min-h-32 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
                   value={relayServers}
+                  placeholder={"relay-a.example.com\n192.0.2.20:21117"}
+                  onBlur={() => setRelayServers((value) => relayLines(value))}
                   onChange={(e) => {
                     setRelayServers(e.target.value);
                     setControlError("");
                   }}
                 />
+                <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
+                  {t("relayPoolTextareaHint")}
+                </span>
+              </label>
+              <div className="mt-3 flex flex-wrap gap-2">
                 <Button
                   variant="secondary"
+                  disabled={!relayLines(relayServers) || checkRelayServers.isPending}
+                  loading={checkRelayServers.isPending}
+                  onClick={() => {
+                    const next = relayLines(relayServers);
+                    if (!next) {
+                      setControlError(t("relayPoolEmptyCheck"));
+                      return;
+                    }
+                    setRelayServers(next);
+                    checkRelayServers.mutate(next);
+                  }}
+                >
+                  {t("checkRelayServers")}
+                </Button>
+                <Button
                   disabled={!status[ID_TARGET]}
                   loading={updateRelayServers.isPending}
-                  onClick={() => updateRelayServers.mutate()}
+                  onClick={() => {
+                    const next = relayLines(relayServers);
+                    setRelayServers(next);
+                    updateRelayServers.mutate(next);
+                  }}
                 >
                   {t("applyRelayServers")}
                 </Button>
+                <Button
+                  variant="secondary"
+                  disabled={!status[ID_TARGET] || updateRelayServers.isPending}
+                  onClick={() => {
+                    setRelayServers("");
+                    updateRelayServers.mutate("");
+                  }}
+                >
+                  {t("restoreRelayDefault")}
+                </Button>
               </div>
-            </label>
+              {relayChecks.length > 0 && (
+                <div className="mt-3 grid gap-2">
+                  {relayChecks.map((item) => (
+                    <div
+                      key={item.server}
+                      className="flex flex-col gap-1 rounded-md border border-kumo-line px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <span className="break-all font-mono">{item.server}</span>
+                      <span className="flex items-center gap-2 text-kumo-subtle">
+                        <Badge variant={item.ok ? "success" : "error"}>
+                          {item.ok ? t("ok") : t("error")}
+                        </Badge>
+                        <span className="break-all">{item.message}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
+                <div className="text-xs font-semibold uppercase text-kumo-subtle">
+                  {t("relayPoolCurrentRuntime")}
+                </div>
+                <div className="mt-2 min-h-10 break-words rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 font-mono text-xs">
+                  {structured.data?.relay_servers?.trim() || "—"}
+                </div>
+              </div>
+              <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
+                <div className="text-xs font-semibold uppercase text-kumo-subtle">
+                  {t("relayPoolSavedValue")}
+                </div>
+                <div className="mt-2 min-h-10 whitespace-pre-wrap break-words rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 font-mono text-xs">
+                  {relayPool.data?.persisted
+                    ? relayPool.data.servers.join("\n")
+                    : "—"}
+                </div>
+              </div>
+            </div>
+
             <div className="grid gap-2">
               <span className="text-sm">{t("alwaysUseRelay")}</span>
               <div className="flex flex-wrap items-center gap-3">
@@ -334,11 +480,23 @@ export function ServerCommandsPage() {
               </div>
             </div>
           </div>
-          <div>
-            <span className="mb-1 block text-sm">{t("result")}</span>
-            <pre className="max-h-56 min-h-24 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-kumo-line bg-kumo-base p-3 text-xs text-kumo-default">
-              {controlError || controlMessage || "—"}
-            </pre>
+          <div className="grid gap-4">
+            <div>
+              <span className="mb-1 block text-sm">{t("result")}</span>
+              <pre className="max-h-56 min-h-24 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-kumo-line bg-kumo-base p-3 text-xs text-kumo-default">
+                {controlError || controlMessage || "—"}
+              </pre>
+            </div>
+            <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
+              <h3 className="text-sm font-semibold">{t("relayPoolRules")}</h3>
+              <ul className="mt-2 grid gap-2 text-xs leading-5 text-kumo-subtle">
+                <li>{t("relayPoolRuleAddress")}</li>
+                <li>{t("relayPoolRuleKey")}</li>
+                <li>{t("relayPoolRuleClient")}</li>
+                <li>{t("relayPoolRulePersist")}</li>
+                <li>{t("relayPoolRuleClear")}</li>
+              </ul>
+            </div>
           </div>
         </div>
       </section>

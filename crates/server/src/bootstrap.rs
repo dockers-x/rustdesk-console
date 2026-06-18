@@ -14,10 +14,11 @@ use sea_orm::{
 
 use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
-    audit_conn, audit_file, deployment_event, deployment_token, device_group, group, login_log,
-    login_verification, message, message_read, oauth, peer, record_file, server_cmd, share_record,
-    smtp_email_config, strategy, strategy_assignment, system_setting, tag, trusted_login_device,
-    user, user_third, user_token, version,
+    audit_conn, audit_file, deployment_event, deployment_token, device_group,
+    device_presence_state, group, login_log, login_verification, message, message_read, oauth,
+    peer, record_file, server_cmd, share_record, smtp_email_config, strategy, strategy_assignment,
+    system_setting, tag, trusted_login_device, user, user_third, user_token, version,
+    webhook_delivery, webhook_subscription,
 };
 
 use crate::config::{self, Config};
@@ -110,6 +111,9 @@ async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Resu
     create!(record_file::Entity);
     create!(deployment_token::Entity);
     create!(deployment_event::Entity);
+    create!(webhook_subscription::Entity);
+    create!(webhook_delivery::Entity);
+    create!(device_presence_state::Entity);
     create!(strategy::Entity);
     create!(strategy_assignment::Entity);
     create!(system_setting::Entity);

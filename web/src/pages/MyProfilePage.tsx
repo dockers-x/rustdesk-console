@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as QRCode from "qrcode";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
@@ -16,9 +17,9 @@ import {
   LockKey,
   LinkSimple,
   ShieldCheck,
-  UserCircle,
   WarningCircle,
 } from "@phosphor-icons/react";
+import { AvatarPreview } from "../components/AvatarPreview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   DialogBody,
@@ -28,13 +29,14 @@ import {
 } from "../components/DialogLayout";
 import { InlineMessage } from "../components/InlineMessage";
 import { TableState } from "../components/TableState";
-import { apiGet, apiPost, ApiError } from "../lib/api";
+import { apiGet, apiPost, http, ApiError } from "../lib/api";
 import { clearToken } from "../lib/auth";
 import { formatUnixSeconds } from "../lib/dateFormat";
 
 interface CurrentUser {
   username: string;
   email: string;
+  avatar: string;
   nickname: string;
   must_change_password: boolean;
 }
@@ -76,6 +78,13 @@ interface SecurityStatus {
   tfa_enforced: boolean;
   email_verification_enabled: boolean;
   login_device_verification_enabled: boolean;
+  system_require_totp?: boolean;
+  system_require_email_verification?: boolean;
+  system_require_device_verification?: boolean;
+  system_allow_trusted_login_devices?: boolean;
+  effective_tfa_required?: boolean;
+  effective_email_verification_enabled?: boolean;
+  effective_login_device_verification_enabled?: boolean;
   trusted_device_count: number;
 }
 
@@ -99,6 +108,7 @@ export function MyProfilePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -110,9 +120,13 @@ export function MyProfilePage() {
   const [bindingTarget, setBindingTarget] = useState("");
   const [refreshOnFocus, setRefreshOnFocus] = useState(false);
   const [unbindTarget, setUnbindTarget] = useState("");
+  const [profileMessage, setProfileMessage] = useState("");
+  const [profileError, setProfileError] = useState("");
   const [securityMessage, setSecurityMessage] = useState("");
   const [securityError, setSecurityError] = useState("");
   const [tfaSetup, setTfaSetup] = useState<TfaSetup | null>(null);
+  const [tfaQrDataUrl, setTfaQrDataUrl] = useState("");
+  const [tfaQrError, setTfaQrError] = useState("");
   const [tfaCode, setTfaCode] = useState("");
   const [tfaDisableCode, setTfaDisableCode] = useState("");
   const [trustedDeleteTarget, setTrustedDeleteTarget] =
@@ -161,6 +175,34 @@ export function MyProfilePage() {
     onError: (err) => {
       const ae = err as ApiError;
       setPwdError(ae.message || t("operationFailed"));
+    },
+  });
+
+  const uploadAvatar = useMutation({
+    mutationFn: async (file: File) => {
+      if (file.type && !file.type.startsWith("image/")) {
+        throw new Error(t("avatarImageOnly"));
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      const uploaded = (await http.post(
+        "/api/admin/file/upload",
+        formData,
+      )) as unknown as { url?: string };
+      if (!uploaded.url) {
+        throw new Error(t("operationFailed"));
+      }
+      await apiPost("/api/admin/user/myAvatar", { avatar: uploaded.url });
+      return uploaded.url;
+    },
+    onSuccess: () => {
+      setProfileMessage(t("avatarUpdated"));
+      setProfileError("");
+      void qc.invalidateQueries({ queryKey: ["current-user"] });
+    },
+    onError: (err) => {
+      setProfileError((err as Error).message || t("operationFailed"));
+      setProfileMessage("");
     },
   });
 
@@ -263,6 +305,33 @@ export function MyProfilePage() {
     return () => window.removeEventListener("focus", refresh);
   }, [qc, refreshOnFocus]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setTfaQrDataUrl("");
+    setTfaQrError("");
+    if (!tfaSetup?.uri) return;
+
+    QRCode.toDataURL(tfaSetup.uri, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 192,
+    })
+      .then((url) => {
+        if (!cancelled) setTfaQrDataUrl(url);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setTfaQrError(
+            error instanceof Error ? error.message : t("operationFailed"),
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [t, tfaSetup?.uri]);
+
   const submitPassword = (e: React.FormEvent) => {
     e.preventDefault();
     setPwdMessage("");
@@ -294,6 +363,35 @@ export function MyProfilePage() {
   const currentUser = user.data;
   const boundCount = (oauth.data ?? []).filter((row) => row.status === 1).length;
   const passwordScoreValue = passwordScore(newPassword);
+  const avatarInitial =
+    (currentUser?.nickname || currentUser?.username || "")
+      .trim()
+      .slice(0, 1)
+      .toUpperCase() || undefined;
+  const securityData = security.data;
+  const emailVerificationActive = Boolean(
+    securityData?.effective_email_verification_enabled ??
+      securityData?.email_verification_enabled,
+  );
+  const deviceVerificationActive = Boolean(
+    securityData?.effective_login_device_verification_enabled ??
+      securityData?.login_device_verification_enabled,
+  );
+  const emailVerificationLabel = securityData?.system_require_email_verification
+    ? t("systemRequired")
+    : securityData?.email_verification_enabled
+      ? t("enabled")
+      : t("disabled");
+  const deviceVerificationLabel = securityData?.system_require_device_verification
+    ? t("systemRequired")
+    : securityData?.login_device_verification_enabled
+      ? t("enabled")
+      : t("disabled");
+  const totpVerificationLabel = securityData?.tfa_enabled
+    ? securityData.system_require_totp || securityData.tfa_enforced
+      ? t("enforced")
+      : t("enabled")
+    : t("disabled");
   const copySecurityText = async (value: string) => {
     if (!value) return;
     try {
@@ -320,20 +418,49 @@ export function MyProfilePage() {
           </InlineMessage>
         )}
       </div>
+      {profileMessage && (
+        <InlineMessage tone="success">{profileMessage}</InlineMessage>
+      )}
+      {profileError && <InlineMessage tone="error">{profileError}</InlineMessage>}
 
       <div className="space-y-5">
         <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex size-12 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
-                <UserCircle size={28} weight="duotone" />
-              </div>
+              <button
+                type="button"
+                className="rounded-full transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label={t("uploadAvatar")}
+                disabled={uploadAvatar.isPending}
+                onClick={() => avatarInputRef.current?.click()}
+              >
+                <AvatarPreview
+                  src={currentUser?.avatar}
+                  alt={t("avatarPreview")}
+                  fallback={avatarInitial}
+                  className="size-12"
+                />
+              </button>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                disabled={uploadAvatar.isPending}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadAvatar.mutate(file);
+                  e.currentTarget.value = "";
+                }}
+              />
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold">
                   {currentUser?.nickname || currentUser?.username || t("account")}
                 </h2>
                 <p className="mt-1 truncate text-sm text-kumo-subtle">
-                  {currentUser?.username || (user.isLoading ? t("loading") : "—")}
+                  {uploadAvatar.isPending
+                    ? t("uploading")
+                    : currentUser?.username || (user.isLoading ? t("loading") : "—")}
                 </p>
               </div>
             </div>
@@ -434,38 +561,18 @@ export function MyProfilePage() {
               <div className="grid gap-3 md:grid-cols-4">
                 <SecurityStateTile
                   label={t("totpVerification")}
-                  value={
-                    security.data.tfa_enabled
-                      ? security.data.tfa_enforced
-                        ? t("enforced")
-                        : t("enabled")
-                      : t("disabled")
-                  }
+                  value={totpVerificationLabel}
                   tone={security.data.tfa_enabled ? "success" : "default"}
                 />
                 <SecurityStateTile
                   label={t("emailVerification")}
-                  value={
-                    security.data.email_verification_enabled
-                      ? t("enabled")
-                      : t("disabled")
-                  }
-                  tone={
-                    security.data.email_verification_enabled ? "success" : "default"
-                  }
+                  value={emailVerificationLabel}
+                  tone={emailVerificationActive ? "success" : "default"}
                 />
                 <SecurityStateTile
                   label={t("deviceVerification")}
-                  value={
-                    security.data.login_device_verification_enabled
-                      ? t("enabled")
-                      : t("disabled")
-                  }
-                  tone={
-                    security.data.login_device_verification_enabled
-                      ? "success"
-                      : "default"
-                  }
+                  value={deviceVerificationLabel}
+                  tone={deviceVerificationActive ? "success" : "default"}
                 />
                 <SecurityStateTile
                   label={t("trustedLoginDevices")}
@@ -505,28 +612,48 @@ export function MyProfilePage() {
 
                   {tfaSetup && (
                     <div className="mt-4 space-y-3">
-                      <div className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2">
-                        <div className="text-xs font-medium text-kumo-subtle">
-                          {t("totpSecret")}
-                        </div>
-                        <code className="mt-1 block break-all font-mono text-xs">
-                          {tfaSetup.secret}
-                        </code>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => void copySecurityText(tfaSetup.secret)}
-                          >
-                            {t("copy")}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => void copySecurityText(tfaSetup.uri)}
-                          >
-                            {t("copyTotpUri")}
-                          </Button>
+                      <div className="rounded-md border border-kumo-line bg-kumo-elevated p-3">
+                        <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
+                          <div className="flex size-40 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-white p-2">
+                            {tfaQrDataUrl ? (
+                              <img
+                                src={tfaQrDataUrl}
+                                alt={t("totpQrCode")}
+                                className="size-full"
+                              />
+                            ) : (
+                              <span className="px-3 text-center text-xs leading-5 text-kumo-subtle">
+                                {tfaQrError || t("loading")}
+                              </span>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-kumo-subtle">
+                              {t("totpSecret")}
+                            </div>
+                            <code className="mt-1 block break-all font-mono text-xs">
+                              {tfaSetup.secret}
+                            </code>
+                            <p className="mt-2 text-xs leading-5 text-kumo-subtle">
+                              {t("totpQrCodeHint")}
+                            </p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => void copySecurityText(tfaSetup.secret)}
+                              >
+                                {t("copy")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => void copySecurityText(tfaSetup.uri)}
+                              >
+                                {t("copyTotpUri")}
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                       <label className="block">

@@ -16,6 +16,7 @@ const LOGIN_SECURITY_KEY: &str = "login_security";
 const TOTP_PERIOD: i64 = 30;
 const TOTP_DIGITS: u32 = 6;
 const CHALLENGE_TTL_SECS: i64 = 10 * 60;
+const PASSWORD_RESET_TTL_SECS: i64 = 15 * 60;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoginSecuritySettings {
@@ -433,6 +434,111 @@ pub async fn create_login_challenge(
     .map_err(|e| e.to_string())?;
 
     Ok(LoginChallenge { kind, secret })
+}
+
+pub async fn request_password_reset(
+    db: &DatabaseConnection,
+    account: &str,
+    ip: &str,
+) -> Result<String, String> {
+    let secret = crate::support::random::random_string(40);
+    let account = account.trim();
+    if account.is_empty() {
+        return Ok(secret);
+    }
+    let user = user::Entity::find()
+        .filter(
+            Condition::any()
+                .add(user::Column::Username.eq(account))
+                .add(user::Column::Email.eq(account.to_lowercase())),
+        )
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(u) = user else {
+        return Ok(secret);
+    };
+    if !u.is_enabled() || u.email.trim().is_empty() {
+        return Ok(secret);
+    }
+    if let Some(existing) = login_verification::Entity::find()
+        .filter(login_verification::Column::UserId.eq(u.id))
+        .filter(login_verification::Column::Kind.eq(login_verification::KIND_PASSWORD_RESET))
+        .filter(login_verification::Column::VerifiedAt.eq(0))
+        .filter(login_verification::Column::ExpiresAt.gt(Utc::now().timestamp()))
+        .order_by_desc(login_verification::Column::Id)
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(existing.secret);
+    }
+    let email = match email_settings(db).await {
+        Ok(email) if email.is_configured() => email,
+        Ok(_) => return Ok(secret),
+        Err(e) => {
+            tracing::warn!("failed to load SMTP config for password reset: {e}");
+            return Ok(secret);
+        }
+    };
+    let code = random_email_code();
+    let code_hash = hash_code(&secret, &code);
+    let body = format!(
+        "Your RustDesk Console password reset code is: {code}\n\nThis code expires in 15 minutes. If you did not request a password reset, ignore this email."
+    );
+    if let Err(e) = send_email(&email, &u.email, "RustDesk Console password reset", &body).await {
+        tracing::warn!("failed to send password reset email: {e}");
+        return Ok(secret);
+    }
+    login_verification::ActiveModel {
+        user_id: Set(u.id),
+        secret: Set(secret.clone()),
+        kind: Set(login_verification::KIND_PASSWORD_RESET.to_string()),
+        code_hash: Set(code_hash),
+        ip: Set(ip.to_string()),
+        expires_at: Set(Utc::now().timestamp() + PASSWORD_RESET_TTL_SECS),
+        created_at: Set(now()),
+        updated_at: Set(now()),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(secret)
+}
+
+pub async fn confirm_password_reset(
+    db: &DatabaseConnection,
+    secret: &str,
+    code: &str,
+    new_password: &str,
+) -> Result<(), String> {
+    if new_password.len() < 4 {
+        return Err("Password must be at least 4 characters".to_string());
+    }
+    let now_ts = Utc::now().timestamp();
+    let challenge = login_verification::Entity::find()
+        .filter(login_verification::Column::Secret.eq(secret.trim()))
+        .filter(login_verification::Column::Kind.eq(login_verification::KIND_PASSWORD_RESET))
+        .filter(login_verification::Column::VerifiedAt.eq(0))
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "The verification code is incorrect or has expired".to_string())?;
+    if challenge.expires_at < now_ts || hash_code(&challenge.secret, code) != challenge.code_hash {
+        return Err("The verification code is incorrect or has expired".to_string());
+    }
+    let u = user::Entity::find_by_id(challenge.user_id)
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "UserNotFound".to_string())?;
+    crate::services::user::update_password(db, &u, new_password).await?;
+    let mut am: login_verification::ActiveModel = challenge.into();
+    am.verified_at = Set(now_ts);
+    am.updated_at = Set(now());
+    am.update(db).await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub async fn verify_login_challenge(
