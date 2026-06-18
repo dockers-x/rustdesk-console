@@ -23,6 +23,38 @@ const boolCol = (key: string, label: string) => ({
   label,
   render: (r: Record<string, unknown>) => (r[key] ? "✓" : "—"),
 });
+const tagNamesFromValue = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+const tagsCol = {
+  key: "tags",
+  label: "tags",
+  render: (r: Record<string, unknown>) => {
+    const tags = tagNamesFromValue(r.tags);
+    if (tags.length === 0) return "—";
+    return (
+      <div className="flex max-w-56 flex-wrap gap-1.5">
+        {tags.map((tag) => (
+          <span
+            key={tag}
+            className="rounded-md border border-kumo-line bg-kumo-base px-2 py-0.5 text-xs text-kumo-ink"
+          >
+            {tag}
+          </span>
+        ))}
+      </div>
+    );
+  },
+};
 const securityPill = (active: boolean, label: string) => (
   <span
     className={`inline-flex min-h-7 items-center rounded-md border px-2.5 text-xs font-medium ${
@@ -698,6 +730,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "username", label: "username" },
       { key: "hostname", label: "hostname" },
       { key: "platform", label: "platform" },
+      tagsCol,
       { key: "user_id", label: "userId" },
       { key: "collection_id", label: "collectionId" },
       webClientCol(false),
@@ -714,6 +747,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         type: "relation",
         relation: USER_RELATION,
         defaultValue: 0,
+        resetFieldsOnChange: ["collection_id", "tags"],
       },
       {
         name: "collection_id",
@@ -724,6 +758,30 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
           params: (form) => ({ user_id: form.user_id || 0 }),
         },
         defaultValue: 0,
+        resetFieldsOnChange: ["tags"],
+      },
+      {
+        name: "tags",
+        label: "tags",
+        type: "tag_names",
+        relation: {
+          api: "/api/admin/tag",
+          valueField: "name",
+          labelFields: ["name"],
+          params: (form) => ({
+            user_id: Number(form.user_id ?? 0),
+            collection_id: Number(form.collection_id ?? 0),
+          }),
+        },
+        tagHistory: {
+          api: "/api/admin/address_book",
+          params: (form) => ({
+            user_id: Number(form.user_id ?? 0),
+            collection_id: Number(form.collection_id ?? 0),
+          }),
+        },
+        hint: "tagNamesHint",
+        defaultValue: [],
       },
     ],
   },
@@ -1009,6 +1067,7 @@ export const MY_RESOURCES: ResourceConfig[] = [
       { key: "hostname", label: "hostname" },
       { key: "platform", label: "platform" },
       { key: "alias", label: "alias" },
+      tagsCol,
       { key: "collection_id", label: "collectionId" },
       webClientCol(true),
     ],
@@ -1027,6 +1086,28 @@ export const MY_RESOURCES: ResourceConfig[] = [
           labelFields: ["name", "id"],
         },
         defaultValue: 0,
+        resetFieldsOnChange: ["tags"],
+      },
+      {
+        name: "tags",
+        label: "tags",
+        type: "tag_names",
+        relation: {
+          api: "/api/admin/my/tag",
+          valueField: "name",
+          labelFields: ["name"],
+          params: (form) => ({
+            collection_id: Number(form.collection_id ?? 0),
+          }),
+        },
+        tagHistory: {
+          api: "/api/admin/my/address_book",
+          params: (form) => ({
+            collection_id: Number(form.collection_id ?? 0),
+          }),
+        },
+        hint: "tagNamesHint",
+        defaultValue: [],
       },
     ],
   },

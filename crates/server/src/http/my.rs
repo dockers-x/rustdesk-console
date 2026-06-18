@@ -130,6 +130,9 @@ pub async fn address_book_create(
     {
         return resp::fail(101, state.tr(&lang, "ItemExists"));
     }
+    if let Err(e) = services::tag::ensure_names(&state.db, uid, f.collection_id, &f.tags).await {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+    }
     match services::address_book::create(&state.db, f.to_model(uid)).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
@@ -157,6 +160,9 @@ pub async fn address_book_update(
             .unwrap_or(false)
     {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    if let Err(e) = services::tag::ensure_names(&state.db, uid, f.collection_id, &f.tags).await {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
     match services::address_book::update_all(&state.db, f.to_model(uid)).await {
         Ok(_) => resp::success(Value::Null),
@@ -221,6 +227,9 @@ pub async fn address_book_batch_create_from_peers(
         .into_iter()
         .filter(|p| p.user_id == uid)
         .collect();
+    if let Err(e) = services::tag::ensure_names(&state.db, uid, f.collection_id, &f.tags).await {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+    }
     let tags = serde_json::to_value(&f.tags).unwrap_or(Value::Array(vec![]));
     for p in peers {
         let mut ab = services::address_book::from_peer(&p);
@@ -306,6 +315,21 @@ pub async fn address_book_batch_update_tags(
     user: BackendUser,
     Json(f): Json<MyBatchUpdateTagsForm>,
 ) -> Response {
+    let mut collection_ids = Vec::new();
+    for row_id in &f.row_ids {
+        if let Ok(Some(ab)) = services::address_book::info_by_row_id(&state.db, *row_id).await {
+            if ab.user_id == user.user.id && !collection_ids.contains(&ab.collection_id) {
+                collection_ids.push(ab.collection_id);
+            }
+        }
+    }
+    for collection_id in collection_ids {
+        if let Err(e) =
+            services::tag::ensure_names(&state.db, user.user.id, collection_id, &f.tags).await
+        {
+            return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+        }
+    }
     let tags = serde_json::to_value(&f.tags).unwrap_or(Value::Array(vec![]));
     match services::address_book::batch_update_tags(&state.db, user.user.id, &f.row_ids, &tags)
         .await

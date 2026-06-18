@@ -1,5 +1,7 @@
 //! Tag service — ports `service/tag.go`.
 
+use std::collections::HashSet;
+
 use sea_orm::*;
 
 use ::entity::tag;
@@ -129,6 +131,79 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
     Ok(())
 }
 
+fn rustdesk_named_tag_color(name: &str) -> Option<i64> {
+    match name.to_lowercase().as_str() {
+        "red" => Some(0xfff44336),
+        "green" => Some(0xff4caf50),
+        "blue" => Some(0xff2196f3),
+        "orange" => Some(0xffff9800),
+        "purple" => Some(0xff9c27b0),
+        "grey" => Some(0xff9e9e9e),
+        "cyan" => Some(0xff00bcd4),
+        "lime" => Some(0xffcddc39),
+        "teal" => Some(0xff009688),
+        "pink" => Some(0xfff48fb1),
+        "indigo" => Some(0xff3f51b5),
+        "brown" => Some(0xff795548),
+        "yellow" => Some(0xffffff00),
+        _ => None,
+    }
+}
+
+fn rustdesk_tag_palette() -> &'static [i64] {
+    &[
+        0xfff44336, 0xff4caf50, 0xff2196f3, 0xffff9800, 0xff9c27b0, 0xff9e9e9e, 0xff00bcd4,
+        0xffcddc39, 0xff009688, 0xfff48fb1, 0xff3f51b5, 0xff795548,
+    ]
+}
+
+pub fn default_color_for_name(name: &str, existing: &[i64]) -> i64 {
+    if let Some(color) = rustdesk_named_tag_color(name) {
+        return color;
+    }
+    let palette = rustdesk_tag_palette();
+    let hash = name.chars().map(|ch| ch as usize).sum::<usize>();
+    let mut color = palette[hash % palette.len()];
+    if existing.contains(&color) {
+        if let Some(not_used) = palette
+            .iter()
+            .find(|candidate| !existing.contains(candidate))
+        {
+            color = *not_used;
+        }
+    }
+    color
+}
+
+pub async fn ensure_names(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+    names: &[String],
+) -> Result<(), DbErr> {
+    if user_id <= 0 {
+        return Ok(());
+    }
+    if !names.iter().any(|name| !name.trim().is_empty()) {
+        return Ok(());
+    }
+    let existing = list_by_user_and_collection(db, user_id, collection_id).await?;
+    let mut existing_names: HashSet<String> = existing.iter().map(|t| t.name.clone()).collect();
+    let mut existing_colors: Vec<i64> = existing.iter().map(|t| t.color).collect();
+    let mut seen = HashSet::new();
+    for raw in names {
+        let name = raw.trim();
+        if name.is_empty() || !seen.insert(name.to_string()) || existing_names.contains(name) {
+            continue;
+        }
+        let color = default_color_for_name(name, &existing_colors);
+        create(db, name, color, user_id, collection_id).await?;
+        existing_names.insert(name.to_string());
+        existing_colors.push(color);
+    }
+    Ok(())
+}
+
 /// Reconcile a user's tags against `name -> color` (≈ `TagService.UpdateTags`).
 pub async fn update_tags(
     db: &DatabaseConnection,
@@ -180,5 +255,36 @@ mod tests {
 
         let updated = info_by_id(&db, tag.id).await.unwrap().unwrap();
         assert_eq!(updated.color, 0xFF00FF00);
+    }
+
+    #[tokio::test]
+    async fn ensure_names_creates_missing_tags_for_collection() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(tag::Entity)),
+        )
+        .await
+        .unwrap();
+
+        create(&db, "windows", 0xff2196f3, 1, 2).await.unwrap();
+        ensure_names(
+            &db,
+            1,
+            2,
+            &[
+                "windows".to_string(),
+                "android".to_string(),
+                "android".to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let tags = list_by_user_and_collection(&db, 1, 2).await.unwrap();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.iter().any(|t| t.name == "windows"));
+        assert!(tags.iter().any(|t| t.name == "android"));
     }
 }

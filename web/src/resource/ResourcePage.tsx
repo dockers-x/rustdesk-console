@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { X } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
 import { Table } from "@cloudflare/kumo/components/table";
@@ -55,6 +56,13 @@ const TAG_COLORS = [
   { name: "yellow", hex: "#ffff00", value: 0xffffff00 },
 ] as const;
 
+type TagOption = {
+  name: string;
+  color: number;
+  historical?: boolean;
+  missing?: boolean;
+};
+
 function initialForm(cfg: ResourceConfig, row?: Record<string, unknown>) {
   const f: Record<string, unknown> = {};
   for (const field of cfg.fields) {
@@ -106,8 +114,26 @@ function normalizeFormPayload(cfg: ResourceConfig, source: Record<string, unknow
     if (field.type === "expiration") {
       payload[field.name] = expirationValueToTimestamp(payload[field.name]);
     }
+    if (field.type === "tag_names") {
+      payload[field.name] = stringArrayValue(payload[field.name]);
+    }
   }
   return payload;
+}
+
+function stringArrayValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item).trim())
+      .filter((item, index, items) => item && items.indexOf(item) === index);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item, index, items) => item && items.indexOf(item) === index);
+  }
+  return [];
 }
 
 export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
@@ -343,6 +369,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                         field.type === "color" ||
                         field.type === "avatar" ||
                         field.type === "strategy_options" ||
+                        field.type === "tag_names" ||
                         field.type === "oauth_provider";
                       return (
                         <div
@@ -544,6 +571,18 @@ function FieldInput({
     );
   }
 
+  if (field.type === "tag_names") {
+    return (
+      <TagNamesInput
+        field={field}
+        value={value}
+        form={form}
+        locked={locked}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (field.type === "color") {
     return (
       <TagColorInput
@@ -723,6 +762,257 @@ function ExpirationInput({
         </span>
       )}
     </label>
+  );
+}
+
+function TagNamesInput({
+  field,
+  value,
+  form,
+  locked,
+  onChange,
+}: {
+  field: FieldDef;
+  value: unknown;
+  form: Record<string, unknown>;
+  locked: boolean;
+  onChange: (v: unknown) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState("");
+  const relation = field.relation;
+  const api = typeof relation?.api === "function" ? relation.api(form) : relation?.api;
+  const params =
+    typeof relation?.params === "function"
+      ? relation.params(form)
+      : relation?.params ?? {};
+  const historyRelation = field.tagHistory;
+  const historyApi =
+    typeof historyRelation?.api === "function"
+      ? historyRelation.api(form)
+      : historyRelation?.api;
+  const historyParams =
+    typeof historyRelation?.params === "function"
+      ? historyRelation.params(form)
+      : historyRelation?.params ?? {};
+  const adminTagNeedsUser =
+    api === "/api/admin/tag" && Number(form.user_id ?? 0) <= 0;
+  const selected = stringArrayValue(value);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["tag-names", field.name, api, params],
+    enabled: Boolean(api) && !adminTagNeedsUser,
+    queryFn: () =>
+      apiGet<ListResult>(`${api}/list`, {
+        page: 1,
+        page_size: RELATION_PAGE_SIZE,
+        ...params,
+      }),
+  });
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    error: historyError,
+  } = useQuery({
+    queryKey: ["tag-name-history", field.name, historyApi, historyParams],
+    enabled: Boolean(historyApi) && !adminTagNeedsUser,
+    queryFn: () =>
+      apiGet<ListResult>(`${historyApi}/list`, {
+        page: 1,
+        page_size: RELATION_PAGE_SIZE,
+        ...historyParams,
+      }),
+  });
+  const rows = data?.list ?? [];
+  const tagRows: TagOption[] = rows
+    .map((row) => ({
+      name: String(row.name ?? "").trim(),
+      color: Number(row.color ?? 0),
+    }))
+    .filter((row, index, items) => row.name && items.findIndex((it) => it.name === row.name) === index);
+  const colorByName = new Map(tagRows.map((row) => [row.name, row.color]));
+  const historyNames = (historyData?.list ?? [])
+    .flatMap((row) => stringArrayValue(row.tags))
+    .filter((name, index, items) => name && items.indexOf(name) === index);
+  const historyRows: TagOption[] = historyNames
+    .filter((name) => !tagRows.some((row) => row.name === name))
+    .map((name) => ({
+      name,
+      color: colorByName.get(name) ?? 0,
+      historical: true,
+      missing: true,
+    }));
+  const knownNames = new Set([...tagRows.map((row) => row.name), ...historyRows.map((row) => row.name)]);
+  const unknownSelected: TagOption[] = selected
+    .filter((name) => !knownNames.has(name))
+    .map((name) => ({ name, color: 0, missing: true }));
+  const allTags = [...tagRows, ...historyRows, ...unknownSelected];
+  const suggestionTags = [...tagRows, ...historyRows]
+    .filter((tag, index, items) => items.findIndex((item) => item.name === tag.name) === index)
+    .filter((tag) => !selected.includes(tag.name))
+    .filter((tag) => {
+      const query = draft.trim().toLowerCase();
+      return !query || tag.name.toLowerCase().includes(query);
+    });
+  const selectedRows = selected.map((name) => {
+    const known = allTags.find((tag) => tag.name === name);
+    return known ?? { name, color: 0, missing: true };
+  });
+  const disabled =
+    locked ||
+    isLoading ||
+    historyLoading ||
+    Boolean(error) ||
+    Boolean(historyError) ||
+    adminTagNeedsUser;
+
+  const addTag = (name: string) => {
+    if (disabled) return;
+    const normalized = name.trim().replace(/[,\s]+$/g, "");
+    if (!normalized || selected.includes(normalized)) {
+      setDraft("");
+      return;
+    }
+    onChange([...selected, normalized]);
+    setDraft("");
+  };
+
+  const removeTag = (name: string) => {
+    if (disabled) return;
+    onChange(selected.filter((item) => item !== name));
+  };
+
+  return (
+    <div>
+      <div className="mb-1 flex min-h-6 flex-wrap items-center justify-between gap-2">
+        <span className="text-sm">{t(field.label)}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-kumo-subtle">
+            {t("selectedTagsCount").replace("{{count}}", String(selected.length))}
+          </span>
+          {selected.length > 0 && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange([])}
+              className="rounded-md px-2 py-1 text-xs text-kumo-subtle transition-colors hover:bg-kumo-tint hover:text-kumo-default focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {t("clear")}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="min-h-11 rounded-lg border border-kumo-line bg-kumo-elevated p-2">
+        {selectedRows.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {selectedRows.map((tag) => {
+              const hex =
+                Number.isFinite(tag.color) && tag.color > 0
+                  ? `#${((tag.color >>> 0) & 0x00ffffff).toString(16).padStart(6, "0")}`
+                  : "";
+              return (
+                <button
+                  key={tag.name}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => removeTag(tag.name)}
+                  title={tag.missing ? t("missingTagDefinition") : tag.name}
+                  className={`group inline-flex min-h-10 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand disabled:cursor-not-allowed disabled:opacity-60 ${
+                    tag.missing
+                      ? "border-kumo-warning/30 bg-kumo-warning-tint/60 text-kumo-warning"
+                      : "border-kumo-brand/40 bg-kumo-brand text-white"
+                  }`}
+                >
+                  <span
+                    className="size-2.5 rounded-full border border-current/20"
+                    style={hex ? { backgroundColor: hex } : undefined}
+                    aria-hidden="true"
+                  />
+                  <span>{tag.name}</span>
+                  {tag.missing && (
+                    <span className="rounded border border-current/20 px-1 py-0.5 text-[10px] leading-none">
+                      {t(tag.historical ? "historicalTag" : "missing")}
+                    </span>
+                  )}
+                  <span
+                    className="ml-0.5 inline-flex size-5 items-center justify-center rounded-full bg-black/10 opacity-100 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 sm:opacity-0"
+                    aria-hidden="true"
+                  >
+                    <X size={12} weight="bold" />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <Input
+          className="mt-2 min-h-10 w-full"
+          value={draft}
+          disabled={disabled}
+          placeholder={t("tagInputPlaceholder")}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => {
+            if (draft.trim()) addTag(draft);
+          }}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            if (e.key === "Enter" || e.key === " " || e.key === ",") {
+              if (draft.trim()) {
+                e.preventDefault();
+                addTag(draft);
+              }
+            }
+          }}
+        />
+      </div>
+      {suggestionTags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {suggestionTags.slice(0, 16).map((tag) => {
+            const hex =
+              Number.isFinite(tag.color) && tag.color > 0
+                ? `#${((tag.color >>> 0) & 0x00ffffff).toString(16).padStart(6, "0")}`
+                : "";
+            return (
+              <button
+                key={tag.name}
+                type="button"
+                disabled={disabled}
+                onClick={() => addTag(tag.name)}
+                className={`inline-flex min-h-8 items-center gap-2 rounded-md border px-2.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand disabled:cursor-not-allowed disabled:opacity-60 ${
+                  tag.historical
+                    ? "border-kumo-warning/25 bg-kumo-warning-tint/30 text-kumo-warning hover:bg-kumo-warning-tint/60"
+                    : "border-kumo-line bg-kumo-base text-kumo-ink hover:border-kumo-brand/40 hover:bg-kumo-tint"
+                }`}
+              >
+                <span
+                  className="size-2.5 rounded-full border border-current/20"
+                  style={hex ? { backgroundColor: hex } : undefined}
+                  aria-hidden="true"
+                />
+                <span>{tag.name}</span>
+                {tag.historical && (
+                  <span className="rounded border border-current/20 px-1 py-0.5 text-[10px] leading-none">
+                    {t("historicalTag")}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <span className="mt-1 block text-xs text-kumo-subtle">
+        {error
+          ? (error as Error).message || t("operationFailed")
+          : historyError
+            ? (historyError as Error).message || t("operationFailed")
+          : adminTagNeedsUser
+            ? t("selectUserFirst")
+            : isLoading || historyLoading
+              ? t("loading")
+              : field.hint
+                ? t(field.hint)
+                : t("tagInputHint")}
+      </span>
+    </div>
   );
 }
 

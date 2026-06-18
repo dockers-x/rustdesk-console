@@ -2,6 +2,7 @@
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{Duration, Utc};
@@ -1960,12 +1961,15 @@ fn parse_i32(value: &str) -> Option<i32> {
 }
 
 pub async fn ab_personal(State(state): State<AppState>, user: RustClientUser) -> Response {
-    if state.config.rustdesk.personal == 1 {
-        let guid = compose_guid(user.user.group_id, user.user.id, 0);
-        Json(json!({ "guid": guid, "name": user.user.username, "rule": 3 })).into_response()
-    } else {
-        Json(Value::Null).into_response()
+    if state.config.rustdesk.personal != 1 {
+        return StatusCode::NOT_FOUND.into_response();
     }
+
+    let cid = services::address_book::client_personal_collection_id(&state.db, user.user.id)
+        .await
+        .unwrap_or(0);
+    let guid = compose_guid(user.user.group_id, user.user.id, cid);
+    Json(json!({ "guid": guid, "name": user.user.username, "rule": 3 })).into_response()
 }
 
 pub async fn ab_settings() -> Response {
@@ -2191,6 +2195,7 @@ pub async fn ab_peers(
     let mut abs = services::address_book::list_by_user_and_collection(&state.db, uid, cid)
         .await
         .unwrap_or_default();
+    abs = dedup_address_book_peers(abs);
     abs.retain(|ab| {
         matches_ab_filter(&ab.id, q.id.as_deref())
             && matches_ab_filter(&ab.alias, q.alias.as_deref())
@@ -2209,6 +2214,96 @@ pub async fn ab_peers(
         "licensed_devices": 99999,
     }))
     .into_response()
+}
+
+fn address_book_peer_is_newer(
+    candidate: &address_book::Model,
+    current: &address_book::Model,
+) -> bool {
+    match (candidate.updated_at.as_ref(), current.updated_at.as_ref()) {
+        (Some(a), Some(b)) => a > b || (a == b && candidate.row_id > current.row_id),
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => candidate.row_id > current.row_id,
+    }
+}
+
+fn prefer_peer_text(current: &mut String, candidate: String, candidate_is_newer: bool) {
+    if !candidate.trim().is_empty() && (current.trim().is_empty() || candidate_is_newer) {
+        *current = candidate;
+    }
+}
+
+fn address_book_tags_non_empty(tags: &Value) -> bool {
+    matches!(tags, Value::Array(items) if !items.is_empty())
+}
+
+fn merge_duplicate_address_book_peer(
+    current: &mut address_book::Model,
+    candidate: address_book::Model,
+) {
+    let candidate_is_newer = address_book_peer_is_newer(&candidate, current);
+    let address_book::Model {
+        row_id,
+        id: _,
+        username,
+        password,
+        hostname,
+        alias,
+        platform,
+        tags,
+        hash,
+        user_id,
+        force_always_relay,
+        rdp_port,
+        rdp_username,
+        online,
+        login_name,
+        same_server,
+        collection_id,
+        created_at,
+        updated_at,
+    } = candidate;
+
+    if candidate_is_newer {
+        current.row_id = row_id;
+        current.user_id = user_id;
+        current.force_always_relay = force_always_relay;
+        current.online = online;
+        current.same_server = same_server;
+        current.collection_id = collection_id;
+        current.created_at = created_at;
+        current.updated_at = updated_at;
+    }
+
+    prefer_peer_text(&mut current.username, username, candidate_is_newer);
+    prefer_peer_text(&mut current.password, password, candidate_is_newer);
+    prefer_peer_text(&mut current.hostname, hostname, candidate_is_newer);
+    prefer_peer_text(&mut current.alias, alias, candidate_is_newer);
+    prefer_peer_text(&mut current.platform, platform, candidate_is_newer);
+    prefer_peer_text(&mut current.hash, hash, candidate_is_newer);
+    prefer_peer_text(&mut current.rdp_port, rdp_port, candidate_is_newer);
+    prefer_peer_text(&mut current.rdp_username, rdp_username, candidate_is_newer);
+    prefer_peer_text(&mut current.login_name, login_name, candidate_is_newer);
+    if address_book_tags_non_empty(&tags)
+        && (!address_book_tags_non_empty(&current.tags) || candidate_is_newer)
+    {
+        current.tags = tags;
+    }
+}
+
+fn dedup_address_book_peers(abs: Vec<address_book::Model>) -> Vec<address_book::Model> {
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    let mut peers = Vec::new();
+    for ab in abs {
+        if let Some(pos) = positions.get(&ab.id).copied() {
+            merge_duplicate_address_book_peer(&mut peers[pos], ab);
+        } else {
+            positions.insert(ab.id.clone(), peers.len());
+            peers.push(ab);
+        }
+    }
+    peers
 }
 
 pub async fn ab_tags(
@@ -2272,24 +2367,28 @@ pub async fn ab_peer_add(
         _ => false,
     };
     let tags = body.get("tags").cloned().unwrap_or(Value::Array(vec![]));
-    let am = address_book::ActiveModel {
-        id: Set(id),
-        username: Set(username),
-        password: Set(g("password")),
-        hostname: Set(hostname),
-        alias: Set(g("alias")),
-        platform: Set(platform),
-        tags: Set(tags),
-        hash: Set(g("hash")),
-        user_id: Set(uid),
-        force_always_relay: Set(force_relay),
-        rdp_port: Set(g("rdpPort")),
-        rdp_username: Set(g("rdpUsername")),
-        login_name: Set(g("loginName")),
-        collection_id: Set(cid),
-        ..Default::default()
+    let peer = address_book::Model {
+        row_id: 0,
+        id,
+        username,
+        password: g("password"),
+        hostname,
+        alias: g("alias"),
+        platform,
+        tags,
+        hash: g("hash"),
+        user_id: uid,
+        force_always_relay: force_relay,
+        rdp_port: g("rdpPort"),
+        rdp_username: g("rdpUsername"),
+        online: false,
+        login_name: g("loginName"),
+        same_server: false,
+        collection_id: cid,
+        created_at: None,
+        updated_at: None,
     };
-    if let Err(e) = services::address_book::add(&state.db, am).await {
+    if let Err(e) = services::address_book::add_or_update(&state.db, peer).await {
         return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
     "".into_response()
@@ -2319,14 +2418,10 @@ pub async fn ab_peer_del(
         _ => return resp::error("NoAccess"),
     }
     for id in ids {
-        match services::address_book::info_by_user_id_and_id_and_cid(&state.db, uid, &id, cid).await
-        {
-            Ok(Some(ab)) => {
-                if let Err(e) = services::address_book::delete(&state.db, ab.row_id).await {
-                    return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
-                }
-            }
-            _ => return resp::error(state.tr(&lang, "ItemNotFound")),
+        match services::address_book::delete_by_identity(&state.db, uid, &id, cid).await {
+            Ok(n) if n > 0 => {}
+            Ok(_) => return resp::error(state.tr(&lang, "ItemNotFound")),
+            Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
         }
     }
     "".into_response()
@@ -2352,14 +2447,10 @@ pub async fn ab_peer_update(
     let Some(id) = body.get("id").and_then(|v| v.as_str()) else {
         return resp::error(state.tr(&lang, "ParamsError"));
     };
-    let ab = match services::address_book::info_by_user_id_and_id_and_cid(&state.db, uid, id, cid)
-        .await
-    {
-        Ok(Some(ab)) => ab,
-        _ => return resp::error(state.tr(&lang, "ItemNotFound")),
-    };
-    if let Err(e) = services::address_book::update_fields(&state.db, &ab, &body).await {
-        return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+    match services::address_book::update_fields_by_identity(&state.db, uid, id, cid, &body).await {
+        Ok(true) => {}
+        Ok(false) => return resp::error(state.tr(&lang, "ItemNotFound")),
+        Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
     "".into_response()
 }
@@ -2775,6 +2866,44 @@ mod pagination_tests {
     fn script_page_defaults_and_clamps_to_positive_values() {
         assert_eq!(script_page(None, None), (1, 30));
         assert_eq!(script_page(Some(0), Some(0)), (1, 1));
+    }
+
+    #[test]
+    fn dedup_address_book_peers_preserves_non_empty_alias() {
+        let ts = |day| {
+            chrono::NaiveDate::from_ymd_opt(2026, 6, day)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+        };
+        let peer = |row_id, alias: &str, updated_at| address_book::Model {
+            row_id,
+            id: "1380385931".to_string(),
+            username: "czyt".to_string(),
+            password: String::new(),
+            hostname: "hpdev".to_string(),
+            alias: alias.to_string(),
+            platform: "Windows".to_string(),
+            tags: serde_json::json!([]),
+            hash: String::new(),
+            user_id: 1,
+            force_always_relay: false,
+            rdp_port: String::new(),
+            rdp_username: String::new(),
+            online: false,
+            login_name: String::new(),
+            same_server: false,
+            collection_id: 1,
+            created_at: None,
+            updated_at: Some(updated_at),
+        };
+
+        let peers =
+            dedup_address_book_peers(vec![peer(1, "公司开发台式机", ts(17)), peer(3, "", ts(18))]);
+
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].alias, "公司开发台式机");
+        assert_eq!(peers[0].row_id, 3);
     }
 }
 

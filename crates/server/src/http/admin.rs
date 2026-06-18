@@ -766,6 +766,10 @@ pub struct PageQuery {
     pub username: Option<String>,
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<i32>,
+    #[serde(default)]
+    pub collection_id: Option<i32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -2045,7 +2049,15 @@ pub async fn tag_list(
     _user: AdminUser,
     Query(q): Query<PageQuery>,
 ) -> Response {
-    match services::tag::list(&state.db, q.page.unwrap_or(0), q.page_size.unwrap_or(0)).await {
+    match services::tag::list_filtered(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.user_id,
+        q.collection_id,
+    )
+    .await
+    {
         Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
         Err(e) => resp::fail(101, e.to_string()),
     }
@@ -3070,6 +3082,11 @@ pub async fn address_book_create(
     {
         return resp::fail(101, state.tr(&lang, "ItemExists"));
     }
+    if let Err(e) =
+        services::tag::ensure_names(&state.db, f.user_id, f.collection_id, &f.tags).await
+    {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+    }
     match services::address_book::create(&state.db, f.to_model(f.user_id)).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
@@ -3092,6 +3109,11 @@ pub async fn address_book_update(
         .is_none()
     {
         return resp::fail(101, state.tr(&lang, "ItemNotFound"));
+    }
+    if let Err(e) =
+        services::tag::ensure_names(&state.db, f.user_id, f.collection_id, &f.tags).await
+    {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
     match services::address_book::update_all(&state.db, f.to_model(f.user_id)).await {
         Ok(_) => resp::success(Value::Null),
@@ -3150,6 +3172,11 @@ pub async fn address_book_batch_create(
         {
             continue;
         }
+        if let Err(e) = services::tag::ensure_names(&state.db, uid, f.collection_id, &f.tags).await
+        {
+            tracing::warn!("failed to ensure address book tags for user {uid}: {e}");
+            continue;
+        }
         let _ = services::address_book::create(&state.db, f.to_model(uid)).await;
     }
     resp::success(Value::Null)
@@ -3188,6 +3215,11 @@ pub async fn address_book_batch_create_from_peers(
     let peers = services::peer::list_by_row_ids(&state.db, &f.peer_ids)
         .await
         .unwrap_or_default();
+    if let Err(e) =
+        services::tag::ensure_names(&state.db, f.user_id, f.collection_id, &f.tags).await
+    {
+        return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
+    }
     let tags = serde_json::to_value(&f.tags).unwrap_or(Value::Array(vec![]));
     for p in peers {
         let mut ab = services::address_book::from_peer(&p);

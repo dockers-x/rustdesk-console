@@ -14,6 +14,7 @@ export type FieldType =
   | "select"
   | "expiration"
   | "strategy_options"
+  | "tag_names"
   | "textarea";
 
 export interface SelectOption {
@@ -37,6 +38,7 @@ export interface FieldDef {
   type: FieldType;
   options?: SelectOption[];
   relation?: RelationDef;
+  tagHistory?: RelationDef;
   hint?: string; // i18n key
   placeholder?: string; // i18n key
   visibleWhen?: (form: Record<string, unknown>, editing: boolean) => boolean;

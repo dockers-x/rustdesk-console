@@ -36,8 +36,41 @@ pub async fn list_by_user_and_collection(
     address_book::Entity::find()
         .filter(address_book::Column::UserId.eq(user_id))
         .filter(address_book::Column::CollectionId.eq(collection_id))
+        .order_by_asc(address_book::Column::RowId)
         .all(db)
         .await
+}
+
+pub async fn client_personal_collection_id(
+    db: &DatabaseConnection,
+    user_id: i32,
+) -> Result<i32, DbErr> {
+    let has_legacy_personal = address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::CollectionId.eq(0))
+        .limit(1)
+        .one(db)
+        .await?
+        .is_some();
+    if has_legacy_personal {
+        return Ok(0);
+    }
+
+    let collections = collection_list_by_user_id(db, user_id).await?;
+    for collection in collections {
+        let has_peer = address_book::Entity::find()
+            .filter(address_book::Column::UserId.eq(user_id))
+            .filter(address_book::Column::CollectionId.eq(collection.id))
+            .limit(1)
+            .one(db)
+            .await?
+            .is_some();
+        if has_peer {
+            return Ok(collection.id);
+        }
+    }
+
+    Ok(0)
 }
 
 pub async fn info_by_user_id_and_id(
@@ -58,11 +91,27 @@ pub async fn info_by_user_id_and_id_and_cid(
     id: &str,
     collection_id: i32,
 ) -> Result<Option<address_book::Model>, DbErr> {
+    Ok(address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::Id.eq(id))
+        .filter(address_book::Column::CollectionId.eq(collection_id))
+        .order_by_asc(address_book::Column::RowId)
+        .one(db)
+        .await?)
+}
+
+pub async fn list_by_user_id_and_id_and_cid(
+    db: &DatabaseConnection,
+    user_id: i32,
+    id: &str,
+    collection_id: i32,
+) -> Result<Vec<address_book::Model>, DbErr> {
     address_book::Entity::find()
         .filter(address_book::Column::UserId.eq(user_id))
         .filter(address_book::Column::Id.eq(id))
         .filter(address_book::Column::CollectionId.eq(collection_id))
-        .one(db)
+        .order_by_asc(address_book::Column::RowId)
+        .all(db)
         .await
 }
 
@@ -104,35 +153,137 @@ pub async fn add(
     am.insert(db).await
 }
 
+fn merge_non_empty_string(target: &mut String, source: String) {
+    if !source.trim().is_empty() {
+        *target = source;
+    }
+}
+
+fn tags_are_non_empty(tags: &Value) -> bool {
+    matches!(tags, Value::Array(items) if !items.is_empty())
+}
+
+fn merge_peer_for_add(target: &mut address_book::Model, source: address_book::Model) {
+    merge_non_empty_string(&mut target.username, source.username);
+    merge_non_empty_string(&mut target.password, source.password);
+    merge_non_empty_string(&mut target.hostname, source.hostname);
+    merge_non_empty_string(&mut target.alias, source.alias);
+    merge_non_empty_string(&mut target.platform, source.platform);
+    merge_non_empty_string(&mut target.hash, source.hash);
+    merge_non_empty_string(&mut target.rdp_port, source.rdp_port);
+    merge_non_empty_string(&mut target.rdp_username, source.rdp_username);
+    merge_non_empty_string(&mut target.login_name, source.login_name);
+    if tags_are_non_empty(&source.tags) {
+        target.tags = source.tags;
+    }
+    if source.force_always_relay {
+        target.force_always_relay = true;
+    }
+    if source.online {
+        target.online = true;
+    }
+    if source.same_server {
+        target.same_server = true;
+    }
+}
+
+pub async fn add_or_update(
+    db: &DatabaseConnection,
+    mut peer: address_book::Model,
+) -> Result<address_book::Model, DbErr> {
+    peer.row_id = 0;
+    let existing = address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(peer.user_id))
+        .filter(address_book::Column::CollectionId.eq(peer.collection_id))
+        .filter(address_book::Column::Id.eq(&peer.id))
+        .order_by_asc(address_book::Column::RowId)
+        .all(db)
+        .await?;
+    let Some((first, duplicates)) = existing.split_first() else {
+        return create(db, peer).await;
+    };
+
+    let mut merged = first.clone();
+    for duplicate in duplicates {
+        merge_peer_for_add(&mut merged, duplicate.clone());
+    }
+    merge_peer_for_add(&mut merged, peer);
+    update_all(db, merged.clone()).await?;
+    for duplicate in duplicates {
+        delete(db, duplicate.row_id).await?;
+    }
+    Ok(info_by_row_id(db, merged.row_id).await?.unwrap_or(merged))
+}
+
 pub async fn delete(db: &DatabaseConnection, row_id: i32) -> Result<(), DbErr> {
     address_book::Entity::delete_by_id(row_id).exec(db).await?;
     Ok(())
 }
 
 /// Apply allowed-field updates to an address book peer (≈ `UpdateByMap`).
+fn apply_peer_update_fields(peer: &mut address_book::Model, fields: &Value) {
+    if let Some(obj) = fields.as_object() {
+        if let Some(v) = obj.get("password").and_then(|v| v.as_str()) {
+            peer.password = v.to_string();
+        }
+        if let Some(v) = obj.get("hash").and_then(|v| v.as_str()) {
+            peer.hash = v.to_string();
+        }
+        if let Some(v) = obj.get("alias").and_then(|v| v.as_str()) {
+            peer.alias = v.to_string();
+        }
+        if let Some(v) = obj.get("tags") {
+            peer.tags = v.clone();
+        }
+    }
+}
+
 pub async fn update_fields(
     db: &DatabaseConnection,
     model: &address_book::Model,
     fields: &Value,
 ) -> Result<(), DbErr> {
-    let mut am: address_book::ActiveModel = model.clone().into();
-    if let Some(obj) = fields.as_object() {
-        if let Some(v) = obj.get("password").and_then(|v| v.as_str()) {
-            am.password = Set(v.to_string());
-        }
-        if let Some(v) = obj.get("hash").and_then(|v| v.as_str()) {
-            am.hash = Set(v.to_string());
-        }
-        if let Some(v) = obj.get("alias").and_then(|v| v.as_str()) {
-            am.alias = Set(v.to_string());
-        }
-        if let Some(v) = obj.get("tags") {
-            am.tags = Set(v.clone());
-        }
+    let mut peer = model.clone();
+    apply_peer_update_fields(&mut peer, fields);
+    update_all(db, peer).await
+}
+
+pub async fn update_fields_by_identity(
+    db: &DatabaseConnection,
+    user_id: i32,
+    id: &str,
+    collection_id: i32,
+    fields: &Value,
+) -> Result<bool, DbErr> {
+    let peers = list_by_user_id_and_id_and_cid(db, user_id, id, collection_id).await?;
+    let Some((first, duplicates)) = peers.split_first() else {
+        return Ok(false);
+    };
+    let mut merged = first.clone();
+    for duplicate in duplicates {
+        merge_peer_for_add(&mut merged, duplicate.clone());
     }
-    am.updated_at = Set(now());
-    am.update(db).await?;
-    Ok(())
+    apply_peer_update_fields(&mut merged, fields);
+    update_all(db, merged).await?;
+    for duplicate in duplicates {
+        delete(db, duplicate.row_id).await?;
+    }
+    Ok(true)
+}
+
+pub async fn delete_by_identity(
+    db: &DatabaseConnection,
+    user_id: i32,
+    id: &str,
+    collection_id: i32,
+) -> Result<u64, DbErr> {
+    let result = address_book::Entity::delete_many()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::Id.eq(id))
+        .filter(address_book::Column::CollectionId.eq(collection_id))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected)
 }
 
 /// Reconcile a user's whole personal address book against `peers` (≈ `UpdateAddressBook`).
@@ -143,6 +294,7 @@ pub async fn update_address_book(
 ) -> Result<(), DbErr> {
     let existing = address_book::Entity::find()
         .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::CollectionId.eq(0))
         .all(db)
         .await?;
     let existing_by_id: HashMap<String, address_book::Model> =
@@ -152,6 +304,7 @@ pub async fn update_address_book(
 
     for mut p in peers {
         p.user_id = user_id;
+        p.collection_id = 0;
         match existing_by_id.get(&p.id) {
             None => {
                 if p.platform.is_empty() || p.username.is_empty() || p.hostname.is_empty() {
@@ -247,6 +400,7 @@ pub async fn collection_list_by_user_id(
 ) -> Result<Vec<address_book_collection::Model>, DbErr> {
     address_book_collection::Entity::find()
         .filter(address_book_collection::Column::UserId.eq(user_id))
+        .order_by_asc(address_book_collection::Column::Id)
         .all(db)
         .await
 }
@@ -786,7 +940,7 @@ pub async fn delete_rule(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{ConnectionTrait, Database, DbBackend, Schema, Set};
+    use sea_orm::{ConnectionTrait, Database, DbBackend, EntityTrait, PaginatorTrait, Schema, Set};
 
     async fn setup_address_book_db() -> DatabaseConnection {
         let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -794,6 +948,12 @@ mod tests {
         db.execute(
             db.get_database_backend()
                 .build(&schema.create_table_from_entity(address_book::Entity)),
+        )
+        .await
+        .unwrap();
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(address_book_collection::Entity)),
         )
         .await
         .unwrap();
@@ -876,6 +1036,255 @@ mod tests {
         assert_eq!(aliases.get("100").map(String::as_str), Some("new name"));
         assert_eq!(aliases.get("200"), None);
         assert_eq!(aliases.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn add_or_update_updates_existing_peer_in_same_collection() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("1380385931".to_string()),
+            user_id: Set(1),
+            collection_id: Set(7),
+            alias: Set("公司开发台式机".to_string()),
+            hostname: Set("old-host".to_string()),
+            platform: Set("Windows".to_string()),
+            tags: Set(serde_json::json!(["windows"])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let saved = add_or_update(
+            &db,
+            address_book::Model {
+                row_id: 0,
+                id: "1380385931".to_string(),
+                username: "czyt".to_string(),
+                password: String::new(),
+                hostname: "hpdev".to_string(),
+                alias: String::new(),
+                platform: "Windows".to_string(),
+                tags: serde_json::json!([]),
+                hash: String::new(),
+                user_id: 1,
+                force_always_relay: false,
+                rdp_port: String::new(),
+                rdp_username: String::new(),
+                online: false,
+                login_name: "czyt".to_string(),
+                same_server: false,
+                collection_id: 7,
+                created_at: None,
+                updated_at: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(saved.alias, "公司开发台式机");
+        assert_eq!(saved.hostname, "hpdev");
+        assert_eq!(saved.username, "czyt");
+        assert_eq!(saved.tags, serde_json::json!(["windows"]));
+        assert_eq!(address_book::Entity::find().count(&db).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn add_or_update_keeps_same_id_in_different_collections_separate() {
+        let db = setup_address_book_db().await;
+
+        let peer = |collection_id, alias: &str| address_book::Model {
+            row_id: 0,
+            id: "1380385931".to_string(),
+            username: "czyt".to_string(),
+            password: String::new(),
+            hostname: "hpdev".to_string(),
+            alias: alias.to_string(),
+            platform: "Windows".to_string(),
+            tags: serde_json::json!([]),
+            hash: String::new(),
+            user_id: 1,
+            force_always_relay: false,
+            rdp_port: String::new(),
+            rdp_username: String::new(),
+            online: false,
+            login_name: String::new(),
+            same_server: false,
+            collection_id,
+            created_at: None,
+            updated_at: None,
+        };
+
+        add_or_update(&db, peer(1, "work")).await.unwrap();
+        add_or_update(&db, peer(2, "personal")).await.unwrap();
+
+        let rows = address_book::Entity::find().all(&db).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .any(|row| row.collection_id == 1 && row.alias == "work"));
+        assert!(rows
+            .iter()
+            .any(|row| row.collection_id == 2 && row.alias == "personal"));
+    }
+
+    #[tokio::test]
+    async fn update_address_book_only_reconciles_legacy_personal_collection() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("legacy-old".to_string()),
+            user_id: Set(1),
+            collection_id: Set(0),
+            alias: Set("old".to_string()),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("shared-peer".to_string()),
+            user_id: Set(1),
+            collection_id: Set(9),
+            alias: Set("shared".to_string()),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        update_address_book(
+            &db,
+            vec![address_book::Model {
+                row_id: 0,
+                id: "legacy-new".to_string(),
+                username: "user".to_string(),
+                password: String::new(),
+                hostname: "host".to_string(),
+                alias: "new".to_string(),
+                platform: "Linux".to_string(),
+                tags: serde_json::json!([]),
+                hash: String::new(),
+                user_id: 99,
+                force_always_relay: false,
+                rdp_port: String::new(),
+                rdp_username: String::new(),
+                online: false,
+                login_name: String::new(),
+                same_server: false,
+                collection_id: 99,
+                created_at: None,
+                updated_at: None,
+            }],
+            1,
+        )
+        .await
+        .unwrap();
+
+        let rows = address_book::Entity::find().all(&db).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .any(|row| row.collection_id == 0 && row.id == "legacy-new"));
+        assert!(rows
+            .iter()
+            .any(|row| row.collection_id == 9 && row.id == "shared-peer"));
+        assert!(!rows.iter().any(|row| row.id == "legacy-old"));
+    }
+
+    #[tokio::test]
+    async fn client_personal_collection_keeps_legacy_collection_when_present() {
+        let db = setup_address_book_db().await;
+
+        address_book_collection::ActiveModel {
+            id: Set(7),
+            user_id: Set(1),
+            name: Set("work".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("legacy-peer".to_string()),
+            user_id: Set(1),
+            collection_id: Set(0),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("work-peer".to_string()),
+            user_id: Set(1),
+            collection_id: Set(7),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        assert_eq!(client_personal_collection_id(&db, 1).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn client_personal_collection_falls_back_to_first_non_empty_owned_collection() {
+        let db = setup_address_book_db().await;
+
+        address_book_collection::ActiveModel {
+            id: Set(7),
+            user_id: Set(1),
+            name: Set("empty".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book_collection::ActiveModel {
+            id: Set(8),
+            user_id: Set(1),
+            name: Set("work".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book_collection::ActiveModel {
+            id: Set(9),
+            user_id: Set(2),
+            name: Set("other".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("other-user-peer".to_string()),
+            user_id: Set(2),
+            collection_id: Set(9),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("work-peer".to_string()),
+            user_id: Set(1),
+            collection_id: Set(8),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        assert_eq!(client_personal_collection_id(&db, 1).await.unwrap(), 8);
     }
 
     #[tokio::test]
