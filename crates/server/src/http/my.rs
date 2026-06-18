@@ -634,7 +634,30 @@ pub async fn peer_list(
     match services::peer::list_filtered(&state.db, q.page.unwrap_or(0), q.page_size.unwrap_or(0), f)
         .await
     {
-        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Ok(mut r) => {
+            let ids: Vec<String> = r
+                .list
+                .iter()
+                .map(|p| p.id.clone())
+                .filter(|id| !id.is_empty())
+                .collect();
+            let aliases = match services::address_book::aliases_by_user_and_ids(
+                &state.db,
+                user.user.id,
+                &ids,
+            )
+            .await
+            {
+                Ok(aliases) => aliases,
+                Err(e) => return resp::fail(101, e.to_string()),
+            };
+            for peer in &mut r.list {
+                if let Some(alias) = aliases.get(&peer.id) {
+                    peer.alias = alias.clone();
+                }
+            }
+            list_json(r.list, r.page, r.total, r.page_size)
+        }
         Err(e) => resp::fail(101, e.to_string()),
     }
 }

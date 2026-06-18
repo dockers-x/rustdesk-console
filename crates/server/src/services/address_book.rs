@@ -66,6 +66,34 @@ pub async fn info_by_user_id_and_id_and_cid(
         .await
 }
 
+pub async fn aliases_by_user_and_ids(
+    db: &DatabaseConnection,
+    user_id: i32,
+    ids: &[String],
+) -> Result<HashMap<String, String>, DbErr> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::Id.is_in(ids.to_vec()))
+        .filter(address_book::Column::Alias.ne(""))
+        .order_by_desc(address_book::Column::UpdatedAt)
+        .order_by_desc(address_book::Column::RowId)
+        .all(db)
+        .await?;
+
+    let mut aliases = HashMap::new();
+    for row in rows {
+        let alias = row.alias.trim().to_string();
+        if !alias.is_empty() {
+            aliases.entry(row.id).or_insert(alias);
+        }
+    }
+    Ok(aliases)
+}
+
 pub async fn add(
     db: &DatabaseConnection,
     am: address_book::ActiveModel,
@@ -759,6 +787,96 @@ pub async fn delete_rule(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> 
 mod tests {
     use super::*;
     use sea_orm::{ConnectionTrait, Database, DbBackend, Schema, Set};
+
+    async fn setup_address_book_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(address_book::Entity)),
+        )
+        .await
+        .unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn aliases_by_user_and_ids_prefers_latest_non_empty_alias() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("100".to_string()),
+            user_id: Set(1),
+            alias: Set("old name".to_string()),
+            tags: Set(serde_json::json!([])),
+            updated_at: Set(Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            )),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("100".to_string()),
+            user_id: Set(1),
+            alias: Set("new name".to_string()),
+            tags: Set(serde_json::json!([])),
+            updated_at: Set(Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 2)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            )),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("100".to_string()),
+            user_id: Set(2),
+            alias: Set("other user".to_string()),
+            tags: Set(serde_json::json!([])),
+            updated_at: Set(Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 3)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            )),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        address_book::ActiveModel {
+            id: Set("200".to_string()),
+            user_id: Set(1),
+            alias: Set("   ".to_string()),
+            tags: Set(serde_json::json!([])),
+            updated_at: Set(Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 4)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            )),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let aliases = aliases_by_user_and_ids(&db, 1, &["100".to_string(), "200".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(aliases.get("100").map(String::as_str), Some("new name"));
+        assert_eq!(aliases.get("200"), None);
+        assert_eq!(aliases.len(), 1);
+    }
 
     #[tokio::test]
     async fn everyone_rule_applies_to_any_group() {

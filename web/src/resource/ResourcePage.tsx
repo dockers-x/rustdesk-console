@@ -103,6 +103,9 @@ function normalizeFormPayload(cfg: ResourceConfig, source: Record<string, unknow
     if (field.type === "strategy_options") {
       payload[field.name] = parseStrategyOptionsValue(payload[field.name]);
     }
+    if (field.type === "expiration") {
+      payload[field.name] = expirationValueToTimestamp(payload[field.name]);
+    }
   }
   return payload;
 }
@@ -427,6 +430,11 @@ function asText(v: unknown, key = "", timeZone?: string): string {
   if (key === "expired_at") {
     return formatUnixSeconds(v, timeZone);
   }
+  if (key === "expires_at" || key === "revoked_at") {
+    const n = Number(v);
+    if (Number.isFinite(n) && n <= 0) return "";
+    return formatUnixSeconds(v, timeZone);
+  }
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
@@ -505,6 +513,17 @@ function FieldInput({
   if (field.type === "oauth_provider") {
     return (
       <OAuthProviderInput
+        field={field}
+        value={value}
+        locked={locked}
+        onChange={onChange}
+      />
+    );
+  }
+
+  if (field.type === "expiration") {
+    return (
+      <ExpirationInput
         field={field}
         value={value}
         locked={locked}
@@ -603,6 +622,101 @@ function FieldInput({
           )
         }
       />
+      {field.hint && (
+        <span className="mt-1 block text-xs text-kumo-subtle">
+          {t(field.hint)}
+        </span>
+      )}
+    </label>
+  );
+}
+
+const EXPIRATION_UNITS = [
+  { label: "expireUnitMinutes", value: "minutes", seconds: 60 },
+  { label: "expireUnitHours", value: "hours", seconds: 3_600 },
+  { label: "expireUnitDays", value: "days", seconds: 86_400 },
+  { label: "expireUnitWeeks", value: "weeks", seconds: 604_800 },
+] as const;
+
+type ExpirationUnit = (typeof EXPIRATION_UNITS)[number]["value"];
+
+function expirationValue(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const source = value as Record<string, unknown>;
+    const amount = Number(source.amount ?? 0);
+    const unit = String(source.unit ?? "days") as ExpirationUnit;
+    return {
+      amount: Number.isFinite(amount) && amount > 0 ? amount : 0,
+      unit: EXPIRATION_UNITS.some((candidate) => candidate.value === unit)
+        ? unit
+        : "days",
+    };
+  }
+  const seconds = Number(value ?? 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return { amount: 0, unit: "days" as ExpirationUnit };
+  }
+  return { amount: seconds, unit: "days" as ExpirationUnit };
+}
+
+function expirationValueToTimestamp(value: unknown) {
+  const parsed = expirationValue(value);
+  if (parsed.amount <= 0) return 0;
+  const unit = EXPIRATION_UNITS.find((candidate) => candidate.value === parsed.unit);
+  if (!unit) return 0;
+  return Math.floor(Date.now() / 1000) + Math.floor(parsed.amount * unit.seconds);
+}
+
+function ExpirationInput({
+  field,
+  value,
+  locked,
+  onChange,
+}: {
+  field: FieldDef;
+  value: unknown;
+  locked: boolean;
+  onChange: (v: unknown) => void;
+}) {
+  const { t } = useTranslation();
+  const current = expirationValue(value);
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm">{t(field.label)}</span>
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(96px,auto)] gap-2">
+        <Input
+          aria-label={t(field.label)}
+          className="w-full"
+          type="number"
+          min={0}
+          step={1}
+          value={String(current.amount)}
+          disabled={locked}
+          onChange={(e) =>
+            onChange({
+              ...current,
+              amount: Number(e.target.value) || 0,
+            })
+          }
+        />
+        <select
+          className="h-9 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+          value={current.unit}
+          disabled={locked || current.amount <= 0}
+          onChange={(e) =>
+            onChange({
+              ...current,
+              unit: e.target.value as ExpirationUnit,
+            })
+          }
+        >
+          {EXPIRATION_UNITS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {t(option.label)}
+            </option>
+          ))}
+        </select>
+      </div>
       {field.hint && (
         <span className="mt-1 block text-xs text-kumo-subtle">
           {t(field.hint)}

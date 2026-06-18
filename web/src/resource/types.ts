@@ -12,6 +12,7 @@ export type FieldType =
   | "password"
   | "switch"
   | "select"
+  | "expiration"
   | "strategy_options"
   | "textarea";
 

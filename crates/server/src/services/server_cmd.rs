@@ -324,9 +324,23 @@ pub fn spawn_saved_relay_pool_sync(db: DatabaseConnection, config: Arc<Config>) 
 
 pub async fn check_relay_pool(input: &str) -> Result<Vec<RelayServerCheck>, String> {
     let servers = normalize_relay_pool(input)?;
-    let mut checks = Vec::with_capacity(servers.len());
-    for server in servers {
-        checks.push(check_one_relay_server(server).await);
+    let handles: Vec<_> = servers
+        .into_iter()
+        .map(|server| {
+            let label = server.clone();
+            (label, tokio::spawn(check_one_relay_server(server)))
+        })
+        .collect();
+    let mut checks = Vec::with_capacity(handles.len());
+    for (server, handle) in handles {
+        match handle.await {
+            Ok(check) => checks.push(check),
+            Err(e) => checks.push(RelayServerCheck {
+                server,
+                ok: false,
+                message: format!("check task failed: {e}"),
+            }),
+        }
     }
     Ok(checks)
 }

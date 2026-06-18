@@ -10,6 +10,8 @@ import { WebClientActions } from "../components/WebClientActions";
 import { renderStrategyOptionsSummary } from "./strategyOptions";
 import type { ResourceConfig } from "./types";
 
+const PEER_ONLINE_WINDOW_SECONDS = 90;
+
 const statusCol = {
   key: "status",
   label: "status",
@@ -106,6 +108,38 @@ const monoCol = (key: string, label: string, width = "max-w-44") => ({
     );
   },
 });
+const peerOnlineStatusCol = {
+  key: "__online_status",
+  label: "status",
+  render: (r: Record<string, unknown>, t: (k: string) => string) => {
+    const lastOnline = Number(r.last_online_time ?? 0);
+    const online =
+      Number.isFinite(lastOnline) &&
+      lastOnline > 0 &&
+      Date.now() / 1000 - lastOnline <= PEER_ONLINE_WINDOW_SECONDS;
+    return (
+      <span
+        className={`inline-flex min-h-7 items-center gap-2 rounded-md border px-2.5 text-xs font-medium ${
+          online
+            ? "border-kumo-success/25 bg-kumo-success-tint/60 text-kumo-success"
+            : "border-kumo-line bg-kumo-base text-kumo-subtle"
+        }`}
+      >
+        <span className="relative flex size-2.5" aria-hidden="true">
+          {online ? (
+            <>
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-kumo-success opacity-60 motion-reduce:hidden" />
+              <span className="relative inline-flex size-2.5 rounded-full bg-kumo-success" />
+            </>
+          ) : (
+            <span className="inline-flex size-2.5 rounded-full bg-kumo-subtle/60" />
+          )}
+        </span>
+        {t(online ? "online" : "offline")}
+      </span>
+    );
+  },
+};
 const adminCol = {
   key: "is_admin",
   label: "isAdmin",
@@ -375,7 +409,13 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         relation: STRATEGY_RELATION,
         defaultValue: 0,
       },
-      { name: "expires_at", label: "expiredAt", type: "number", defaultValue: 0 },
+      {
+        name: "expires_at",
+        label: "expiredAt",
+        type: "expiration",
+        defaultValue: 0,
+        hint: "expireRelativeHint",
+      },
       { name: "max_uses", label: "maxUses", type: "number", defaultValue: 0 },
     ],
     rowActions: (r) => <DeploymentTokenActions id={Number(r.id ?? 0)} />,
@@ -927,6 +967,7 @@ export const MY_RESOURCES: ResourceConfig[] = [
     ],
     columns: [
       { key: "id", label: "deviceId" },
+      peerOnlineStatusCol,
       { key: "hostname", label: "hostname" },
       { key: "os", label: "os" },
       { key: "username", label: "username" },

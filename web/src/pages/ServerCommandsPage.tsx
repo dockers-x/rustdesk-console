@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Info } from "@phosphor-icons/react";
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
@@ -108,6 +109,8 @@ export function ServerCommandsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ServerCommand | null>(null);
   const [sendResult, setSendResult] = useState("");
   const [sendError, setSendError] = useState("");
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [relayServers, setRelayServers] = useState("");
   const [relayChecks, setRelayChecks] = useState<RelayServerCheck[]>([]);
   const [alwaysUseRelay, setAlwaysUseRelay] = useState(false);
@@ -277,6 +280,10 @@ export function ServerCommandsPage() {
     setSendError("");
     setSendOpen(true);
   };
+  const reachableRelayCount = relayChecks.filter((item) => item.ok).length;
+  const relayCheckSummary = t("relayPoolCheckSummary")
+    .replace("{{ok}}", String(reachableRelayCount))
+    .replace("{{total}}", String(relayChecks.length));
 
   return (
     <div>
@@ -344,6 +351,14 @@ export function ServerCommandsPage() {
                         ? t("relayPoolPersisted")
                         : t("relayPoolDefault")}
                     </Badge>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t("relayPoolInfo")}
+                      onClick={() => setRulesOpen(true)}
+                    >
+                      <Info size={16} aria-hidden />
+                    </Button>
                   </div>
                   <p className="mt-1 text-xs leading-5 text-kumo-subtle">
                     {t("relayPoolHint")}
@@ -407,21 +422,33 @@ export function ServerCommandsPage() {
                 </Button>
               </div>
               {relayChecks.length > 0 && (
-                <div className="mt-3 grid gap-2">
-                  {relayChecks.map((item) => (
-                    <div
-                      key={item.server}
-                      className="flex flex-col gap-1 rounded-md border border-kumo-line px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <span className="break-all font-mono">{item.server}</span>
-                      <span className="flex items-center gap-2 text-kumo-subtle">
+                <div className="mt-3 rounded-lg border border-kumo-line bg-kumo-elevated">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-kumo-line px-3 py-2">
+                    <span className="text-sm font-medium">
+                      {t("relayPoolCheckResults")}
+                    </span>
+                    <span className="text-xs text-kumo-subtle">
+                      {relayCheckSummary}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-kumo-line">
+                    {relayChecks.map((item) => (
+                      <div
+                        key={item.server}
+                        className="grid gap-1 px-3 py-2 text-xs sm:grid-cols-[minmax(0,220px)_auto_minmax(0,1fr)] sm:items-center sm:gap-3"
+                      >
+                        <span className="break-all font-mono text-kumo-default">
+                          {item.server}
+                        </span>
                         <Badge variant={item.ok ? "success" : "error"}>
                           {item.ok ? t("ok") : t("error")}
                         </Badge>
-                        <span className="break-all">{item.message}</span>
-                      </span>
-                    </div>
-                  ))}
+                        <span className="break-all text-kumo-subtle">
+                          {item.message}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -447,59 +474,108 @@ export function ServerCommandsPage() {
               </div>
             </div>
 
-            <div className="grid gap-2">
-              <span className="text-sm">{t("alwaysUseRelay")}</span>
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={alwaysUseRelay}
-                    onChange={(e) => {
-                      setAlwaysUseRelay(e.target.checked);
-                      setControlError("");
-                    }}
-                  />
-                  {alwaysUseRelay ? t("enabled") : t("disabled")}
-                </label>
-                <Button
-                  variant="secondary"
-                  disabled={!status[ID_TARGET]}
-                  loading={updateAlwaysUseRelay.isPending}
-                  onClick={() => updateAlwaysUseRelay.mutate()}
-                >
-                  {t("applyAlwaysUseRelay")}
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={!status[ID_TARGET]}
-                  loading={queryIpBlocker.isPending}
-                  onClick={() => queryIpBlocker.mutate()}
-                >
-                  {t("ipBlockerSnapshot")}
-                </Button>
-              </div>
+            <div className="rounded-lg border border-kumo-line bg-kumo-base">
+              <button
+                type="button"
+                className="flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 px-4 py-2 text-left"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((open) => !open)}
+              >
+                <span>
+                  <span className="block text-sm font-medium">
+                    {t("advancedRelayOptions")}
+                  </span>
+                  <span className="block text-xs leading-5 text-kumo-subtle">
+                    {t("advancedRelayOptionsHint")}
+                  </span>
+                </span>
+                <span className="text-sm text-kumo-subtle" aria-hidden="true">
+                  {advancedOpen ? "−" : "+"}
+                </span>
+              </button>
+              {advancedOpen && (
+                <div className="grid gap-4 border-t border-kumo-line p-4">
+                  <div className="grid gap-2">
+                    <span className="text-sm font-medium">
+                      {t("alwaysUseRelay")}
+                    </span>
+                    <p className="text-xs leading-5 text-kumo-subtle">
+                      {t("alwaysUseRelayHint")}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={alwaysUseRelay}
+                          onChange={(e) => {
+                            setAlwaysUseRelay(e.target.checked);
+                            setControlError("");
+                          }}
+                        />
+                        {alwaysUseRelay ? t("enabled") : t("disabled")}
+                      </label>
+                      <Button
+                        variant="secondary"
+                        disabled={!status[ID_TARGET]}
+                        loading={updateAlwaysUseRelay.isPending}
+                        onClick={() => updateAlwaysUseRelay.mutate()}
+                      >
+                        {t("applyAlwaysUseRelay")}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    <span className="text-sm font-medium">
+                      {t("ipBlockerSnapshot")}
+                    </span>
+                    <p className="text-xs leading-5 text-kumo-subtle">
+                      {t("ipBlockerSnapshotHint")}
+                    </p>
+                    <Button
+                      className="w-fit"
+                      variant="secondary"
+                      disabled={!status[ID_TARGET]}
+                      loading={queryIpBlocker.isPending}
+                      onClick={() => queryIpBlocker.mutate()}
+                    >
+                      {t("ipBlockerSnapshot")}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-          <div className="grid gap-4">
-            <div>
-              <span className="mb-1 block text-sm">{t("result")}</span>
-              <pre className="max-h-56 min-h-24 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-kumo-line bg-kumo-base p-3 text-xs text-kumo-default">
-                {controlError || controlMessage || "—"}
-              </pre>
-            </div>
-            <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
-              <h3 className="text-sm font-semibold">{t("relayPoolRules")}</h3>
-              <ul className="mt-2 grid gap-2 text-xs leading-5 text-kumo-subtle">
-                <li>{t("relayPoolRuleAddress")}</li>
-                <li>{t("relayPoolRuleKey")}</li>
-                <li>{t("relayPoolRuleClient")}</li>
-                <li>{t("relayPoolRulePersist")}</li>
-                <li>{t("relayPoolRuleClear")}</li>
-              </ul>
-            </div>
+          <div>
+            <span className="mb-1 block text-sm">{t("result")}</span>
+            <pre className="max-h-56 min-h-24 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-kumo-line bg-kumo-base p-3 text-xs text-kumo-default">
+              {controlError || controlMessage || "—"}
+            </pre>
           </div>
         </div>
       </section>
+
+      <Dialog.Root open={rulesOpen} onOpenChange={setRulesOpen}>
+        <Dialog size="base" className={dialogPanelClass}>
+          <DialogHeader
+            title={t("relayPoolRules")}
+            description={t("relayPoolHint")}
+          />
+          <DialogBody>
+            <ul className="grid gap-3 text-sm leading-6 text-kumo-subtle">
+              <li>{t("relayPoolRuleAddress")}</li>
+              <li>{t("relayPoolRuleKey")}</li>
+              <li>{t("relayPoolRuleClient")}</li>
+              <li>{t("relayPoolRulePersist")}</li>
+              <li>{t("relayPoolRuleClear")}</li>
+            </ul>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setRulesOpen(false)}>
+              {t("close")}
+            </Button>
+          </DialogFooter>
+        </Dialog>
+      </Dialog.Root>
 
       <div className="overflow-x-auto rounded-lg border border-kumo-line">
         <Table>
