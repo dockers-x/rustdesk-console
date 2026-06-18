@@ -12,8 +12,8 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 use entity::{
-    address_book, address_book_collection, address_book_collection_rule, audit_file,
-    deployment_event, deployment_token, group, login_log, peer,
+    address_book, address_book_collection, address_book_collection_rule, deployment_event,
+    deployment_token, group, login_log, peer,
 };
 
 use crate::http::middleware::{AcceptLang, ClientIp, DeploymentAuth, RustClientUser};
@@ -1497,31 +1497,9 @@ pub async fn audit_conn_active(
 }
 
 pub async fn audit_file(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
-    let g = |k: &str| {
-        body.get(k)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-    let gi = |k: &str| body.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-    let gb = |k: &str| body.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
-    let am = audit_file::ActiveModel {
-        from_peer: Set(g("from_peer")),
-        info: Set(g("info")),
-        is_file: Set(gb("is_file")),
-        path: Set(g("path")),
-        peer_id: Set(g("peer_id")),
-        r#type: Set(gi("type") as i32),
-        uuid: Set(g("uuid")),
-        ip: Set(g("ip")),
-        num: Set(gi("num") as i32),
-        from_name: Set(g("from_name")),
-        created_at: Set(services::now()),
-        updated_at: Set(services::now()),
-        ..Default::default()
-    };
-    use sea_orm::ActiveModelTrait;
-    let _ = am.insert(&state.db).await;
+    if let Err(e) = services::audit::record_file_event(&state.db, &body).await {
+        tracing::warn!("failed to record audit file event: {e}");
+    }
     Json(Value::Null).into_response()
 }
 

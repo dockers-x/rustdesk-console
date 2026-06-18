@@ -304,6 +304,18 @@ fn i32_field(body: &JsonValue, key: &str) -> i32 {
     i32::try_from(i64_field(body, key)).unwrap_or(0)
 }
 
+fn bool_field(body: &JsonValue, key: &str) -> bool {
+    match body.get(key) {
+        Some(JsonValue::Bool(v)) => *v,
+        Some(JsonValue::String(v)) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "true" | "y" | "yes" | "1"
+        ),
+        Some(JsonValue::Number(v)) => v.as_i64().unwrap_or(0) != 0,
+        _ => false,
+    }
+}
+
 fn value_to_string(value: &JsonValue) -> String {
     match value {
         JsonValue::String(s) => s.clone(),
@@ -342,6 +354,10 @@ mod tests {
             .create_table_from_entity(audit_conn::Entity)
             .to_owned();
         db.execute(backend.build(&stmt)).await.unwrap();
+        let stmt = schema
+            .create_table_from_entity(audit_file::Entity)
+            .to_owned();
+        db.execute(backend.build(&stmt)).await.unwrap();
         db
     }
 
@@ -352,6 +368,19 @@ mod tests {
     async fn only_conn_row(db: &DatabaseConnection) -> audit_conn::Model {
         audit_conn::Entity::find()
             .order_by_asc(audit_conn::Column::Id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn count_file_rows(db: &DatabaseConnection) -> u64 {
+        audit_file::Entity::find().count(db).await.unwrap()
+    }
+
+    async fn only_file_row(db: &DatabaseConnection) -> audit_file::Model {
+        audit_file::Entity::find()
+            .order_by_asc(audit_file::Column::Id)
             .one(db)
             .await
             .unwrap()
@@ -477,6 +506,42 @@ mod tests {
 
         assert_eq!(event.session_id, "17409556129324805845");
     }
+
+    #[tokio::test]
+    async fn file_event_maps_rustdesk_client_fields_like_go_api() {
+        let db = setup_audit_db().await;
+
+        record_file_event(
+            &db,
+            &json!({
+                "id": "182921366",
+                "uuid": "u-1",
+                "peer_id": "1139987256",
+                "type": 1,
+                "path": "/tmp/report.txt",
+                "is_file": true,
+                "info": serde_json::json!({
+                    "ip": "103.156.242.225",
+                    "name": "SYSTEM",
+                    "num": 3,
+                    "files": [["report.txt", 1024]]
+                }).to_string()
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(count_file_rows(&db).await, 1);
+        let row = only_file_row(&db).await;
+        assert_eq!(row.peer_id, "182921366");
+        assert_eq!(row.from_peer, "1139987256");
+        assert_eq!(row.from_name, "SYSTEM");
+        assert_eq!(row.ip, "103.156.242.225");
+        assert_eq!(row.num, 3);
+        assert_eq!(row.path, "/tmp/report.txt");
+        assert!(row.is_file);
+        assert_eq!(row.r#type, 1);
+    }
 }
 
 // ---- AuditFile ----
@@ -516,6 +581,72 @@ pub async fn file_list(
         page_size: page_size as i64,
         total,
     })
+}
+
+pub async fn record_file_event(db: &DatabaseConnection, body: &JsonValue) -> Result<(), DbErr> {
+    let event = FileEvent::from_json(body);
+    let now = crate::services::now();
+    let am = audit_file::ActiveModel {
+        from_peer: Set(event.from_peer),
+        info: Set(event.info),
+        is_file: Set(event.is_file),
+        path: Set(event.path),
+        peer_id: Set(event.peer_id),
+        r#type: Set(event.r#type),
+        uuid: Set(event.uuid),
+        ip: Set(event.ip),
+        num: Set(event.num),
+        from_name: Set(event.from_name),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    am.insert(db).await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileEvent {
+    peer_id: String,
+    from_peer: String,
+    info: String,
+    is_file: bool,
+    path: String,
+    r#type: i32,
+    uuid: String,
+    ip: String,
+    num: i32,
+    from_name: String,
+}
+
+impl FileEvent {
+    fn from_json(body: &JsonValue) -> Self {
+        let info = string_field(body, "info");
+        let info_json = serde_json::from_str::<JsonValue>(&info).unwrap_or(JsonValue::Null);
+        let body_num = i32_field(body, "num");
+        let info_num = i32_field(&info_json, "num");
+
+        Self {
+            // RustDesk posts `id` as the local device and `peer_id` as the remote side.
+            // The original Go API stores local as peer_id and remote as from_peer.
+            peer_id: first_non_empty(&[string_field(body, "id"), string_field(body, "peer_id")]),
+            from_peer: first_non_empty(&[
+                string_field(body, "from_peer"),
+                string_field(body, "peer_id"),
+            ]),
+            info,
+            is_file: bool_field(body, "is_file"),
+            path: string_field(body, "path"),
+            r#type: i32_field(body, "type"),
+            uuid: string_field(body, "uuid"),
+            ip: first_non_empty(&[string_field(body, "ip"), string_field(&info_json, "ip")]),
+            num: if body_num != 0 { body_num } else { info_num },
+            from_name: first_non_empty(&[
+                string_field(body, "from_name"),
+                string_field(&info_json, "name"),
+            ]),
+        }
+    }
 }
 
 pub async fn file_info_by_id(

@@ -163,6 +163,19 @@ fn tags_are_non_empty(tags: &Value) -> bool {
     matches!(tags, Value::Array(items) if !items.is_empty())
 }
 
+fn bool_field(fields: &Value, key: &str) -> Option<bool> {
+    match fields.get(key) {
+        Some(Value::Bool(v)) => Some(*v),
+        Some(Value::String(v)) => match v.trim().to_ascii_lowercase().as_str() {
+            "true" | "y" | "yes" | "1" => Some(true),
+            "false" | "n" | "no" | "0" | "" => Some(false),
+            _ => None,
+        },
+        Some(Value::Number(v)) => v.as_i64().map(|n| n != 0),
+        _ => None,
+    }
+}
+
 fn merge_peer_for_add(target: &mut address_book::Model, source: address_book::Model) {
     merge_non_empty_string(&mut target.username, source.username);
     merge_non_empty_string(&mut target.password, source.password);
@@ -224,8 +237,14 @@ pub async fn delete(db: &DatabaseConnection, row_id: i32) -> Result<(), DbErr> {
 /// Apply allowed-field updates to an address book peer (≈ `UpdateByMap`).
 fn apply_peer_update_fields(peer: &mut address_book::Model, fields: &Value) {
     if let Some(obj) = fields.as_object() {
+        if let Some(v) = obj.get("username").and_then(|v| v.as_str()) {
+            peer.username = v.to_string();
+        }
         if let Some(v) = obj.get("password").and_then(|v| v.as_str()) {
             peer.password = v.to_string();
+        }
+        if let Some(v) = obj.get("hostname").and_then(|v| v.as_str()) {
+            peer.hostname = v.to_string();
         }
         if let Some(v) = obj.get("hash").and_then(|v| v.as_str()) {
             peer.hash = v.to_string();
@@ -236,8 +255,28 @@ fn apply_peer_update_fields(peer: &mut address_book::Model, fields: &Value) {
         if let Some(v) = obj.get("note").and_then(|v| v.as_str()) {
             peer.note = v.to_string();
         }
+        if let Some(v) = obj.get("platform").and_then(|v| v.as_str()) {
+            peer.platform = v.to_string();
+        }
         if let Some(v) = obj.get("tags") {
             peer.tags = v.clone();
+        }
+        if let Some(v) = bool_field(fields, "forceAlwaysRelay") {
+            peer.force_always_relay = v;
+        }
+        if let Some(v) = obj.get("rdpPort").and_then(|v| v.as_str()) {
+            peer.rdp_port = v.to_string();
+        }
+        if let Some(v) = obj.get("rdpUsername").and_then(|v| v.as_str()) {
+            peer.rdp_username = v.to_string();
+        }
+        if let Some(v) = obj.get("loginName").and_then(|v| v.as_str()) {
+            peer.login_name = v.to_string();
+        }
+        if let Some(v) =
+            bool_field(fields, "sameServer").or_else(|| bool_field(fields, "same_server"))
+        {
+            peer.same_server = v;
         }
     }
 }
@@ -1193,6 +1232,100 @@ mod tests {
 
         assert!(updated);
         assert_eq!(row.note, "new note");
+    }
+
+    #[tokio::test]
+    async fn update_fields_by_identity_accepts_recent_peer_sync_fields() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("1380385931".to_string()),
+            user_id: Set(1),
+            collection_id: Set(7),
+            username: Set("old-user".to_string()),
+            hostname: Set("old-host".to_string()),
+            platform: Set("Windows".to_string()),
+            hash: Set("old-hash".to_string()),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let updated = update_fields_by_identity(
+            &db,
+            1,
+            "1380385931",
+            7,
+            &serde_json::json!({
+                "id": "1380385931",
+                "username": "czyt",
+                "hostname": "hpdev",
+                "platform": "Linux",
+                "hash": "new-hash"
+            }),
+        )
+        .await
+        .unwrap();
+
+        let row = info_by_user_id_and_id_and_cid(&db, 1, "1380385931", 7)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(updated);
+        assert_eq!(row.username, "czyt");
+        assert_eq!(row.hostname, "hpdev");
+        assert_eq!(row.platform, "Linux");
+        assert_eq!(row.hash, "new-hash");
+    }
+
+    #[tokio::test]
+    async fn update_fields_by_identity_accepts_client_peer_metadata_fields() {
+        let db = setup_address_book_db().await;
+
+        address_book::ActiveModel {
+            id: Set("1380385931".to_string()),
+            user_id: Set(1),
+            collection_id: Set(7),
+            force_always_relay: Set(false),
+            same_server: Set(false),
+            tags: Set(serde_json::json!([])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let updated = update_fields_by_identity(
+            &db,
+            1,
+            "1380385931",
+            7,
+            &serde_json::json!({
+                "id": "1380385931",
+                "forceAlwaysRelay": "true",
+                "rdpPort": "3389",
+                "rdpUsername": "administrator",
+                "loginName": "czyt",
+                "same_server": true
+            }),
+        )
+        .await
+        .unwrap();
+
+        let row = info_by_user_id_and_id_and_cid(&db, 1, "1380385931", 7)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(updated);
+        assert!(row.force_always_relay);
+        assert_eq!(row.rdp_port, "3389");
+        assert_eq!(row.rdp_username, "administrator");
+        assert_eq!(row.login_name, "czyt");
+        assert!(row.same_server);
     }
 
     #[tokio::test]
