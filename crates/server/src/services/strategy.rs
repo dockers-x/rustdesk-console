@@ -423,7 +423,10 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("access-mode".to_string(), "view".to_string());
         options.insert("enable-remote-printer".to_string(), "N".to_string());
-        options.insert("custom-rendezvous-server".to_string(), "hbbs.example".to_string());
+        options.insert(
+            "custom-rendezvous-server".to_string(),
+            "hbbs.example".to_string(),
+        );
         options.insert("proxy-password".to_string(), "secret".to_string());
 
         let encoded = encode_config_options(options).unwrap();

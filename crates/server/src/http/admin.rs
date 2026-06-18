@@ -103,7 +103,9 @@ pub async fn login(
         .await
         {
             Ok(ut) => ut,
-            Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+            Err(e) => {
+                return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e))
+            }
         };
         state.limiter.remove_attempts(&ip);
         return resp::success(AdminLoginPayload::from_user(&user, ut.token));
@@ -154,10 +156,7 @@ pub async fn login(
     match services::login_security::required_verification(&state.db, &user, &device).await {
         Ok(Some(kind)) => {
             let challenge = match services::login_security::create_login_challenge(
-                &state.db,
-                &user,
-                &device,
-                kind,
+                &state.db, &user, &device, kind,
             )
             .await
             {
@@ -389,8 +388,6 @@ pub async fn config_admin_update(
 pub struct LoginSecurityConfigForm {
     #[serde(default)]
     pub login: services::login_security::LoginSecuritySettings,
-    #[serde(default)]
-    pub email: services::login_security::EmailSettingsUpdate,
 }
 
 pub async fn login_security_config(State(state): State<AppState>, _user: AdminUser) -> Response {
@@ -406,21 +403,119 @@ pub async fn login_security_config_update(
     _user: AdminUser,
     Json(f): Json<LoginSecurityConfigForm>,
 ) -> Response {
-    if f.email.host.chars().count() > 255
-        || f.email.username.chars().count() > 255
-        || f.email.password.chars().count() > 500
-        || f.email.from.chars().count() > 255
-    {
-        return resp::fail(101, state.tr(&lang, "ParamsError"));
-    }
     if let Err(e) = services::login_security::save_login_settings(&state.db, f.login).await {
         return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
-    match services::login_security::save_email_settings(&state.db, f.email).await {
-        Ok(_) => match services::login_security::config_view(&state.db).await {
-            Ok(view) => resp::success(view),
-            Err(e) => resp::fail(101, e.to_string()),
-        },
+    match services::login_security::config_view(&state.db).await {
+        Ok(view) => resp::success(view),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SmtpEmailConfigForm {
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub clear_password: bool,
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub tls: String,
+}
+
+impl SmtpEmailConfigForm {
+    fn into_update(self) -> services::login_security::SmtpEmailConfigUpdate {
+        services::login_security::SmtpEmailConfigUpdate {
+            name: self.name,
+            host: self.host,
+            port: self.port,
+            username: self.username,
+            password: self.password,
+            clear_password: self.clear_password,
+            from: self.from,
+            tls: self.tls,
+        }
+    }
+}
+
+fn validate_smtp_form(lang: &str, state: &AppState, f: &SmtpEmailConfigForm) -> Option<Response> {
+    let name = f.name.trim();
+    let host = f.host.trim();
+    let from = f.from.trim();
+    if name.chars().count() > 80
+        || host.is_empty()
+        || host.chars().count() > 255
+        || f.username.chars().count() > 255
+        || f.password.chars().count() > 500
+        || from.is_empty()
+        || from.chars().count() > 255
+        || !from.contains('@')
+    {
+        return Some(resp::fail(101, state.tr(lang, "ParamsError")));
+    }
+    None
+}
+
+pub async fn smtp_email_configs(State(state): State<AppState>, _user: AdminUser) -> Response {
+    match services::login_security::list_smtp_email_configs(&state.db).await {
+        Ok(list) => resp::success(list),
+        Err(e) => resp::fail(101, e.to_string()),
+    }
+}
+
+pub async fn smtp_email_config_save(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<SmtpEmailConfigForm>,
+) -> Response {
+    if let Some(response) = validate_smtp_form(&lang, &state, &f) {
+        return response;
+    }
+    let id = (f.id > 0).then_some(f.id);
+    match services::login_security::save_smtp_email_config(&state.db, id, f.into_update()).await {
+        Ok(saved) => resp::success(saved),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn smtp_email_config_enable(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    if f.id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::enable_smtp_email_config(&state.db, f.id).await {
+        Ok(saved) => resp::success(saved),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+    }
+}
+
+pub async fn smtp_email_config_delete(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Json(f): Json<IdForm>,
+) -> Response {
+    if f.id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    match services::login_security::delete_smtp_email_config(&state.db, f.id).await {
+        Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
 }
@@ -428,7 +523,18 @@ pub async fn login_security_config_update(
 #[derive(Deserialize, Default)]
 pub struct TestEmailForm {
     #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
     pub to: String,
+}
+
+pub async fn smtp_email_config_test(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: AdminUser,
+    Json(f): Json<TestEmailForm>,
+) -> Response {
+    send_test_email_response(state, lang, user, (f.id > 0).then_some(f.id), f.to).await
 }
 
 pub async fn login_security_test_email(
@@ -437,16 +543,27 @@ pub async fn login_security_test_email(
     user: AdminUser,
     Json(f): Json<TestEmailForm>,
 ) -> Response {
-    let to = if f.to.trim().is_empty() {
+    send_test_email_response(state, lang, user, None, f.to).await
+}
+
+async fn send_test_email_response(
+    state: AppState,
+    lang: String,
+    user: AdminUser,
+    config_id: Option<i32>,
+    to: String,
+) -> Response {
+    let to = if to.trim().is_empty() {
         user.user.email.trim()
     } else {
-        f.to.trim()
+        to.trim()
     };
     if to.is_empty() || !to.contains('@') {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
     match services::login_security::send_test_email(
         &state.db,
+        config_id,
         to,
         "RustDesk Console test email",
         "This is a RustDesk Console SMTP configuration test email.",
@@ -477,6 +594,39 @@ pub async fn config_server_update(
 pub async fn config_deployment(State(state): State<AppState>, _user: BackendUser) -> Response {
     let cfg = state.webclient_config.get().await;
     resp::success(crate::support::deployment_config::build(&cfg))
+}
+
+pub async fn config_webclient_capabilities(
+    State(state): State<AppState>,
+    _user: BackendUser,
+) -> Response {
+    resp::success(webclient_capabilities(state.external_webclient.is_some()))
+}
+
+fn webclient_capabilities(has_v2: bool) -> Value {
+    json!({
+        "v1": true,
+        "v2": has_v2,
+        "preferred": if has_v2 { "v2" } else { "v1" },
+    })
+}
+
+#[cfg(test)]
+mod webclient_capability_tests {
+    use super::*;
+
+    #[test]
+    fn prefers_v2_only_when_external_webclient_is_available() {
+        let without_v2 = webclient_capabilities(false);
+        assert_eq!(without_v2["v1"], true);
+        assert_eq!(without_v2["v2"], false);
+        assert_eq!(without_v2["preferred"], "v1");
+
+        let with_v2 = webclient_capabilities(true);
+        assert_eq!(with_v2["v1"], true);
+        assert_eq!(with_v2["v2"], true);
+        assert_eq!(with_v2["preferred"], "v2");
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -847,12 +997,10 @@ pub async fn user_current(State(_state): State<AppState>, user: BackendUser) -> 
 }
 
 pub async fn my_security(State(state): State<AppState>, user: BackendUser) -> Response {
-    let trusted_devices = services::login_security::trusted_devices_for_user(
-        &state.db,
-        user.user.id,
-    )
-    .await
-    .unwrap_or_default();
+    let trusted_devices =
+        services::login_security::trusted_devices_for_user(&state.db, user.user.id)
+            .await
+            .unwrap_or_default();
     resp::success(json!({
         "tfa_enabled": user.user.tfa_enabled,
         "tfa_enforced": user.user.tfa_enforced,
@@ -911,7 +1059,10 @@ pub async fn my_tfa_disable(
     }
 }
 
-pub async fn my_trusted_login_devices(State(state): State<AppState>, user: BackendUser) -> Response {
+pub async fn my_trusted_login_devices(
+    State(state): State<AppState>,
+    user: BackendUser,
+) -> Response {
     match services::login_security::trusted_devices_for_user(&state.db, user.user.id).await {
         Ok(list) => resp::success(list),
         Err(e) => resp::fail(101, e.to_string()),

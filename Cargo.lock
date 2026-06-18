@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "entity"
-version = "0.2.19"
+version = "0.2.20"
 dependencies = [
  "chrono",
  "sea-orm",
@@ -2613,8 +2613,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustdesk-client-config"
+version = "0.2.20"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rustdesk-console"
-version = "0.2.19"
+version = "0.2.20"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2636,6 +2645,8 @@ dependencies = [
  "reqwest",
  "rsa",
  "rust-embed",
+ "rustdesk-client-config",
+ "rustdesk-uri",
  "sea-orm",
  "serde",
  "serde_json",
@@ -2653,6 +2664,13 @@ dependencies = [
  "urlencoding",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "rustdesk-uri"
+version = "0.2.20"
+dependencies = [
+ "urlencoding",
 ]
 
 [[package]]

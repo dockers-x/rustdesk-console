@@ -51,6 +51,7 @@ interface DeploymentCommandSet {
 interface DeploymentConfig {
   encoded_config: string;
   mobile_config_text: string;
+  mobile_config_uri: string;
   filename_hint: string;
   config_command: DeploymentCommandSet;
   option_commands: DeploymentCommandSet;
@@ -1243,9 +1244,12 @@ function DeploymentPreview({
               value={deployment.filename_hint}
             />
           </div>
-          <MobileConfigPanel value={deployment.mobile_config_text} />
+          <MobileConfigPanel
+            value={deployment.mobile_config_text}
+            uri={deployment.mobile_config_uri}
+          />
           <div className="rounded-md border border-kumo-line bg-kumo-base p-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-col items-start gap-3">
               <div>
                 <h3 className="text-sm font-semibold">
                   {t("deploymentCommands")}
@@ -1287,7 +1291,7 @@ function DeploymentPreview({
   );
 }
 
-function MobileConfigPanel({ value }: { value: string }) {
+function MobileConfigPanel({ value, uri }: { value: string; uri: string }) {
   const { t } = useTranslation();
   const [qrDataUrl, setQrDataUrl] = useState("");
   const [qrError, setQrError] = useState("");
@@ -1356,6 +1360,11 @@ function MobileConfigPanel({ value }: { value: string }) {
             label={t("mobileConfigText")}
             description={t("mobileConfigTextHint")}
             value={value}
+          />
+          <CopyField
+            label={t("mobileConfigUri")}
+            description={t("mobileConfigUriHint")}
+            value={uri}
           />
         </div>
       </div>

@@ -16,8 +16,8 @@ use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
     audit_conn, audit_file, deployment_event, deployment_token, device_group, group, login_log,
     login_verification, message, message_read, oauth, peer, record_file, server_cmd, share_record,
-    strategy, strategy_assignment, system_setting, tag, trusted_login_device, user, user_third,
-    user_token, version,
+    smtp_email_config, strategy, strategy_assignment, system_setting, tag, trusted_login_device,
+    user, user_third, user_token, version,
 };
 
 use crate::config::{self, Config};
@@ -103,6 +103,7 @@ async fn create_tables(db: &DatabaseConnection, config: &Config) -> anyhow::Resu
     create!(login_log::Entity);
     create!(message::Entity);
     create!(message_read::Entity);
+    create!(smtp_email_config::Entity);
     create!(share_record::Entity);
     create!(audit_conn::Entity);
     create!(audit_file::Entity);

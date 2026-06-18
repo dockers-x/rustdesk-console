@@ -1,7 +1,11 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Serialize;
 
 use crate::support::webclient_config::WebClientConfig;
+use rustdesk_client_config::{
+    config_commands, encode_server_config, filename_hint, mobile_config_text, option_commands,
+    password_commands, setting_option_commands, DesktopCommandSet, ServerConfig,
+};
+use rustdesk_uri::mobile_config_uri;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeploymentConfig {
@@ -14,18 +18,14 @@ pub struct DeploymentConfig {
     pub key: String,
     pub encoded_config: String,
     pub mobile_config_text: String,
+    pub mobile_config_uri: String,
     pub filename_hint: String,
     pub config_command: DeploymentCommandSet,
     pub option_commands: DeploymentCommandSet,
     pub webclient_ws_routes: WebSocketRoutes,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct DeploymentCommandSet {
-    pub linux: Vec<String>,
-    pub macos: Vec<String>,
-    pub windows: Vec<String>,
-}
+pub type DeploymentCommandSet = DesktopCommandSet;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WebSocketRoutes {
@@ -38,14 +38,6 @@ pub struct DeploymentOptions {
     pub permanent_password: String,
     pub approve_mode: String,
     pub verification_method: String,
-}
-
-#[derive(Serialize)]
-struct RustDeskServerConfig<'a> {
-    host: &'a str,
-    relay: &'a str,
-    api: &'a str,
-    key: &'a str,
 }
 
 pub fn build(cfg: &WebClientConfig) -> DeploymentConfig {
@@ -70,49 +62,13 @@ pub fn build_with_options(cfg: &WebClientConfig, options: &DeploymentOptions) ->
     let ws_id_host = cfg.ws_id_host.trim().to_string();
     let ws_relay_host = cfg.ws_relay_host.trim().to_string();
     let key = cfg.key.trim().to_string();
-    let encoded_config = encode_server_config(&id_server, &relay_server, &api_server, &key);
-    let mobile_config_text = format!("config={encoded_config}");
-    let filename_hint = filename_hint(&id_server, &relay_server, &api_server, &key);
-    let mut config_command = DeploymentCommandSet {
-        linux: vec![format!(
-            "sudo rustdesk --config {}",
-            sh_arg(&encoded_config)
-        )],
-        macos: vec![format!(
-            "sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --config {}",
-            sh_arg(&encoded_config)
-        )],
-        windows: vec![format!(
-            "rustdesk.exe --config {}",
-            cmd_arg(&encoded_config)
-        )],
-    };
-    let mut option_commands = DeploymentCommandSet {
-        linux: option_commands(
-            "sudo rustdesk",
-            &id_server,
-            &relay_server,
-            &api_server,
-            &key,
-            sh_arg,
-        ),
-        macos: option_commands(
-            "sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk",
-            &id_server,
-            &relay_server,
-            &api_server,
-            &key,
-            sh_arg,
-        ),
-        windows: option_commands(
-            "rustdesk.exe",
-            &id_server,
-            &relay_server,
-            &api_server,
-            &key,
-            cmd_arg,
-        ),
-    };
+    let server_config = ServerConfig::new(&id_server, &relay_server, &api_server, &key);
+    let encoded_config = encode_server_config(&server_config);
+    let mobile_config_text = mobile_config_text(&encoded_config);
+    let mobile_config_uri = mobile_config_uri(&encoded_config);
+    let filename_hint = filename_hint(&server_config);
+    let mut config_command = config_commands(&encoded_config);
+    let mut option_commands = option_commands(&server_config);
     append_deployment_options(&mut config_command, options);
     append_deployment_options(&mut option_commands, options);
     let webclient_ws_routes = ws_routes(&ws_host, &ws_id_host, &ws_relay_host);
@@ -127,6 +83,7 @@ pub fn build_with_options(cfg: &WebClientConfig, options: &DeploymentOptions) ->
         key,
         encoded_config,
         mobile_config_text,
+        mobile_config_uri,
         filename_hint,
         config_command,
         option_commands,
@@ -136,19 +93,7 @@ pub fn build_with_options(cfg: &WebClientConfig, options: &DeploymentOptions) ->
 
 fn append_deployment_options(commands: &mut DeploymentCommandSet, options: &DeploymentOptions) {
     let password = options.permanent_password.trim();
-    if password.is_empty() {
-    } else {
-        commands
-            .linux
-            .push(format!("sudo rustdesk --password {}", sh_arg(password)));
-        commands.macos.push(format!(
-            "sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --password {}",
-            sh_arg(password)
-        ));
-        commands
-            .windows
-            .push(format!("rustdesk.exe --password {}", cmd_arg(password)));
-    }
+    commands.extend(password_commands(password));
     append_option_if_valid(
         commands,
         "approve-mode",
@@ -165,16 +110,7 @@ fn append_option_if_valid(commands: &mut DeploymentCommandSet, name: &str, value
     if value.is_empty() {
         return;
     }
-    commands
-        .linux
-        .push(format!("sudo rustdesk --option {name} {}", sh_arg(value)));
-    commands.macos.push(format!(
-        "sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --option {name} {}",
-        sh_arg(value)
-    ));
-    commands
-        .windows
-        .push(format!("rustdesk.exe --option {name} {}", cmd_arg(value)));
+    commands.extend(setting_option_commands(name, value));
 }
 
 fn normalize_approve_mode(value: &str) -> &str {
@@ -193,55 +129,6 @@ fn normalize_verification_method(value: &str) -> &str {
         "use-both-passwords" => "use-both-passwords",
         _ => "",
     }
-}
-
-fn encode_server_config(host: &str, relay: &str, api: &str, key: &str) -> String {
-    let json = serde_json::to_vec(&RustDeskServerConfig {
-        host,
-        relay,
-        api,
-        key,
-    })
-    .unwrap_or_default();
-    URL_SAFE_NO_PAD
-        .encode(json)
-        .chars()
-        .rev()
-        .collect::<String>()
-}
-
-fn filename_hint(host: &str, relay: &str, api: &str, key: &str) -> String {
-    let mut parts = vec![format!("host={host}")];
-    if !api.is_empty() {
-        parts.push(format!("api={api}"));
-    }
-    if !key.is_empty() {
-        parts.push(format!("key={key}"));
-    }
-    if !relay.is_empty() {
-        parts.push(format!("relay={relay}"));
-    }
-    format!("rustdesk-{}.exe", parts.join(","))
-}
-
-fn option_commands(
-    bin: &str,
-    id_server: &str,
-    relay_server: &str,
-    api_server: &str,
-    key: &str,
-    quote: fn(&str) -> String,
-) -> Vec<String> {
-    [
-        ("custom-rendezvous-server", id_server),
-        ("relay-server", relay_server),
-        ("api-server", api_server),
-        ("key", key),
-    ]
-    .into_iter()
-    .filter(|(_, value)| !value.trim().is_empty())
-    .map(|(name, value)| format!("{bin} --option {name} {}", quote(value)))
-    .collect()
 }
 
 fn ws_routes(ws_host: &str, ws_id_host: &str, ws_relay_host: &str) -> WebSocketRoutes {
@@ -286,26 +173,19 @@ fn normalize_ws_base(value: &str) -> String {
     value.to_string()
 }
 
-fn sh_arg(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn cmd_arg(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\\\""))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
     #[test]
     fn encodes_rustdesk_import_string_as_reversed_urlsafe_base64_json() {
-        let encoded = encode_server_config(
+        let encoded = encode_server_config(&ServerConfig::new(
             "id.example.com:21116",
             "relay.example.com:21117",
             "https://api.example.com",
             "pk",
-        );
+        ));
         let normalized = encoded.chars().rev().collect::<String>();
         let decoded = URL_SAFE_NO_PAD.decode(normalized).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
@@ -318,18 +198,24 @@ mod tests {
     #[test]
     fn builds_plain_filename_hint_supported_by_rustdesk() {
         assert_eq!(
-            filename_hint("id.example.com:21116", "relay.example.com:21117", "https://api.example.com", "pk"),
+            filename_hint(&ServerConfig::new(
+                "id.example.com:21116",
+                "relay.example.com:21117",
+                "https://api.example.com",
+                "pk",
+            )),
             "rustdesk-host=id.example.com:21116,api=https://api.example.com,key=pk,relay=relay.example.com:21117.exe"
         );
     }
 
     #[test]
     fn skips_empty_option_commands() {
+        let commands = option_commands(&ServerConfig::new("id.example.com:21116", "", "", "pk"));
         assert_eq!(
-            option_commands("rustdesk", "id.example.com:21116", "", "", "pk", sh_arg),
+            commands.linux,
             vec![
-                "rustdesk --option custom-rendezvous-server 'id.example.com:21116'",
-                "rustdesk --option key 'pk'",
+                "sudo rustdesk --option custom-rendezvous-server 'id.example.com:21116'",
+                "sudo rustdesk --option key 'pk'",
             ]
         );
     }
@@ -350,11 +236,6 @@ mod tests {
         );
         assert_eq!(routes.id, "wss://rd.example.com:21118");
         assert_eq!(routes.relay, "wss://rd.example.com:21119");
-    }
-
-    #[test]
-    fn shell_quotes_single_quotes() {
-        assert_eq!(sh_arg("a'b"), "'a'\\''b'");
     }
 
     #[test]
@@ -438,6 +319,7 @@ mod tests {
         let deployment = build_with_password(&cfg, "do-not-store");
         assert!(!deployment.encoded_config.contains("do-not-store"));
         assert!(!deployment.mobile_config_text.contains("do-not-store"));
+        assert!(!deployment.mobile_config_uri.contains("do-not-store"));
         assert!(!deployment.filename_hint.contains("do-not-store"));
         let normalized = deployment.encoded_config.chars().rev().collect::<String>();
         let decoded = URL_SAFE_NO_PAD.decode(normalized).unwrap();
@@ -446,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn mobile_config_text_reuses_encoded_config() {
+    fn mobile_config_outputs_reuse_encoded_config() {
         let cfg = WebClientConfig {
             id_server: "id.example.com:21116".to_string(),
             relay_server: "relay.example.com:21117".to_string(),
@@ -459,6 +341,48 @@ mod tests {
             deployment.mobile_config_text,
             format!("config={}", deployment.encoded_config)
         );
+        assert_eq!(
+            deployment.mobile_config_uri,
+            format!("rustdesk://config/{}", deployment.encoded_config)
+        );
+    }
+
+    #[test]
+    fn build_keeps_each_input_server_setting_in_the_expected_output() {
+        let cfg = WebClientConfig {
+            id_server: "id.example.com:21116".to_string(),
+            relay_server: "relay.example.com:21117".to_string(),
+            api_server: "https://api.example.com".to_string(),
+            ws_host: "https://ws.example.com".to_string(),
+            ws_id_host: "wss://id-ws.example.com:21118".to_string(),
+            ws_relay_host: "wss://relay-ws.example.com:21119".to_string(),
+            key: "server-public-key".to_string(),
+        };
+        let deployment = build(&cfg);
+
+        assert_eq!(deployment.id_server, "id.example.com:21116");
+        assert_eq!(deployment.relay_server, "relay.example.com:21117");
+        assert_eq!(deployment.api_server, "https://api.example.com");
+        assert_eq!(deployment.ws_host, "https://ws.example.com");
+        assert_eq!(deployment.ws_id_host, "wss://id-ws.example.com:21118");
+        assert_eq!(deployment.ws_relay_host, "wss://relay-ws.example.com:21119");
+        assert_eq!(deployment.key, "server-public-key");
+        assert_eq!(
+            deployment.webclient_ws_routes.id,
+            "wss://id-ws.example.com:21118"
+        );
+        assert_eq!(
+            deployment.webclient_ws_routes.relay,
+            "wss://relay-ws.example.com:21119"
+        );
+
+        let normalized = deployment.encoded_config.chars().rev().collect::<String>();
+        let decoded = URL_SAFE_NO_PAD.decode(normalized).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(json["host"], "id.example.com:21116");
+        assert_eq!(json["relay"], "relay.example.com:21117");
+        assert_eq!(json["api"], "https://api.example.com");
+        assert_eq!(json["key"], "server-public-key");
     }
 
     #[test]
@@ -543,6 +467,8 @@ mod tests {
         assert!(!deployment
             .mobile_config_text
             .contains("verification-method"));
+        assert!(!deployment.mobile_config_uri.contains("approve-mode"));
+        assert!(!deployment.mobile_config_uri.contains("verification-method"));
         assert!(!deployment.filename_hint.contains("approve-mode"));
         assert!(!deployment.filename_hint.contains("verification-method"));
         let normalized = deployment.encoded_config.chars().rev().collect::<String>();

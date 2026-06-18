@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 entity = { path = "../entity" }
+rustdesk-client-config = { path = "../rustdesk-client-config" }
+rustdesk-uri = { path = "../rustdesk-uri" }
 
 tokio = { workspace = true }
 axum = { workspace = true }

@@ -8,12 +8,11 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
-use ::entity::{login_verification, system_setting, trusted_login_device, user};
+use ::entity::{login_verification, smtp_email_config, system_setting, trusted_login_device, user};
 
 use crate::services::now;
 
 const LOGIN_SECURITY_KEY: &str = "login_security";
-const EMAIL_SETTINGS_KEY: &str = "email_settings";
 const TOTP_PERIOD: i64 = 30;
 const TOTP_DIGITS: u32 = 6;
 const CHALLENGE_TTL_SECS: i64 = 10 * 60;
@@ -62,6 +61,18 @@ impl Default for EmailSettings {
 }
 
 impl EmailSettings {
+    fn from_model(row: &smtp_email_config::Model) -> Self {
+        Self {
+            host: row.host.clone(),
+            port: row.port.clamp(0, u16::MAX as i32) as u16,
+            username: row.username.clone(),
+            password: row.password.clone(),
+            from: row.from_address.clone(),
+            tls: row.tls.clone(),
+        }
+        .normalized()
+    }
+
     pub fn normalized(mut self) -> Self {
         self.host = self.host.trim().to_string();
         self.username = self.username.trim().to_string();
@@ -84,7 +95,9 @@ impl EmailSettings {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct EmailSettingsUpdate {
+pub struct SmtpEmailConfigUpdate {
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub host: String,
     #[serde(default)]
@@ -102,26 +115,38 @@ pub struct EmailSettingsUpdate {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EmailSettingsView {
+pub struct SmtpEmailConfigView {
+    pub id: i32,
+    pub name: String,
     pub host: String,
     pub port: u16,
     pub username: String,
     pub from: String,
     pub tls: String,
+    pub enabled: bool,
     pub password_set: bool,
     pub configured: bool,
+    pub created_at: Option<chrono::NaiveDateTime>,
+    pub updated_at: Option<chrono::NaiveDateTime>,
 }
 
-impl EmailSettingsView {
-    fn from_settings(settings: &EmailSettings) -> Self {
+impl SmtpEmailConfigView {
+    fn from_model(row: &smtp_email_config::Model) -> Self {
+        let settings = EmailSettings::from_model(row);
+        let configured = settings.is_configured();
         Self {
-            host: settings.host.clone(),
+            id: row.id,
+            name: row.name.clone(),
+            host: settings.host,
             port: settings.port,
-            username: settings.username.clone(),
-            from: settings.from.clone(),
-            tls: settings.tls.clone(),
-            password_set: !settings.password.is_empty(),
-            configured: settings.is_configured(),
+            username: settings.username,
+            from: settings.from,
+            tls: settings.tls,
+            enabled: row.enabled,
+            password_set: !row.password.is_empty(),
+            configured,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }
     }
 }
@@ -129,7 +154,6 @@ impl EmailSettingsView {
 #[derive(Debug, Clone, Serialize)]
 pub struct LoginSecurityConfigView {
     pub login: LoginSecuritySettings,
-    pub email: EmailSettingsView,
 }
 
 #[derive(Debug, Clone)]
@@ -157,11 +181,7 @@ pub struct LoginChallenge {
 
 pub async fn config_view(db: &DatabaseConnection) -> Result<LoginSecurityConfigView, DbErr> {
     let login = login_settings(db).await?;
-    let email = email_settings(db).await?;
-    Ok(LoginSecurityConfigView {
-        login,
-        email: EmailSettingsView::from_settings(&email),
-    })
+    Ok(LoginSecurityConfigView { login })
 }
 
 pub async fn login_settings(db: &DatabaseConnection) -> Result<LoginSecuritySettings, DbErr> {
@@ -177,46 +197,164 @@ pub async fn save_login_settings(
     save_json_setting(db, LOGIN_SECURITY_KEY, &settings).await
 }
 
-pub async fn email_settings(db: &DatabaseConnection) -> Result<EmailSettings, DbErr> {
-    load_json_setting(db, EMAIL_SETTINGS_KEY)
+pub async fn list_smtp_email_configs(
+    db: &DatabaseConnection,
+) -> Result<Vec<SmtpEmailConfigView>, DbErr> {
+    smtp_email_config::Entity::find()
+        .order_by_desc(smtp_email_config::Column::Enabled)
+        .order_by_asc(smtp_email_config::Column::Id)
+        .all(db)
         .await
-        .map(|v| v.unwrap_or_default())
+        .map(|rows| rows.iter().map(SmtpEmailConfigView::from_model).collect())
 }
 
-pub async fn save_email_settings(
+pub async fn save_smtp_email_config(
     db: &DatabaseConnection,
-    update: EmailSettingsUpdate,
-) -> Result<EmailSettingsView, DbErr> {
-    let current = email_settings(db).await?;
-    let mut next = EmailSettings {
-        host: update.host,
+    id: Option<i32>,
+    update: SmtpEmailConfigUpdate,
+) -> Result<SmtpEmailConfigView, DbErr> {
+    let settings = EmailSettings {
+        host: update.host.trim().to_string(),
         port: update.port,
-        username: update.username,
-        password: if update.clear_password {
-            String::new()
-        } else if update.password.is_empty() {
-            current.password
-        } else {
-            update.password
-        },
-        from: update.from,
-        tls: update.tls,
+        username: update.username.trim().to_string(),
+        password: update.password,
+        from: update.from.trim().to_string(),
+        tls: update.tls.trim().to_string(),
     }
     .normalized();
-    if next.port == 0 {
-        next.port = current.port;
+    let name = update.name.trim().to_string();
+
+    let row = if let Some(id) = id.filter(|id| *id > 0) {
+        let row = smtp_email_config::Entity::find_by_id(id)
+            .one(db)
+            .await?
+            .ok_or_else(|| DbErr::RecordNotFound(format!("smtp_email_config {id}")))?;
+        let current_password = row.password.clone();
+        let mut am: smtp_email_config::ActiveModel = row.into();
+        am.name = Set(name);
+        am.host = Set(settings.host);
+        am.port = Set(i32::from(settings.port));
+        am.username = Set(settings.username);
+        am.password = Set(if update.clear_password {
+            String::new()
+        } else if settings.password.is_empty() {
+            current_password
+        } else {
+            settings.password
+        });
+        am.from_address = Set(settings.from);
+        am.tls = Set(settings.tls);
+        am.updated_at = Set(now());
+        am.update(db).await?
+    } else {
+        let enabled = smtp_email_config::Entity::find().count(db).await? == 0;
+        smtp_email_config::ActiveModel {
+            name: Set(name),
+            host: Set(settings.host),
+            port: Set(i32::from(settings.port)),
+            username: Set(settings.username),
+            password: Set(settings.password),
+            from_address: Set(settings.from),
+            tls: Set(settings.tls),
+            enabled: Set(enabled),
+            created_at: Set(now()),
+            updated_at: Set(now()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?
+    };
+    Ok(SmtpEmailConfigView::from_model(&row))
+}
+
+pub async fn enable_smtp_email_config(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<SmtpEmailConfigView, DbErr> {
+    let row = smtp_email_config::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound(format!("smtp_email_config {id}")))?;
+    let enabled_rows = smtp_email_config::Entity::find()
+        .filter(smtp_email_config::Column::Enabled.eq(true))
+        .all(db)
+        .await?;
+    for enabled in enabled_rows {
+        if enabled.id == id {
+            continue;
+        }
+        let mut am: smtp_email_config::ActiveModel = enabled.into();
+        am.enabled = Set(false);
+        am.updated_at = Set(now());
+        am.update(db).await?;
     }
-    save_json_setting(db, EMAIL_SETTINGS_KEY, &next).await?;
-    Ok(EmailSettingsView::from_settings(&next))
+    let mut am: smtp_email_config::ActiveModel = row.into();
+    am.enabled = Set(true);
+    am.updated_at = Set(now());
+    let row = am.update(db).await?;
+    Ok(SmtpEmailConfigView::from_model(&row))
+}
+
+pub async fn delete_smtp_email_config(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    let row = smtp_email_config::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound(format!("smtp_email_config {id}")))?;
+    let was_enabled = row.enabled;
+    smtp_email_config::Entity::delete_by_id(id).exec(db).await?;
+    if was_enabled {
+        let has_enabled = smtp_email_config::Entity::find()
+            .filter(smtp_email_config::Column::Enabled.eq(true))
+            .one(db)
+            .await?
+            .is_some();
+        if !has_enabled {
+            if let Some(next) = smtp_email_config::Entity::find()
+                .order_by_asc(smtp_email_config::Column::Id)
+                .one(db)
+                .await?
+            {
+                let mut am: smtp_email_config::ActiveModel = next.into();
+                am.enabled = Set(true);
+                am.updated_at = Set(now());
+                am.update(db).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn email_settings(db: &DatabaseConnection) -> Result<EmailSettings, DbErr> {
+    smtp_email_config::Entity::find()
+        .filter(smtp_email_config::Column::Enabled.eq(true))
+        .one(db)
+        .await
+        .map(|row| {
+            row.map(|row| EmailSettings::from_model(&row))
+                .unwrap_or_default()
+        })
+}
+
+async fn email_settings_by_id(db: &DatabaseConnection, id: i32) -> Result<EmailSettings, DbErr> {
+    smtp_email_config::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .map(|row| EmailSettings::from_model(&row))
+        .ok_or_else(|| DbErr::RecordNotFound(format!("smtp_email_config {id}")))
 }
 
 pub async fn send_test_email(
     db: &DatabaseConnection,
+    config_id: Option<i32>,
     to: &str,
     title: &str,
     body: &str,
 ) -> Result<(), String> {
-    let settings = email_settings(db).await.map_err(|e| e.to_string())?;
+    let settings = match config_id.filter(|id| *id > 0) {
+        Some(id) => email_settings_by_id(db, id).await,
+        None => email_settings(db).await,
+    }
+    .map_err(|e| e.to_string())?;
     send_email(&settings, to, title, body).await
 }
 
@@ -264,7 +402,13 @@ pub async fn create_login_challenge(
         let body = format!(
             "Your RustDesk Console verification code is: {code}\n\nThis code expires in 10 minutes."
         );
-        send_email(&email, &u.email, "RustDesk Console verification code", &body).await?;
+        send_email(
+            &email,
+            &u.email,
+            "RustDesk Console verification code",
+            &body,
+        )
+        .await?;
     }
 
     login_verification::ActiveModel {
@@ -461,8 +605,8 @@ pub async fn delete_trusted_device(
     user_id: Option<i32>,
     id: i32,
 ) -> Result<(), DbErr> {
-    let mut delete = trusted_login_device::Entity::delete_many()
-        .filter(trusted_login_device::Column::Id.eq(id));
+    let mut delete =
+        trusted_login_device::Entity::delete_many().filter(trusted_login_device::Column::Id.eq(id));
     if let Some(user_id) = user_id {
         delete = delete.filter(trusted_login_device::Column::UserId.eq(user_id));
     }
@@ -491,10 +635,13 @@ async fn trust_device(
     if device.id.trim().is_empty() && device.uuid.trim().is_empty() {
         return Ok(());
     }
-    let existing = trusted_devices_for_user(db, user_id).await?.into_iter().find(|row| {
-        (!device.uuid.is_empty() && row.device_uuid == device.uuid)
-            || (!device.id.is_empty() && row.device_id == device.id)
-    });
+    let existing = trusted_devices_for_user(db, user_id)
+        .await?
+        .into_iter()
+        .find(|row| {
+            (!device.uuid.is_empty() && row.device_uuid == device.uuid)
+                || (!device.id.is_empty() && row.device_id == device.id)
+        });
     let now_ts = Utc::now().timestamp();
     match existing {
         Some(row) => {
@@ -541,7 +688,9 @@ async fn load_json_setting<T: for<'de> Deserialize<'de>>(
     else {
         return Ok(None);
     };
-    serde_json::from_str(&row.value).map(Some).map_err(|e| DbErr::Custom(e.to_string()))
+    serde_json::from_str(&row.value)
+        .map(Some)
+        .map_err(|e| DbErr::Custom(e.to_string()))
 }
 
 async fn save_json_setting<T: Serialize>(
@@ -591,7 +740,12 @@ async fn send_email(
     let body = body.to_string();
     tokio::task::spawn_blocking(move || {
         let email = Message::builder()
-            .from(settings.from.parse().map_err(|e| format!("invalid sender: {e}"))?)
+            .from(
+                settings
+                    .from
+                    .parse()
+                    .map_err(|e| format!("invalid sender: {e}"))?,
+            )
             .to(to.parse().map_err(|e| format!("invalid recipient: {e}"))?)
             .subject(title)
             .body(body)
@@ -599,8 +753,9 @@ async fn send_email(
         let mut builder = match settings.tls.as_str() {
             "none" => SmtpTransport::builder_dangerous(settings.host.as_str()),
             "tls" => SmtpTransport::relay(settings.host.as_str()).map_err(|e| e.to_string())?,
-            _ => SmtpTransport::starttls_relay(settings.host.as_str())
-                .map_err(|e| e.to_string())?,
+            _ => {
+                SmtpTransport::starttls_relay(settings.host.as_str()).map_err(|e| e.to_string())?
+            }
         };
         builder = builder.port(settings.port);
         if !settings.username.is_empty() {
@@ -712,6 +867,19 @@ impl VerificationKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm::{ConnectionTrait, Database, Schema};
+
+    async fn smtp_test_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(db.get_database_backend());
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(smtp_email_config::Entity)),
+        )
+        .await
+        .unwrap();
+        db
+    }
 
     #[test]
     fn base32_round_trips_secret_bytes() {
@@ -724,5 +892,57 @@ mod tests {
     fn totp_matches_rfc_6238_sample_for_sha1_8_digits_truncated_to_current_helper() {
         let secret = b"12345678901234567890";
         assert_eq!(totp_at(secret, 1), "287082");
+    }
+
+    #[tokio::test]
+    async fn smtp_configs_enable_switch_and_delete_fallback() {
+        let db = smtp_test_db().await;
+        let first = save_smtp_email_config(
+            &db,
+            None,
+            SmtpEmailConfigUpdate {
+                name: "Primary".to_string(),
+                host: "smtp1.example.com".to_string(),
+                port: 587,
+                username: "u1".to_string(),
+                password: "p1".to_string(),
+                from: "noreply1@example.com".to_string(),
+                tls: "starttls".to_string(),
+                clear_password: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(first.enabled);
+        assert!(first.password_set);
+
+        let second = save_smtp_email_config(
+            &db,
+            None,
+            SmtpEmailConfigUpdate {
+                name: "Backup".to_string(),
+                host: "smtp2.example.com".to_string(),
+                port: 465,
+                username: "u2".to_string(),
+                password: "p2".to_string(),
+                from: "noreply2@example.com".to_string(),
+                tls: "tls".to_string(),
+                clear_password: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!second.enabled);
+
+        enable_smtp_email_config(&db, second.id).await.unwrap();
+        let rows = list_smtp_email_configs(&db).await.unwrap();
+        assert_eq!(rows.iter().filter(|row| row.enabled).count(), 1);
+        assert!(rows.iter().any(|row| row.id == second.id && row.enabled));
+
+        delete_smtp_email_config(&db, second.id).await.unwrap();
+        let rows = list_smtp_email_configs(&db).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, first.id);
+        assert!(rows[0].enabled);
     }
 }

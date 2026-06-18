@@ -148,9 +148,10 @@ The embedded WebClient supports three WebSocket modes:
 
 To override the embedded WebClient, put a single `web.zip` at `./data/web.zip` and
 restart the service. The server extracts it into a temporary directory at startup,
-serves `/webclient/` and `/webclient2/` from that directory first, and falls back to
-the embedded resources if the file is missing or invalid. The zip must contain a
-root `index.html`; it is not unpacked into the persistent `data` directory.
+serves it as `/webclient2/`. The built-in `/webclient/` remains the embedded v1
+client. If `web.zip` is missing or invalid, `/webclient2/` is unavailable and the
+admin UI falls back to v1 links. The zip must contain a root `index.html`; it is
+not unpacked into the persistent `data` directory.
 
 ## OAuth and OIDC
 

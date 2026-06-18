@@ -2,10 +2,14 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { apiPost, ApiError } from "../lib/api";
+import {
+  openWebClientPeer,
+  rustdeskNativeUri,
+} from "../lib/rustdeskLinks";
 
 function openNativeClient(peerId: string) {
   const a = document.createElement("a");
-  a.href = `rustdesk://${peerId}`;
+  a.href = rustdeskNativeUri(peerId);
   a.rel = "noreferrer";
   document.body.appendChild(a);
   a.click();
@@ -23,6 +27,7 @@ export function PeerQuickActions({
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [openingWebClient, setOpeningWebClient] = useState(false);
 
   const addToAddressBook = async () => {
     if (!rowId) {
@@ -64,6 +69,15 @@ export function PeerQuickActions({
     }
   };
 
+  const openWebClient = async () => {
+    setOpeningWebClient(true);
+    try {
+      await openWebClientPeer(peerId);
+    } finally {
+      setOpeningWebClient(false);
+    }
+  };
+
   if (!peerId) return null;
 
   return (
@@ -74,13 +88,8 @@ export function PeerQuickActions({
       <Button
         size="sm"
         variant="ghost"
-        onClick={() =>
-          window.open(
-            `${window.location.origin}/webclient/#/${encodeURIComponent(peerId)}`,
-            "_blank",
-            "noopener,noreferrer",
-          )
-        }
+        disabled={openingWebClient}
+        onClick={() => void openWebClient()}
       >
         {t("webClient")}
       </Button>

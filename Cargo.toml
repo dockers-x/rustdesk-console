@@ -1,9 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/entity", "crates/server"]
+members = [
+    "crates/entity",
+    "crates/rustdesk-client-config",
+    "crates/rustdesk-uri",
+    "crates/server",
+]
 
 [workspace.package]
-version = "0.2.19"
+version = "0.2.20"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/czyt/rustdesk-console"

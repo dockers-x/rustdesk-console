@@ -1,0 +1,13 @@
+[package]
+name = "rustdesk-uri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+
+[lib]
+name = "rustdesk_uri"
+path = "src/lib.rs"
+
+[dependencies]
+urlencoding = { workspace = true }

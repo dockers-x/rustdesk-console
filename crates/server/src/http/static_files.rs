@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use rustdesk_uri::WebClientVersion;
 use serde_json::json;
 
 use crate::assets::{AdminAssets, Resources};
@@ -41,26 +42,26 @@ fn respond_html(body: String) -> Response {
 
 /// Serve `web/<path>` from the embedded Flutter client, with SPA fallback to
 /// `web/index.html`.
-async fn web_asset(state: &AppState, path: &str) -> Response {
-    if let Some(external) = &state.external_webclient {
-        if let Some(response) = external_web_asset(state, external, path).await {
-            return response;
-        }
-    }
-    embedded_web_asset(path)
-}
-
-fn embedded_web_asset(path: &str) -> Response {
+fn embedded_web_asset(path: &str, version: WebClientVersion) -> Response {
     let Some(path) = safe_web_asset_path(path) else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
     let path_for_mime = path.to_string_lossy().to_string();
     let full = format!("web/{path_for_mime}");
     if let Some(bytes) = Resources::read(&full) {
+        if path_for_mime == "index.html" {
+            return match String::from_utf8(bytes) {
+                Ok(html) => respond_html(rewrite_webclient_index_html(html, version)),
+                Err(err) => respond(err.into_bytes(), &path_for_mime),
+            };
+        }
         return respond(bytes, &path_for_mime);
     }
     if let Some(bytes) = Resources::read("web/index.html") {
-        return respond(bytes, "index.html");
+        return match String::from_utf8(bytes) {
+            Ok(html) => respond_html(rewrite_webclient_index_html(html, version)),
+            Err(err) => respond(err.into_bytes(), "index.html"),
+        };
     }
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
@@ -69,6 +70,7 @@ async fn external_web_asset(
     state: &AppState,
     external: &ExternalWebClient,
     path: &str,
+    version: WebClientVersion,
 ) -> Option<Response> {
     let Some(relative_path) = safe_web_asset_path(path) else {
         return Some((StatusCode::NOT_FOUND, "not found").into_response());
@@ -78,7 +80,7 @@ async fn external_web_asset(
     let full_path = external.root().join(&relative_path);
     if external_file_exists(&full_path).await {
         if request_path == "index.html" {
-            return render_external_index(state, external).await;
+            return render_external_index(state, external, version).await;
         }
         match tokio::fs::read(&full_path).await {
             Ok(bytes) => {
@@ -96,10 +98,14 @@ async fn external_web_asset(
         }
     }
 
-    render_external_index(state, external).await
+    render_external_index(state, external, version).await
 }
 
-async fn render_external_index(state: &AppState, external: &ExternalWebClient) -> Option<Response> {
+async fn render_external_index(
+    state: &AppState,
+    external: &ExternalWebClient,
+    version: WebClientVersion,
+) -> Option<Response> {
     let index_path = external.root().join("index.html");
     let bytes = match tokio::fs::read(&index_path).await {
         Ok(bytes) => bytes,
@@ -126,17 +132,21 @@ async fn render_external_index(state: &AppState, external: &ExternalWebClient) -
     let custom_config = external_custom_config(&cfg);
     let bootstrap =
         external_webclient_bootstrap_tag(&cfg, state.config.rustdesk.webclient_magic_queryonline);
-    let html = html
-        .replace(
-            r#"<base href="/static/web/" />"#,
-            r#"<base href="/webclient/" />"#,
-        )
-        .replace(
-            r#"<base href="/static/web/">"#,
-            r#"<base href="/webclient/">"#,
-        )
-        .replace("{{CUSTOM_CONFIG}}", &custom_config);
+    let html =
+        rewrite_webclient_index_html(html, version).replace("{{CUSTOM_CONFIG}}", &custom_config);
     Some(respond_html(inject_external_bootstrap(html, &bootstrap)))
+}
+
+fn rewrite_webclient_index_html(html: String, version: WebClientVersion) -> String {
+    let base_href = format!(r#"<base href="{}">"#, version.path());
+    let base_href_self_closing = format!(r#"<base href="{}" />"#, version.path());
+
+    html.replace(r#"<base href="/static/web/" />"#, &base_href_self_closing)
+        .replace(r#"<base href="/static/web/">"#, &base_href)
+        .replace(r#"<base href="/webclient/" />"#, &base_href_self_closing)
+        .replace(r#"<base href="/webclient/">"#, &base_href)
+        .replace(r#"<base href="/webclient2/" />"#, &base_href_self_closing)
+        .replace(r#"<base href="/webclient2/">"#, &base_href)
 }
 
 fn patch_external_webclient_asset(path: &str, bytes: Vec<u8>) -> Vec<u8> {
@@ -561,12 +571,46 @@ fn looks_like_windows_drive_path(value: &str) -> bool {
     bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
 }
 
-pub async fn webclient_index(State(state): State<AppState>) -> Response {
-    web_asset(&state, "").await
+pub async fn webclient_v1_index(State(state): State<AppState>) -> Response {
+    let _ = state;
+    embedded_web_asset("", WebClientVersion::V1)
 }
 
-pub async fn webclient_path(State(state): State<AppState>, Path(path): Path<String>) -> Response {
-    web_asset(&state, &path).await
+pub async fn webclient_v1_path(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Response {
+    let _ = state;
+    embedded_web_asset(&path, WebClientVersion::V1)
+}
+
+pub async fn webclient_v2_index(State(state): State<AppState>) -> Response {
+    let Some(external) = &state.external_webclient else {
+        return webclient_v2_unavailable();
+    };
+    external_web_asset(&state, external, "", WebClientVersion::V2)
+        .await
+        .unwrap_or_else(webclient_v2_unavailable)
+}
+
+pub async fn webclient_v2_path(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> Response {
+    let Some(external) = &state.external_webclient else {
+        return webclient_v2_unavailable();
+    };
+    external_web_asset(&state, external, &path, WebClientVersion::V2)
+        .await
+        .unwrap_or_else(webclient_v2_unavailable)
+}
+
+fn webclient_v2_unavailable() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        "WebClient v2 is unavailable because data/web.zip was not loaded",
+    )
+        .into_response()
 }
 
 /// Serve `<path>` from the embedded admin SPA, with SPA fallback to `index.html`.
@@ -597,6 +641,7 @@ pub async fn admin_path(Path(path): Path<String>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn sample_webclient_config() -> WebClientConfig {
         WebClientConfig {
@@ -610,16 +655,48 @@ mod tests {
         }
     }
 
+    fn full_webclient_config() -> WebClientConfig {
+        WebClientConfig {
+            id_server: "id.example.com:21116".to_string(),
+            relay_server: "relay.example.com:21117".to_string(),
+            api_server: "https://api.example.com".to_string(),
+            ws_host: "https://ws.example.com".to_string(),
+            ws_id_host: "wss://id-ws.example.com:21118".to_string(),
+            ws_relay_host: "wss://relay-ws.example.com:21119".to_string(),
+            key: "server-public-key".to_string(),
+        }
+    }
+
+    fn ini_map(decoded: &str) -> HashMap<&str, &str> {
+        decoded
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .collect()
+    }
+
     #[test]
     fn external_custom_config_includes_webclient_defaults() {
-        let encoded = external_custom_config(&sample_webclient_config());
+        let encoded = external_custom_config(&full_webclient_config());
         let decoded = String::from_utf8(STANDARD.decode(encoded).unwrap()).unwrap();
+        let fields = ini_map(&decoded);
 
         assert!(decoded.contains("[default-settings]"));
-        assert!(decoded.contains("custom-rendezvous-server=rd.czyt.tech"));
-        assert!(decoded.contains("api-server=https://rd-console.czyt.tech"));
-        assert!(decoded.contains("ws-host=https://rd-ws.czyt.tech"));
-        assert!(decoded.contains("key=ERRhI72zmZHHN5tXiCnS"));
+        assert_eq!(
+            fields.get("custom-rendezvous-server"),
+            Some(&"id.example.com:21116")
+        );
+        assert_eq!(fields.get("relay-server"), Some(&"relay.example.com:21117"));
+        assert_eq!(fields.get("api-server"), Some(&"https://api.example.com"));
+        assert_eq!(fields.get("ws-host"), Some(&"https://ws.example.com"));
+        assert_eq!(
+            fields.get("ws-id-host"),
+            Some(&"wss://id-ws.example.com:21118")
+        );
+        assert_eq!(
+            fields.get("ws-relay-host"),
+            Some(&"wss://relay-ws.example.com:21119")
+        );
+        assert_eq!(fields.get("key"), Some(&"server-public-key"));
     }
 
     #[test]
@@ -635,6 +712,40 @@ mod tests {
         assert!(js.contains("/api/oidc/auth-query"));
         assert!(js.contains("Proxy(NativeWebSocket"));
         assert!(js.contains("rewriteWsUrl(args[0])"));
+    }
+
+    #[test]
+    fn bootstrap_writes_every_input_server_setting() {
+        let js = webclient_bootstrap_js(&full_webclient_config(), 1, true);
+
+        assert!(js.contains("\"custom-rendezvous-server\":\"id.example.com:21116\""));
+        assert!(js.contains("\"relay-server\":\"relay.example.com:21117\""));
+        assert!(js.contains("\"api-server\":\"https://api.example.com\""));
+        assert!(js.contains("\"ws-host\":\"https://ws.example.com\""));
+        assert!(js.contains("\"ws-id-host\":\"wss://id-ws.example.com:21118\""));
+        assert!(js.contains("\"ws-relay-host\":\"wss://relay-ws.example.com:21119\""));
+        assert!(js.contains("\"key\":\"server-public-key\""));
+        assert!(js.contains("\"id\":\"wss://id-ws.example.com:21118\""));
+        assert!(js.contains("\"relay\":\"wss://relay-ws.example.com:21119\""));
+    }
+
+    #[test]
+    fn rewrites_index_base_for_webclient_version() {
+        let html = r#"<html><head><base href="/webclient/"></head></html>"#.to_string();
+
+        let v1 = rewrite_webclient_index_html(html.clone(), WebClientVersion::V1);
+        assert!(v1.contains(r#"<base href="/webclient/">"#));
+
+        let v2 = rewrite_webclient_index_html(html, WebClientVersion::V2);
+        assert!(v2.contains(r#"<base href="/webclient2/">"#));
+        assert!(!v2.contains(r#"<base href="/webclient/">"#));
+    }
+
+    #[test]
+    fn webclient_v2_is_not_available_without_external_zip() {
+        let response = webclient_v2_unavailable();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

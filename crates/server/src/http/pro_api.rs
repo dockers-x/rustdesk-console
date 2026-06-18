@@ -740,11 +740,7 @@ pub async fn user_disable_login_verification(
             return resp::error(format!("user not found: {guid}"));
         };
         if let Err(e) = services::login_security::update_user_login_security(
-            &state.db,
-            &row,
-            false,
-            false,
-            false,
+            &state.db, &row, false, false, false,
         )
         .await
         {

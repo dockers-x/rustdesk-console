@@ -353,10 +353,7 @@ pub async fn login(
     match services::login_security::required_verification(&state.db, &user, &device).await {
         Ok(Some(kind)) => {
             let challenge = match services::login_security::create_login_challenge(
-                &state.db,
-                &user,
-                &device,
-                kind,
+                &state.db, &user, &device, kind,
             )
             .await
             {
@@ -535,7 +532,9 @@ pub async fn sysinfo(
             };
             match services::peer::create(&state.db, am).await {
                 Ok(peer) => peer,
-                Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+                Err(e) => {
+                    return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e))
+                }
             }
         }
         Some(p) => {
@@ -573,7 +572,9 @@ pub async fn sysinfo(
             match services::peer::find_by_id(&state.db, &f.id).await {
                 Ok(Some(peer)) => peer,
                 Ok(None) => return resp::error(state.tr(&lang, "ItemNotFound")),
-                Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+                Err(e) => {
+                    return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e))
+                }
             }
         }
     };
@@ -635,7 +636,9 @@ async fn apply_sysinfo_preset_assignment(state: &AppState, f: &PeerForm, peer: &
                     address_book_note: f.preset_address_book_note.clone(),
                     ..Default::default()
                 };
-                if let Err(e) = assign_peer_to_address_book(state, user, peer, &address_book_name, &cli).await {
+                if let Err(e) =
+                    assign_peer_to_address_book(state, user, peer, &address_book_name, &cli).await
+                {
                     tracing::warn!(
                         "failed to apply sysinfo preset address book {} for {}: {}",
                         address_book_name,

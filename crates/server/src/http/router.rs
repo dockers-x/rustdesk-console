@@ -162,12 +162,12 @@ pub fn build(state: AppState) -> Router {
             .route("/api/server-config", post(api::server_config))
             .route("/api/server-config-v2", post(api::server_config_v2))
             .route("/webclient-config/index.js", get(static_files::config_js))
-            .route("/webclient", get(static_files::webclient_index))
-            .route("/webclient/", get(static_files::webclient_index))
-            .route("/webclient/*path", get(static_files::webclient_path))
-            .route("/webclient2", get(static_files::webclient_index))
-            .route("/webclient2/", get(static_files::webclient_index))
-            .route("/webclient2/*path", get(static_files::webclient_path));
+            .route("/webclient", get(static_files::webclient_v1_index))
+            .route("/webclient/", get(static_files::webclient_v1_index))
+            .route("/webclient/*path", get(static_files::webclient_v1_path))
+            .route("/webclient2", get(static_files::webclient_v2_index))
+            .route("/webclient2/", get(static_files::webclient_v2_index))
+            .route("/webclient2/*path", get(static_files::webclient_v2_path));
     }
 
     app = app.merge(admin_routes());
@@ -230,12 +230,32 @@ fn admin_routes() -> Router<AppState> {
             post(admin::login_security_test_email),
         )
         .route(
+            "/api/admin/config/smtp",
+            get(admin::smtp_email_configs).post(admin::smtp_email_config_save),
+        )
+        .route(
+            "/api/admin/config/smtp/enable",
+            post(admin::smtp_email_config_enable),
+        )
+        .route(
+            "/api/admin/config/smtp/delete",
+            post(admin::smtp_email_config_delete),
+        )
+        .route(
+            "/api/admin/config/smtp/test",
+            post(admin::smtp_email_config_test),
+        )
+        .route(
             "/api/admin/config/server",
             get(admin::config_server).patch(admin::config_server_update),
         )
         .route(
             "/api/admin/config/deployment",
             get(admin::config_deployment).post(admin::config_deployment_preview),
+        )
+        .route(
+            "/api/admin/config/webclient-capabilities",
+            get(admin::config_webclient_capabilities),
         )
         .route(
             "/api/admin/config/record-storage",
@@ -268,7 +288,10 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/user/update", post(admin::user_update))
         .route("/api/admin/user/delete", post(admin::user_delete))
         .route("/api/admin/user/changePwd", post(admin::user_change_pwd))
-        .route("/api/admin/user/security", post(admin::user_security_update))
+        .route(
+            "/api/admin/user/security",
+            post(admin::user_security_update),
+        )
         .route("/api/admin/user/tfa/reset", post(admin::user_tfa_reset))
         .route(
             "/api/admin/user/trusted-login-devices",

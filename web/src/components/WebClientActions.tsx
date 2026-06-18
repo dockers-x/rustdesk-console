@@ -10,6 +10,12 @@ import {
   dialogPanelClass,
 } from "./DialogLayout";
 import { apiPost, ApiError } from "../lib/api";
+import {
+  getPreferredWebClientVersion,
+  openWebClientPeer,
+  webClientShareUrl,
+  type WebClientVersion,
+} from "../lib/rustdeskLinks";
 
 const EXPIRE_OPTIONS = [
   { value: 300, labelKey: "expire5m" },
@@ -25,15 +31,6 @@ interface ShareResult {
   share_token: string;
 }
 
-function webClientUrl(peerId: string) {
-  const safeId = encodeURIComponent(peerId);
-  return `${window.location.origin}/webclient/#/${safeId}`;
-}
-
-function shareUrl(token: string) {
-  return `${window.location.origin}/webclient/#/?share_token=${encodeURIComponent(token)}`;
-}
-
 async function copyText(value: string) {
   if (!value) return;
   await navigator.clipboard?.writeText(value);
@@ -42,9 +39,11 @@ async function copyText(value: string) {
 export function WebClientActions({
   peerId,
   share = false,
+  version,
 }: {
   peerId: string;
   share?: boolean;
+  version?: WebClientVersion;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -53,6 +52,7 @@ export function WebClientActions({
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [opening, setOpening] = useState(false);
 
   const reset = () => {
     setPassword("");
@@ -60,6 +60,18 @@ export function WebClientActions({
     setLink("");
     setError("");
     setLoading(false);
+    setOpening(false);
+  };
+
+  const resolveVersion = async () => version ?? (await getPreferredWebClientVersion());
+
+  const openWebClient = async () => {
+    setOpening(true);
+    try {
+      await openWebClientPeer(peerId, version);
+    } finally {
+      setOpening(false);
+    }
   };
 
   const submitShare = async () => {
@@ -79,7 +91,8 @@ export function WebClientActions({
           expire,
         },
       );
-      const url = shareUrl(res.share_token);
+      const selectedVersion = await resolveVersion();
+      const url = webClientShareUrl(res.share_token, selectedVersion);
       setLink(url);
       await copyText(url).catch(() => undefined);
     } catch (err) {
@@ -97,7 +110,8 @@ export function WebClientActions({
       <Button
         size="sm"
         variant="ghost"
-        onClick={() => window.open(webClientUrl(peerId), "_blank", "noopener,noreferrer")}
+        disabled={opening}
+        onClick={() => void openWebClient()}
       >
         {t("webClient")}
       </Button>
