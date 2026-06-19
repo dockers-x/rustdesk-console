@@ -35,7 +35,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 272;
+pub const DATABASE_VERSION: i32 = 273;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 type MigrationFn = for<'a> fn(&'a DatabaseConnection, &'a Config) -> MigrationFuture<'a>;
@@ -62,6 +62,11 @@ const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
         version: 272,
         name: "address book peer notes",
         apply: migration_272,
+    },
+    SchemaMigration {
+        version: 273,
+        name: "smtp sender display names",
+        apply: migration_273,
     },
 ];
 
@@ -161,6 +166,10 @@ fn migration_271<'a>(db: &'a DatabaseConnection, config: &'a Config) -> Migratio
 
 fn migration_272<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_272_address_book_notes(db).await })
+}
+
+fn migration_273<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move { migrate_273_smtp_sender_names(db).await })
 }
 
 async fn migrate_271_legacy_columns(
@@ -358,6 +367,25 @@ async fn migrate_272_address_book_notes(db: &DatabaseConnection) -> anyhow::Resu
             .table(address_book::Entity)
             .add_column(
                 ColumnDef::new(address_book::Column::Note)
+                    .string()
+                    .not_null()
+                    .default(""),
+            )
+            .to_owned();
+        db.execute(backend.build(&stmt)).await?;
+    }
+
+    Ok(())
+}
+
+async fn migrate_273_smtp_sender_names(db: &DatabaseConnection) -> anyhow::Result<()> {
+    let backend = db.get_database_backend();
+
+    if !column_exists(db, "smtp_email_configs", "from_name").await? {
+        let stmt = Table::alter()
+            .table(smtp_email_config::Entity)
+            .add_column(
+                ColumnDef::new(smtp_email_config::Column::FromName)
                     .string()
                     .not_null()
                     .default(""),
@@ -643,7 +671,7 @@ mod tests {
             .map(|row| row.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, vec![271, DATABASE_VERSION]);
+        assert_eq!(versions, vec![271, 272, DATABASE_VERSION]);
     }
 
     #[tokio::test]
@@ -681,6 +709,62 @@ mod tests {
         migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
 
         assert!(column_exists(&db, "address_books", "note").await.unwrap());
+        assert_eq!(
+            latest_schema_version(&db).await.unwrap(),
+            Some(DATABASE_VERSION)
+        );
+        assert_eq!(user::Entity::find().count(&db).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn existing_version_272_database_migrates_smtp_sender_name_column() {
+        let db = memory_db().await;
+        let cfg = test_config("");
+        let i18n = I18n::load("en");
+        let backend = db.get_database_backend();
+
+        db.execute(
+            backend.build(
+                &Schema::new(DbBackend::Sqlite)
+                    .create_table_from_entity(version::Entity)
+                    .to_owned(),
+            ),
+        )
+        .await
+        .unwrap();
+        version::ActiveModel {
+            version: Set(272),
+            created_at: Set(services::now()),
+            updated_at: Set(services::now()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            backend,
+            "CREATE TABLE smtp_email_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL DEFAULT '',
+                host TEXT NOT NULL DEFAULT '',
+                port INTEGER NOT NULL DEFAULT 587,
+                username TEXT NOT NULL DEFAULT '',
+                password TEXT NOT NULL DEFAULT '',
+                from_address TEXT NOT NULL DEFAULT '',
+                tls TEXT NOT NULL DEFAULT 'starttls',
+                enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at DATETIME,
+                updated_at DATETIME
+            )",
+        ))
+        .await
+        .unwrap();
+
+        migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
+
+        assert!(column_exists(&db, "smtp_email_configs", "from_name")
+            .await
+            .unwrap());
         assert_eq!(
             latest_schema_version(&db).await.unwrap(),
             Some(DATABASE_VERSION)

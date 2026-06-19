@@ -19,6 +19,8 @@ pub struct Model {
     pub password: String,
     #[sea_orm(default_value = "")]
     pub from_address: String,
+    #[sea_orm(default_value = "")]
+    pub from_name: String,
     #[sea_orm(default_value = "starttls")]
     pub tls: String,
     #[sea_orm(default_value = false)]

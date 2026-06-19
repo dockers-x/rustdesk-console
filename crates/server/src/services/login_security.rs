@@ -1,7 +1,8 @@
 use chrono::Utc;
 use hmac::{Hmac, Mac};
+use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
-use lettre::{Message, SmtpTransport, Transport};
+use lettre::{Address, Message, SmtpTransport, Transport};
 use rand::RngCore;
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,8 @@ pub struct EmailSettings {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub password: String,
     pub from: String,
+    #[serde(default)]
+    pub from_name: String,
     pub tls: String,
 }
 
@@ -56,6 +59,7 @@ impl Default for EmailSettings {
             username: String::new(),
             password: String::new(),
             from: String::new(),
+            from_name: String::new(),
             tls: "starttls".to_string(),
         }
     }
@@ -69,6 +73,7 @@ impl EmailSettings {
             username: row.username.clone(),
             password: row.password.clone(),
             from: row.from_address.clone(),
+            from_name: row.from_name.clone(),
             tls: row.tls.clone(),
         }
         .normalized()
@@ -78,6 +83,7 @@ impl EmailSettings {
         self.host = self.host.trim().to_string();
         self.username = self.username.trim().to_string();
         self.from = self.from.trim().to_string();
+        self.from_name = self.from_name.trim().to_string();
         self.tls = match self.tls.trim() {
             "none" => "none",
             "tls" => "tls",
@@ -112,6 +118,8 @@ pub struct SmtpEmailConfigUpdate {
     #[serde(default)]
     pub from: String,
     #[serde(default)]
+    pub from_name: String,
+    #[serde(default)]
     pub tls: String,
 }
 
@@ -123,6 +131,7 @@ pub struct SmtpEmailConfigView {
     pub port: u16,
     pub username: String,
     pub from: String,
+    pub from_name: String,
     pub tls: String,
     pub enabled: bool,
     pub password_set: bool,
@@ -142,6 +151,7 @@ impl SmtpEmailConfigView {
             port: settings.port,
             username: settings.username,
             from: settings.from,
+            from_name: settings.from_name,
             tls: settings.tls,
             enabled: row.enabled,
             password_set: !row.password.is_empty(),
@@ -220,6 +230,7 @@ pub async fn save_smtp_email_config(
         username: update.username.trim().to_string(),
         password: update.password,
         from: update.from.trim().to_string(),
+        from_name: update.from_name.trim().to_string(),
         tls: update.tls.trim().to_string(),
     }
     .normalized();
@@ -244,6 +255,7 @@ pub async fn save_smtp_email_config(
             settings.password
         });
         am.from_address = Set(settings.from);
+        am.from_name = Set(settings.from_name);
         am.tls = Set(settings.tls);
         am.updated_at = Set(now());
         am.update(db).await?
@@ -256,6 +268,7 @@ pub async fn save_smtp_email_config(
             username: Set(settings.username),
             password: Set(settings.password),
             from_address: Set(settings.from),
+            from_name: Set(settings.from_name),
             tls: Set(settings.tls),
             enabled: Set(enabled),
             created_at: Set(now()),
@@ -845,13 +858,9 @@ async fn send_email(
     let title = title.to_string();
     let body = body.to_string();
     tokio::task::spawn_blocking(move || {
+        let from = sender_mailbox(&settings)?;
         let email = Message::builder()
-            .from(
-                settings
-                    .from
-                    .parse()
-                    .map_err(|e| format!("invalid sender: {e}"))?,
-            )
+            .from(from)
             .to(to.parse().map_err(|e| format!("invalid recipient: {e}"))?)
             .subject(title)
             .body(body)
@@ -872,6 +881,19 @@ async fn send_email(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn sender_mailbox(settings: &EmailSettings) -> Result<Mailbox, String> {
+    let settings = settings.clone().normalized();
+    let address: Address = settings
+        .from
+        .parse()
+        .map_err(|e| format!("invalid sender: {e}"))?;
+    if settings.from_name.chars().any(char::is_control) {
+        return Err("invalid sender name".to_string());
+    }
+    let name = (!settings.from_name.is_empty()).then_some(settings.from_name);
+    Ok(Mailbox::new(name, address))
 }
 
 fn random_email_code() -> String {
@@ -1000,6 +1022,27 @@ mod tests {
         assert_eq!(totp_at(secret, 1), "287082");
     }
 
+    #[test]
+    fn sender_mailbox_uses_optional_display_name() {
+        let mailbox = sender_mailbox(&EmailSettings {
+            from: "noreply@example.com".to_string(),
+            from_name: " RustDesk Console ".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(mailbox.name.as_deref(), Some("RustDesk Console"));
+        assert_eq!(mailbox.email.to_string(), "noreply@example.com");
+
+        let mailbox = sender_mailbox(&EmailSettings {
+            from: "noreply@example.com".to_string(),
+            from_name: " ".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(mailbox.name, None);
+        assert_eq!(mailbox.email.to_string(), "noreply@example.com");
+    }
+
     #[tokio::test]
     async fn smtp_configs_enable_switch_and_delete_fallback() {
         let db = smtp_test_db().await;
@@ -1013,6 +1056,7 @@ mod tests {
                 username: "u1".to_string(),
                 password: "p1".to_string(),
                 from: "noreply1@example.com".to_string(),
+                from_name: "RustDesk Console".to_string(),
                 tls: "starttls".to_string(),
                 clear_password: false,
             },
@@ -1021,6 +1065,7 @@ mod tests {
         .unwrap();
         assert!(first.enabled);
         assert!(first.password_set);
+        assert_eq!(first.from_name, "RustDesk Console");
 
         let second = save_smtp_email_config(
             &db,
@@ -1032,6 +1077,7 @@ mod tests {
                 username: "u2".to_string(),
                 password: "p2".to_string(),
                 from: "noreply2@example.com".to_string(),
+                from_name: "Backup Console".to_string(),
                 tls: "tls".to_string(),
                 clear_password: false,
             },
@@ -1039,6 +1085,7 @@ mod tests {
         .await
         .unwrap();
         assert!(!second.enabled);
+        assert_eq!(second.from_name, "Backup Console");
 
         enable_smtp_email_config(&db, second.id).await.unwrap();
         let rows = list_smtp_email_configs(&db).await.unwrap();

@@ -54,6 +54,7 @@ interface EmailSettingsView {
   port: number;
   username: string;
   from: string;
+  from_name: string;
   tls: string;
   enabled: boolean;
   password_set: boolean;
@@ -71,6 +72,7 @@ interface EmailSettingsForm {
   password: string;
   clear_password: boolean;
   from: string;
+  from_name: string;
   tls: string;
 }
 type SettingsTab = "site" | "security";
@@ -95,6 +97,7 @@ const emptyEmailForm: EmailSettingsForm = {
   password: "",
   clear_password: false,
   from: "",
+  from_name: "",
   tls: "starttls",
 };
 
@@ -126,6 +129,7 @@ function normalizeEmailConfig(config?: Partial<EmailSettingsView>): EmailSetting
           port: config.port || 587,
           username: config.username ?? "",
           from: config.from ?? "",
+          from_name: config.from_name ?? "",
           tls: config.tls || "starttls",
         }
       : {}),
@@ -245,6 +249,7 @@ export function SystemSettingsPage() {
         password: payload.password,
         clear_password: payload.clear_password,
         from: payload.from.trim(),
+        from_name: payload.from_name.trim(),
         tls: payload.tls,
       }),
     onSuccess: (saved) => {
@@ -815,7 +820,7 @@ export function SystemSettingsPage() {
                           onChange={(e) => updateEmail("password", e.target.value)}
                         />
                       </label>
-                      <label className="block md:col-span-2">
+                      <label className="block">
                         <span className="mb-1.5 block text-sm font-medium">
                           {t("smtpFrom")}
                         </span>
@@ -824,7 +829,20 @@ export function SystemSettingsPage() {
                           type="email"
                           value={emailForm.from}
                           maxLength={255}
+                          autoComplete="email"
                           onChange={(e) => updateEmail("from", e.target.value)}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-medium">
+                          {t("smtpFromName")}
+                        </span>
+                        <Input
+                          aria-label={t("smtpFromName")}
+                          value={emailForm.from_name}
+                          maxLength={120}
+                          placeholder={t("smtpFromNamePlaceholder")}
+                          onChange={(e) => updateEmail("from_name", e.target.value)}
                         />
                       </label>
                       {selectedSmtpConfig?.password_set && (

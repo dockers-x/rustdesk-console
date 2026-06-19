@@ -488,6 +488,8 @@ pub struct SmtpEmailConfigForm {
     #[serde(default)]
     pub from: String,
     #[serde(default)]
+    pub from_name: String,
+    #[serde(default)]
     pub tls: String,
 }
 
@@ -501,6 +503,7 @@ impl SmtpEmailConfigForm {
             password: self.password,
             clear_password: self.clear_password,
             from: self.from,
+            from_name: self.from_name,
             tls: self.tls,
         }
     }
@@ -510,6 +513,7 @@ fn validate_smtp_form(lang: &str, state: &AppState, f: &SmtpEmailConfigForm) -> 
     let name = f.name.trim();
     let host = f.host.trim();
     let from = f.from.trim();
+    let from_name = f.from_name.trim();
     if name.chars().count() > 80
         || host.is_empty()
         || host.chars().count() > 255
@@ -518,6 +522,8 @@ fn validate_smtp_form(lang: &str, state: &AppState, f: &SmtpEmailConfigForm) -> 
         || from.is_empty()
         || from.chars().count() > 255
         || !from.contains('@')
+        || from_name.chars().count() > 120
+        || from_name.chars().any(char::is_control)
     {
         return Some(resp::fail(101, state.tr(lang, "ParamsError")));
     }
