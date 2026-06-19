@@ -69,6 +69,8 @@ export interface RowActionHelpers<T = Record<string, unknown>> {
 export interface FilterDef {
   name: string; // query-param name
   label: string; // i18n key (placeholder)
+  type?: "text" | "select";
+  options?: SelectOption[];
 }
 
 export interface ResourceConfig<T = Record<string, unknown>> {

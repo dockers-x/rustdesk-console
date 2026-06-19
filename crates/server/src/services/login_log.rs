@@ -13,16 +13,29 @@ pub struct LoginLogListResult {
     pub total: i64,
 }
 
+#[derive(Default)]
+pub struct LoginLogFilters {
+    pub user_id: Option<i32>,
+    pub client: Option<String>,
+    pub login_type: Option<String>,
+}
+
 pub async fn list(
     db: &DatabaseConnection,
     page: u64,
     page_size: u64,
-    user_id: Option<i32>,
+    filters: LoginLogFilters,
 ) -> Result<LoginLogListResult, DbErr> {
     let (page, page_size) = paginate(page, page_size);
     let mut q = login_log::Entity::find().filter(login_log::Column::IsDeleted.eq(0));
-    if let Some(uid) = user_id {
+    if let Some(uid) = filters.user_id {
         q = q.filter(login_log::Column::UserId.eq(uid));
+    }
+    if let Some(client) = filters.client.and_then(non_empty) {
+        q = q.filter(login_log::Column::Client.eq(client));
+    }
+    if let Some(login_type) = filters.login_type.and_then(non_empty) {
+        q = q.filter(login_log::Column::Type.eq(login_type));
     }
     let total = q.clone().count(db).await? as i64;
     let list = q
@@ -37,6 +50,11 @@ pub async fn list(
         page_size: page_size as i64,
         total,
     })
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 pub async fn info_by_id(
@@ -86,4 +104,143 @@ pub async fn batch_soft_delete(
         .exec(db)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::now;
+    use sea_orm::{ConnectionTrait, Database, DbBackend, Schema, Set};
+
+    async fn setup_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(login_log::Entity)),
+        )
+        .await
+        .unwrap();
+        db
+    }
+
+    async fn insert_login_log(
+        db: &DatabaseConnection,
+        id: i32,
+        user_id: i32,
+        client: &str,
+        login_type: &str,
+    ) {
+        login_log::ActiveModel {
+            id: Set(id),
+            user_id: Set(user_id),
+            client: Set(client.to_string()),
+            r#type: Set(login_type.to_string()),
+            device_id: Set(format!("device-{id}")),
+            created_at: Set(now()),
+            updated_at: Set(now()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_filters_login_logs_by_user_client_and_type() {
+        let db = setup_db().await;
+        insert_login_log(
+            &db,
+            1,
+            1,
+            login_log::CLIENT_WEB_ADMIN,
+            login_log::TYPE_ACCOUNT,
+        )
+        .await;
+        insert_login_log(&db, 2, 1, login_log::CLIENT_WEB, login_log::TYPE_ACCOUNT).await;
+        insert_login_log(&db, 3, 2, login_log::CLIENT_APP, login_log::TYPE_OAUTH).await;
+
+        let user_rows = list(
+            &db,
+            1,
+            10,
+            LoginLogFilters {
+                user_id: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(user_rows.total, 2);
+
+        let webclient_rows = list(
+            &db,
+            1,
+            10,
+            LoginLogFilters {
+                client: Some(login_log::CLIENT_WEB.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(webclient_rows.total, 1);
+        assert_eq!(webclient_rows.list[0].id, 2);
+
+        let oauth_rows = list(
+            &db,
+            1,
+            10,
+            LoginLogFilters {
+                login_type: Some(login_log::TYPE_OAUTH.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(oauth_rows.total, 1);
+        assert_eq!(oauth_rows.list[0].id, 3);
+
+        let no_rows = list(
+            &db,
+            1,
+            10,
+            LoginLogFilters {
+                user_id: Some(1),
+                login_type: Some(login_log::TYPE_OAUTH.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(no_rows.total, 0);
+    }
+
+    #[tokio::test]
+    async fn list_ignores_blank_filter_values() {
+        let db = setup_db().await;
+        insert_login_log(
+            &db,
+            1,
+            1,
+            login_log::CLIENT_WEB_ADMIN,
+            login_log::TYPE_ACCOUNT,
+        )
+        .await;
+        insert_login_log(&db, 2, 2, login_log::CLIENT_APP, login_log::TYPE_OAUTH).await;
+
+        let rows = list(
+            &db,
+            1,
+            10,
+            LoginLogFilters {
+                client: Some("  ".to_string()),
+                login_type: Some("".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows.total, 2);
+    }
 }

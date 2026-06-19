@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "entity"
-version = "0.2.27"
+version = "0.2.28"
 dependencies = [
  "chrono",
  "sea-orm",
@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-client-config"
-version = "0.2.27"
+version = "0.2.28"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -2623,7 +2623,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-console"
-version = "0.2.27"
+version = "0.2.28"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2669,7 +2669,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-server-control"
-version = "0.2.27"
+version = "0.2.28"
 dependencies = [
  "serde",
  "tokio",
@@ -2677,7 +2677,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-uri"
-version = "0.2.27"
+version = "0.2.28"
 dependencies = [
  "urlencoding",
 ]

@@ -776,6 +776,10 @@ pub struct PageQuery {
     pub user_id: Option<i32>,
     #[serde(default)]
     pub collection_id: Option<i32>,
+    #[serde(default)]
+    pub client: Option<String>,
+    #[serde(default, rename = "type")]
+    pub r#type: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -2389,7 +2393,11 @@ pub async fn login_log_list(
         &state.db,
         q.page.unwrap_or(0),
         q.page_size.unwrap_or(0),
-        None,
+        services::login_log::LoginLogFilters {
+            user_id: None,
+            client: q.client,
+            login_type: q.r#type,
+        },
     )
     .await
     {
@@ -2836,6 +2844,10 @@ pub struct UserIdPageQuery {
     pub page_size: Option<u64>,
     #[serde(default)]
     pub user_id: Option<i32>,
+    #[serde(default)]
+    pub client: Option<String>,
+    #[serde(default, rename = "type")]
+    pub r#type: Option<String>,
 }
 
 pub async fn share_record_list(

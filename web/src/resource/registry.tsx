@@ -2,6 +2,7 @@ import { Badge } from "@cloudflare/kumo/components/badge";
 import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
 import { DeploymentTokenActions } from "../components/DeploymentTokenActions";
 import { OAuthProviderActions } from "../components/OAuthProviderActions";
+import { PeerInfoDrawer } from "../components/PeerInfoDrawer";
 import { PeerQuickActions } from "../components/PeerQuickActions";
 import { OAuthProviderBadge } from "../components/OAuthProviderBadge";
 import { RecordFileActions } from "../components/RecordFileActions";
@@ -198,6 +199,13 @@ const webClientCol = (share = false) => ({
     <WebClientActions peerId={String(r.id ?? "")} share={share} />
   ),
 });
+const peerInfoCol = (scope: "admin" | "my" = "my") => ({
+  key: "__peer_info",
+  label: "deviceInfo",
+  render: (r: Record<string, unknown>) => (
+    <PeerInfoDrawer row={r} scope={scope} />
+  ),
+});
 const peerActionsCol = {
   key: "__peer_actions",
   label: "quickActions",
@@ -280,6 +288,45 @@ const STRATEGY_TARGET_OPTIONS = [
   { label: "targetUser", value: "user" },
   { label: "targetDeviceGroup", value: "device_group" },
 ];
+const LOGIN_TYPE_OPTIONS = [
+  { label: "loginTypeAccount", value: "account" },
+  { label: "loginTypeOauth", value: "oauth" },
+];
+const LOGIN_CLIENT_OPTIONS = [
+  { label: "loginClientWebAdmin", value: "webadmin" },
+  { label: "loginClientWebClient", value: "webclient" },
+  { label: "loginClientApp", value: "app" },
+];
+const loginTypeCol = {
+  key: "type",
+  label: "type",
+  render: (r: Record<string, unknown>, t: (k: string) => string) => {
+    switch (String(r.type ?? "")) {
+      case "account":
+        return t("loginTypeAccount");
+      case "oauth":
+        return t("loginTypeOauth");
+      default:
+        return String(r.type ?? "") || "—";
+    }
+  },
+};
+const loginClientCol = {
+  key: "client",
+  label: "client",
+  render: (r: Record<string, unknown>, t: (k: string) => string) => {
+    switch (String(r.client ?? "")) {
+      case "webadmin":
+        return t("loginClientWebAdmin");
+      case "webclient":
+        return t("loginClientWebClient");
+      case "app":
+        return t("loginClientApp");
+      default:
+        return String(r.client ?? "") || "—";
+    }
+  },
+};
 const USER_RELATION = {
   api: "/api/admin/user",
   labelFields: ["username", "nickname", "email", "id"],
@@ -611,6 +658,8 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     ],
     columns: [
       { key: "id", label: "deviceId" },
+      peerOnlineStatusCol,
+      peerInfoCol("admin"),
       { key: "hostname", label: "hostname" },
       { key: "os", label: "os" },
       { key: "username", label: "username" },
@@ -912,13 +961,17 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     api: "/api/admin/login_log",
     canCreate: false,
     canEdit: false,
+    filters: [
+      { name: "type", label: "type", type: "select", options: LOGIN_TYPE_OPTIONS },
+      { name: "client", label: "client", type: "select", options: LOGIN_CLIENT_OPTIONS },
+    ],
     columns: [
       { key: "id", label: "id" },
       { key: "user_id", label: "userId" },
-      { key: "client", label: "client" },
+      loginClientCol,
       { key: "device_id", label: "deviceId" },
       { key: "ip", label: "ip" },
-      { key: "type", label: "type" },
+      loginTypeCol,
       { key: "platform", label: "platform" },
       { key: "created_at", label: "createdAt" },
     ],
@@ -1042,6 +1095,7 @@ export const MY_RESOURCES: ResourceConfig[] = [
     columns: [
       { key: "id", label: "deviceId" },
       peerOnlineStatusCol,
+      peerInfoCol("my"),
       { key: "hostname", label: "hostname" },
       { key: "os", label: "os" },
       { key: "username", label: "username" },
@@ -1234,12 +1288,16 @@ export const MY_RESOURCES: ResourceConfig[] = [
     api: "/api/admin/my/login_log",
     canCreate: false,
     canEdit: false,
+    filters: [
+      { name: "type", label: "type", type: "select", options: LOGIN_TYPE_OPTIONS },
+      { name: "client", label: "client", type: "select", options: LOGIN_CLIENT_OPTIONS },
+    ],
     columns: [
       { key: "id", label: "id" },
-      { key: "client", label: "client" },
+      loginClientCol,
       { key: "device_id", label: "deviceId" },
       { key: "ip", label: "ip" },
-      { key: "type", label: "type" },
+      loginTypeCol,
       { key: "platform", label: "platform" },
       { key: "created_at", label: "createdAt" },
     ],

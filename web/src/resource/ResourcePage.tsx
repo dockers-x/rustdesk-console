@@ -215,16 +215,36 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
         <h1 className="text-2xl font-semibold">{t(cfg.titleKey)}</h1>
         <div className="flex flex-wrap items-center gap-2">
           {(cfg.filters ?? []).map((flt) => (
-            <Input
-              aria-label={t(flt.label)}
-              key={flt.name}
-              placeholder={t(flt.label)}
-              value={filters[flt.name] ?? ""}
-              onChange={(e) => {
-                setFilters((s) => ({ ...s, [flt.name]: e.target.value }));
-                setPage(1);
-              }}
-            />
+            flt.type === "select" ? (
+              <select
+                aria-label={t(flt.label)}
+                key={flt.name}
+                className="h-9 min-w-36 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                value={filters[flt.name] ?? ""}
+                onChange={(e) => {
+                  setFilters((s) => ({ ...s, [flt.name]: e.target.value }));
+                  setPage(1);
+                }}
+              >
+                <option value="">{t("all")}</option>
+                {(flt.options ?? []).map((option) => (
+                  <option key={String(option.value)} value={String(option.value)}>
+                    {t(option.label)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                aria-label={t(flt.label)}
+                key={flt.name}
+                placeholder={t(flt.label)}
+                value={filters[flt.name] ?? ""}
+                onChange={(e) => {
+                  setFilters((s) => ({ ...s, [flt.name]: e.target.value }));
+                  setPage(1);
+                }}
+              />
+            )
           ))}
           {cfg.canCreate !== false && (
             <Button onClick={openCreate}>{t("create")}</Button>

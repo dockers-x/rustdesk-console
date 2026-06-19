@@ -697,7 +697,11 @@ pub async fn login_log_list(
         &state.db,
         q.page.unwrap_or(0),
         q.page_size.unwrap_or(0),
-        Some(user.user.id),
+        services::login_log::LoginLogFilters {
+            user_id: Some(user.user.id),
+            client: q.client,
+            login_type: q.r#type,
+        },
     )
     .await
     {
