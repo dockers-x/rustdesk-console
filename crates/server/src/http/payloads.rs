@@ -24,6 +24,10 @@ pub struct UserPayload {
 
 impl UserPayload {
     pub fn from_user(u: &user::Model) -> Self {
+        Self::from_user_with_avatar_base(u, "")
+    }
+
+    pub fn from_user_with_avatar_base(u: &user::Model, avatar_base_url: &str) -> Self {
         let mut info = Map::new();
         info.insert(
             "email_verification".to_string(),
@@ -35,7 +39,7 @@ impl UserPayload {
             name: u.username.clone(),
             group_name: String::new(),
             display_name: u.nickname.clone(),
-            avatar: u.avatar.clone(),
+            avatar: public_avatar_url(&u.avatar, avatar_base_url),
             email: u.email.clone(),
             note: String::new(),
             verifier: None,
@@ -44,6 +48,17 @@ impl UserPayload {
             info,
         }
     }
+}
+
+pub fn public_avatar_url(avatar: &str, base_url: &str) -> String {
+    let avatar = avatar.trim();
+    if avatar.starts_with("/upload/") {
+        let base_url = base_url.trim().trim_end_matches('/');
+        if !base_url.is_empty() {
+            return format!("{base_url}{avatar}");
+        }
+    }
+    avatar.to_string()
 }
 
 /// `apiResp.LoginRes`.
@@ -206,5 +221,41 @@ impl AdminLoginPayload {
             email_verification_enabled: u.email_verification_enabled,
             login_device_verification_enabled: u.login_device_verification_enabled,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::public_avatar_url;
+
+    #[test]
+    fn public_avatar_url_makes_uploaded_avatar_absolute() {
+        assert_eq!(
+            public_avatar_url("/upload/20260619/a.png", "https://console.example.com/"),
+            "https://console.example.com/upload/20260619/a.png"
+        );
+    }
+
+    #[test]
+    fn public_avatar_url_keeps_external_and_data_avatars() {
+        assert_eq!(
+            public_avatar_url(
+                "https://cdn.example.com/a.png",
+                "https://console.example.com"
+            ),
+            "https://cdn.example.com/a.png"
+        );
+        assert_eq!(
+            public_avatar_url("data:image/png;base64,abc", "https://console.example.com"),
+            "data:image/png;base64,abc"
+        );
+    }
+
+    #[test]
+    fn public_avatar_url_keeps_relative_avatar_without_base() {
+        assert_eq!(
+            public_avatar_url("/upload/20260619/a.png", ""),
+            "/upload/20260619/a.png"
+        );
     }
 }

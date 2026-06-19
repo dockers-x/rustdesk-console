@@ -2,7 +2,7 @@
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{Duration, Utc};
@@ -30,6 +30,71 @@ pub async fn index() -> Response {
 
 pub async fn version(State(state): State<AppState>) -> Response {
     resp::success(state.version.as_str())
+}
+
+pub(crate) fn request_public_base(headers: &HeaderMap, state: &AppState) -> String {
+    let host = first_header_value(headers, "x-forwarded-host")
+        .or_else(|| forwarded_header_part(headers, "host"))
+        .or_else(|| first_header_value(headers, "host"));
+    let Some(host) = host else {
+        return state
+            .config
+            .rustdesk
+            .api_server
+            .trim_end_matches('/')
+            .to_string();
+    };
+    let proto = first_header_value(headers, "x-forwarded-proto")
+        .or_else(|| forwarded_header_part(headers, "proto"))
+        .or_else(|| cf_visitor_scheme(headers))
+        .unwrap_or_else(|| {
+            if state.config.rustdesk.api_server.starts_with("https://") {
+                "https".to_string()
+            } else {
+                "http".to_string()
+            }
+        });
+    format!("{}://{}", proto.trim_end_matches(':'), host)
+}
+
+fn first_header_value(headers: &HeaderMap, key: &str) -> Option<String> {
+    headers
+        .get(key)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+fn forwarded_header_part(headers: &HeaderMap, part: &str) -> Option<String> {
+    let raw = headers.get("forwarded")?.to_str().ok()?;
+    for segment in raw.split(',') {
+        for item in segment.split(';') {
+            let Some((key, value)) = item.trim().split_once('=') else {
+                continue;
+            };
+            if key.trim().eq_ignore_ascii_case(part) {
+                let value = value.trim().trim_matches('"');
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn cf_visitor_scheme(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get("cf-visitor")?.to_str().ok()?;
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("scheme")
+                .and_then(|scheme| scheme.as_str())
+                .map(str::to_string)
+        })
+        .filter(|v| !v.trim().is_empty())
 }
 
 #[derive(Deserialize, Default)]
@@ -232,6 +297,37 @@ mod heartbeat_tests {
         assert!(resolve_capability("1.4.6").translate_mode);
         assert!(resolve_capability("v1.4.7").translate_mode);
     }
+
+    #[test]
+    fn public_base_helpers_parse_proxy_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-host", "console.example.com".parse().unwrap());
+        headers.insert("cf-visitor", r#"{"scheme":"https"}"#.parse().unwrap());
+        assert_eq!(
+            first_header_value(&headers, "x-forwarded-host").as_deref(),
+            Some("console.example.com")
+        );
+        assert_eq!(cf_visitor_scheme(&headers).as_deref(), Some("https"));
+    }
+
+    #[test]
+    fn forwarded_header_part_ignores_unrelated_segments() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "forwarded",
+            r#"for=192.0.2.1;proto=https;host="console.example.com""#
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            forwarded_header_part(&headers, "host").as_deref(),
+            Some("console.example.com")
+        );
+        assert_eq!(
+            forwarded_header_part(&headers, "proto").as_deref(),
+            Some("https")
+        );
+    }
 }
 
 // ---------- login ----------
@@ -274,9 +370,10 @@ pub async fn login(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Json(mut form): Json<LoginForm>,
 ) -> Response {
+    let avatar_base_url = request_public_base(&headers, &state);
     if state.config.app.disable_pwd_login {
         return resp::error(state.tr(&lang, "PwdLoginDisabled"));
     }
@@ -320,7 +417,7 @@ pub async fn login(
         return Json(LoginRes {
             r#type: "access_token".into(),
             access_token: ut.token,
-            user: UserPayload::from_user(&user),
+            user: UserPayload::from_user_with_avatar_base(&user, &avatar_base_url),
             secret: String::new(),
             tfa_type: String::new(),
         })
@@ -365,7 +462,7 @@ pub async fn login(
             return Json(LoginRes {
                 r#type: "email_check".into(),
                 access_token: String::new(),
-                user: UserPayload::from_user(&user),
+                user: UserPayload::from_user_with_avatar_base(&user, &avatar_base_url),
                 secret: challenge.secret,
                 tfa_type: challenge.kind.response_tfa_type().to_string(),
             })
@@ -396,7 +493,7 @@ pub async fn login(
     Json(LoginRes {
         r#type: "access_token".into(),
         access_token: ut.token,
-        user: UserPayload::from_user(&user),
+        user: UserPayload::from_user_with_avatar_base(&user, &avatar_base_url),
         secret: String::new(),
         tfa_type: String::new(),
     })
@@ -451,8 +548,17 @@ pub async fn logout(State(state): State<AppState>, user: RustClientUser) -> Resp
 
 // ---------- user ----------
 
-pub async fn user_info(user: RustClientUser) -> Response {
-    Json(UserPayload::from_user(&user.user)).into_response()
+pub async fn user_info(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: RustClientUser,
+) -> Response {
+    let avatar_base_url = request_public_base(&headers, &state);
+    Json(UserPayload::from_user_with_avatar_base(
+        &user.user,
+        &avatar_base_url,
+    ))
+    .into_response()
 }
 
 // ---------- sysinfo ----------
@@ -717,9 +823,11 @@ pub struct PageQuery {
 
 pub async fn group_users(
     State(state): State<AppState>,
+    headers: HeaderMap,
     user: RustClientUser,
     Query(q): Query<PageQuery>,
 ) -> Response {
+    let avatar_base_url = request_public_base(&headers, &state);
     let u = &user.user;
     let gr = services::group::info_by_id(&state.db, u.group_id)
         .await
@@ -768,7 +876,7 @@ pub async fn group_users(
     let mut data: Vec<UserPayload> = users
         .iter()
         .map(|u| {
-            let mut payload = UserPayload::from_user(u);
+            let mut payload = UserPayload::from_user_with_avatar_base(u, &avatar_base_url);
             payload.group_name = group_names.get(&u.group_id).cloned().unwrap_or_default();
             payload
         })

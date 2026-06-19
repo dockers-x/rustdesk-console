@@ -3,11 +3,13 @@
 //! authorize → callback → poll(auth-query) handshake via the in-memory cache.
 
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::http::api::request_public_base;
 use crate::http::middleware::{AcceptLang, BackendUser, ClientIp};
 use crate::http::payloads::{AdminLoginPayload, LoginRes, UserPayload};
 use crate::http::response as resp;
@@ -134,13 +136,15 @@ pub async fn oidc_auth_query(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
+    headers: HeaderMap,
     Query(q): Query<OidcAuthQuery>,
 ) -> Response {
+    let avatar_base_url = request_public_base(&headers, &state);
     match auth_query_pre(&state, &lang, &ip, &q.code).await {
         Ok((u, ut)) => Json(LoginRes {
             r#type: "access_token".into(),
             access_token: ut.token,
-            user: UserPayload::from_user(&u),
+            user: UserPayload::from_user_with_avatar_base(&u, &avatar_base_url),
             secret: String::new(),
             tfa_type: String::new(),
         })

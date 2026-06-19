@@ -145,10 +145,18 @@ RustDesk `Peer.fromJson` fields currently include:
   and `platform`, which are sent by `syncFromRecent`.
 - `/api/audit/file` stores fields according to the original Go API mapping and
   parses `info` for `ip`, `name`, and `num`.
+- User payloads returned by RustDesk client login/current-user endpoints make
+  local `/upload/...` avatars absolute from the public request host. This keeps
+  Cloudflare/reverse-proxy deployments compatible with clients and peer avatar
+  display while still storing relative paths in the database.
 - `/api/sysinfo` consumes all preset fields listed in this document and applies
   first-report user, device-group, strategy, and address-book assignment.
 - `/api/heartbeat` supports strategy delivery through `strategy.config_options`;
   `extra` is sent for metadata but standard clients only apply `config_options`.
+- `/api/record` is only used when the RustDesk client sends recording upload
+  events. The controller toolbar's manual "Start session recording" path records
+  locally on the controller and does not call `/api/record` in the inspected
+  client source.
 
 ## Recheck Procedure
 
