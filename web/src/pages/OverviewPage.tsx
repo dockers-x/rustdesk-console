@@ -90,7 +90,7 @@ export function OverviewPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs tabular-nums text-kumo-subtle">
-            {t("version")} {data.version}
+            {t("consoleVersion")} {data.version}
           </span>
           <Button variant="secondary" onClick={() => void overview.refetch()}>
             {t("refresh")}
