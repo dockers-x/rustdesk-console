@@ -1,3 +1,4 @@
+import { lazy, Suspense, type ReactNode } from "react";
 import {
   HashRouter,
   Navigate,
@@ -5,29 +6,20 @@ import {
   Routes,
   useLocation,
 } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { isLoggedIn, mustChangePassword } from "./lib/auth";
-import { AppShell } from "./components/AppShell";
-import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { AppTitleController } from "./lib/adminTitle";
 import { ForceChangePasswordPage } from "./pages/ForceChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
-import { MessageCenterPage } from "./pages/MessageCenterPage";
-import { MyProfilePage } from "./pages/MyProfilePage";
-import { NotificationRoutingPage } from "./pages/NotificationRoutingPage";
-import { OAuthActionPage } from "./pages/OAuthActionPage";
-import { OverviewPage } from "./pages/OverviewPage";
 import { RegisterPage } from "./pages/RegisterPage";
-import { ServerCommandsPage } from "./pages/ServerCommandsPage";
-import { SystemSettingsPage } from "./pages/SystemSettingsPage";
-import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
-import { ResourcePage } from "./resource/ResourcePage";
-import { ALL_RESOURCES, resourcePath } from "./resource/registry";
+
+const AuthenticatedApp = lazy(() => import("./AuthenticatedApp"));
 
 function RequireAuth({
   children,
   allowPasswordChange = false,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   allowPasswordChange?: boolean;
 }) {
   const location = useLocation();
@@ -48,7 +40,17 @@ function RequireAuth({
   return <>{children}</>;
 }
 
-const HOME = "/overview";
+function RouteLoading() {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex min-h-full items-center justify-center bg-kumo-base p-6 text-sm text-kumo-subtle"
+      role="status"
+    >
+      {t("loading")}
+    </div>
+  );
+}
 
 export default function App() {
   return (
@@ -66,32 +68,15 @@ export default function App() {
           }
         />
         <Route
+          path="/*"
           element={
             <RequireAuth>
-              <AppShell />
+              <Suspense fallback={<RouteLoading />}>
+                <AuthenticatedApp />
+              </Suspense>
             </RequireAuth>
           }
-        >
-          <Route path="/" element={<Navigate to={HOME} replace />} />
-          <Route path="/overview" element={<OverviewPage />} />
-          <Route path="/diagnostics" element={<DiagnosticsPage />} />
-          <Route path="/my" element={<MyProfilePage />} />
-          <Route path="/messages" element={<MessageCenterPage />} />
-          <Route path="/notification-routing" element={<NotificationRoutingPage />} />
-          <Route path="/settings" element={<SystemSettingsPage />} />
-          <Route path="/serverCmd" element={<ServerCommandsPage />} />
-          <Route path="/webclient-settings" element={<WebClientSettingsPage />} />
-          <Route path="/oauth/:code" element={<OAuthActionPage mode="confirm" />} />
-          <Route path="/oauth/bind/:code" element={<OAuthActionPage mode="bind" />} />
-          {ALL_RESOURCES.map((r) => (
-            <Route
-              key={r.name}
-              path={resourcePath(r)}
-              element={<ResourcePage cfg={r} />}
-            />
-          ))}
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
+        />
       </Routes>
     </HashRouter>
   );
