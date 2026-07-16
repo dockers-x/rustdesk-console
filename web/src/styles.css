@@ -32,6 +32,14 @@ button:not(:disabled):active:not(:focus-visible) {
   transform: scale(0.98);
 }
 
+@media (max-width: 639px) {
+  .auth-form input,
+  .auth-form button,
+  .auth-form a {
+    min-height: 44px;
+  }
+}
+
 .login-grid-bg {
   background-image:
     linear-gradient(to right, var(--color-kumo-line) 1px, transparent 1px),

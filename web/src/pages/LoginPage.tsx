@@ -78,9 +78,12 @@ function AuthSignal({
 }) {
   return (
     <div className="flex items-center gap-3 border-t border-kumo-line py-3 first:border-t-0">
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-subtle">
-        <Icon size={18} weight={active ? "fill" : "regular"} aria-hidden />
-      </div>
+      <Icon
+        size={18}
+        weight={active ? "fill" : "regular"}
+        className={active ? "text-kumo-default" : "text-kumo-subtle"}
+        aria-hidden
+      />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{label}</div>
         <div className="mt-0.5 truncate text-xs text-kumo-subtle">{value}</div>
@@ -500,11 +503,11 @@ export function LoginPage() {
           <section className="relative overflow-hidden p-6 sm:p-8 lg:p-10">
             <div className="relative flex h-full min-h-[180px] flex-col justify-between gap-6 sm:min-h-[240px] lg:min-h-[280px] lg:gap-10">
               <div>
-                <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 text-xs font-semibold uppercase text-kumo-subtle">
+                <div className="inline-flex items-center gap-2 text-xs font-medium text-kumo-subtle">
                   <Monitor size={16} aria-hidden />
                   <span>{t("loginSurfaceTag")}</span>
                 </div>
-                <h1 className="mt-6 max-w-[16ch] break-words text-3xl font-semibold leading-tight sm:text-4xl lg:text-5xl">
+                <h1 className="mt-5 max-w-xl break-words text-3xl font-semibold leading-tight sm:text-4xl lg:text-4xl">
                   {appTitle}
                 </h1>
                 <p className="mt-4 max-w-md text-sm leading-6 text-kumo-subtle sm:text-base">
@@ -562,10 +565,10 @@ export function LoginPage() {
 
           <form
             onSubmit={submitActiveForm}
-            className="border-t border-kumo-line bg-kumo-base p-6 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
+            className="auth-form border-t border-kumo-line bg-kumo-base p-6 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
           >
             <div className="mb-8">
-              <div className="flex min-h-6 items-center gap-2 text-xs font-semibold uppercase text-kumo-subtle">
+              <div className="flex min-h-6 items-center gap-2 text-xs font-medium text-kumo-subtle">
                 <Key size={16} aria-hidden />
                 <span>{setupMode ? t("setupWizardTag") : t("adminAccess")}</span>
               </div>

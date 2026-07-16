@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { Badge } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Table } from "@cloudflare/kumo/components/table";
 import {
@@ -90,7 +89,9 @@ export function OverviewPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge>{t("version")} {data.version}</Badge>
+          <span className="text-xs tabular-nums text-kumo-subtle">
+            {t("version")} {data.version}
+          </span>
           <Button variant="secondary" onClick={() => void overview.refetch()}>
             {t("refresh")}
           </Button>
@@ -127,11 +128,9 @@ export function OverviewPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="mb-4 flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
-              <ChartBar size={18} />
-            </div>
+            <ChartBar className="mt-0.5 shrink-0 text-kumo-brand" size={20} />
             <div>
-              <h2 className="text-base font-semibold">{t("platformBreakdown")}</h2>
+              <h2 className="text-lg font-semibold">{t("platformBreakdown")}</h2>
               <p className="mt-1 text-sm text-kumo-subtle">
                 {t("platformBreakdownHint")}
               </p>
@@ -162,11 +161,12 @@ export function OverviewPage() {
 
         <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="mb-4 flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
-              <ClockCounterClockwise size={18} />
-            </div>
+            <ClockCounterClockwise
+              className="mt-0.5 shrink-0 text-kumo-brand"
+              size={20}
+            />
             <div>
-              <h2 className="text-base font-semibold">{t("recentActivity")}</h2>
+              <h2 className="text-lg font-semibold">{t("recentActivity")}</h2>
               <p className="mt-1 text-sm text-kumo-subtle">{t("recentActivityHint")}</p>
             </div>
           </div>
@@ -183,18 +183,21 @@ export function OverviewPage() {
           label={t("loginLogs")}
           value={data.totals.login_logs}
           detail={t("recentLoginEvents")}
+          secondary
         />
         <MetricCard
           icon={<ShieldCheck size={20} />}
           label={t("auditFile")}
           value={data.totals.audit_files}
           detail={t("fileAuditEvents")}
+          secondary
         />
         <MetricCard
           icon={<ShareNetwork size={20} />}
           label={t("shareRecords")}
           value={data.totals.share_records}
           detail={t("webClientShares")}
+          secondary
         />
         <MetricCard
           icon={<ClockCounterClockwise size={20} />}
@@ -203,6 +206,7 @@ export function OverviewPage() {
           detail={t("startedAt", {
             value: formatDateTime(data.start_time, displayTimeZone),
           })}
+          secondary
         />
       </div>
     </div>
@@ -214,20 +218,32 @@ function MetricCard({
   label,
   value,
   detail,
+  secondary = false,
 }: {
   icon: React.ReactNode;
   label: string;
   value: number | string;
   detail: string;
+  secondary?: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-4">
+    <section
+      className={`rounded-lg border border-kumo-line p-4 ${
+        secondary ? "bg-kumo-base" : "bg-kumo-elevated"
+      }`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-kumo-subtle">{label}</p>
-          <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
+          <p
+            className={`mt-2 font-semibold tabular-nums ${
+              secondary ? "text-xl" : "text-2xl"
+            }`}
+          >
+            {value}
+          </p>
         </div>
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
+        <div className="shrink-0 text-kumo-brand" aria-hidden="true">
           {icon}
         </div>
       </div>
