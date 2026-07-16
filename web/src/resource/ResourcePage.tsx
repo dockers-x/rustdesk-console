@@ -213,13 +213,13 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">{t(cfg.titleKey)}</h1>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           {(cfg.filters ?? []).map((flt) => (
             flt.type === "select" ? (
               <select
                 aria-label={t(flt.label)}
                 key={flt.name}
-                className="h-9 min-w-36 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                className="h-11 w-full min-w-36 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand sm:h-9 sm:w-auto"
                 value={filters[flt.name] ?? ""}
                 onChange={(e) => {
                   setFilters((s) => ({ ...s, [flt.name]: e.target.value }));
@@ -237,6 +237,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
               <Input
                 aria-label={t(flt.label)}
                 key={flt.name}
+                className="min-h-11 min-w-0 flex-1 sm:min-h-0 sm:min-w-48 sm:flex-none"
                 placeholder={t(flt.label)}
                 value={filters[flt.name] ?? ""}
                 onChange={(e) => {
@@ -247,7 +248,12 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
             )
           ))}
           {cfg.canCreate !== false && (
-            <Button onClick={openCreate}>{t("create")}</Button>
+            <Button
+              className="min-h-11 shrink-0 sm:min-h-0"
+              onClick={openCreate}
+            >
+              {t("create")}
+            </Button>
           )}
         </div>
       </div>
@@ -271,14 +277,21 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-lg border border-kumo-line">
-        <Table>
+      <div
+        className="min-w-0 overflow-x-auto overscroll-x-contain rounded-lg border border-kumo-line focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+        role="region"
+        aria-label={t("scrollableTable")}
+        tabIndex={0}
+      >
+        <Table className="min-w-max [&_th]:whitespace-nowrap [&_td]:align-top">
           <Table.Header>
             <Table.Row>
               {cfg.columns.map((c) => (
                 <Table.Head key={c.key}>{t(c.label)}</Table.Head>
               ))}
-              {showActions && <Table.Head>{t("actions")}</Table.Head>}
+              {showActions && (
+                <Table.Head sticky="right">{t("actions")}</Table.Head>
+              )}
             </Table.Row>
           </Table.Header>
           <Table.Body>
@@ -292,7 +305,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
                   </Table.Cell>
                 ))}
                 {showActions && (
-                  <Table.Cell>
+                  <Table.Cell sticky="right">
                     <div className="flex flex-wrap items-start gap-1">
                       {cfg.rowActions?.(row, t, {
                         openDelete: (target) => {
