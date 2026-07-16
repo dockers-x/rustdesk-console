@@ -1,7 +1,7 @@
 import { WarningCircle } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
-import { dialogPanelClass } from "./DialogLayout";
+import { compactDialogPanelClass } from "./DialogLayout";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -28,7 +28,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   return (
     <Dialog.Root role="alertdialog" open={open} onOpenChange={onOpenChange}>
-      <Dialog size="sm" className={dialogPanelClass}>
+      <Dialog size="sm" className={compactDialogPanelClass}>
         <div className="px-5 pt-5">
           <div className="flex items-start gap-3">
             <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-kumo-danger/10 text-kumo-danger">

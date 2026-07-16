@@ -10,6 +10,7 @@ import { Table } from "@cloudflare/kumo/components/table";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   DialogBody,
+  compactDialogPanelClass,
   DialogFooter,
   DialogHeader,
   dialogPanelClass,
@@ -555,7 +556,7 @@ export function ServerCommandsPage() {
       </section>
 
       <Dialog.Root open={rulesOpen} onOpenChange={setRulesOpen}>
-        <Dialog size="base" className={dialogPanelClass}>
+        <Dialog size="base" className={compactDialogPanelClass}>
           <DialogHeader
             title={t("relayPoolRules")}
             description={t("relayPoolHint")}

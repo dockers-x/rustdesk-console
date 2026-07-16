@@ -23,3 +23,34 @@ body {
     linear-gradient(to bottom, var(--color-kumo-line) 1px, transparent 1px);
   background-size: 48px 48px;
 }
+
+.admin-dialog-panel {
+  display: flex;
+  width: calc(100vw - 1rem) !important;
+  min-width: 0 !important;
+  max-width: calc(100vw - 1rem) !important;
+  max-height: calc(100svh - 1rem);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (min-width: 640px) {
+  .admin-dialog-panel {
+    max-height: min(90vh, 760px);
+  }
+
+  .admin-dialog-panel--compact {
+    width: min(24rem, calc(100vw - 2rem)) !important;
+    max-width: min(24rem, calc(100vw - 2rem)) !important;
+  }
+
+  .admin-dialog-panel--default {
+    width: min(32rem, calc(100vw - 2rem)) !important;
+    max-width: min(32rem, calc(100vw - 2rem)) !important;
+  }
+
+  .admin-dialog-panel--wide {
+    width: min(56rem, calc(100vw - 2rem)) !important;
+    max-width: min(56rem, calc(100vw - 2rem)) !important;
+  }
+}

@@ -1,11 +1,17 @@
 import type { ReactNode } from "react";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 
+const dialogBaseClass =
+  "admin-dialog-panel z-50 border border-kumo-line p-0 text-kumo-default shadow-lg ring-0";
+
 export const dialogPanelClass =
-  "overflow-hidden bg-kumo-elevated p-0 ring-1 ring-kumo-line";
+  `${dialogBaseClass} admin-dialog-panel--default bg-kumo-elevated`;
+
+export const compactDialogPanelClass =
+  `${dialogBaseClass} admin-dialog-panel--compact bg-kumo-elevated`;
 
 export const resourceFormDialogPanelClass =
-  "z-50 flex max-h-[calc(100svh-1rem)] min-w-0 w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] flex-col overflow-hidden border border-kumo-line bg-kumo-base p-0 text-kumo-default ring-2 ring-kumo-line drop-shadow-xl drop-shadow-kumo-shadow-drop sm:max-h-[min(90vh,760px)] sm:w-[min(56rem,calc(100vw-2rem))] sm:max-w-[min(56rem,calc(100vw-2rem))]";
+  `${dialogBaseClass} admin-dialog-panel--wide bg-kumo-base`;
 
 export function DialogHeader({
   title,

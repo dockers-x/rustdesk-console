@@ -23,9 +23,9 @@ import { AvatarPreview } from "../components/AvatarPreview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   DialogBody,
+  compactDialogPanelClass,
   DialogFooter,
   DialogHeader,
-  dialogPanelClass,
 } from "../components/DialogLayout";
 import { InlineMessage } from "../components/InlineMessage";
 import { TableState } from "../components/TableState";
@@ -944,7 +944,7 @@ export function MyProfilePage() {
           else closePasswordDialog();
         }}
       >
-        <Dialog size="sm" className={dialogPanelClass}>
+        <Dialog size="sm" className={compactDialogPanelClass}>
           <DialogHeader
             title={t("changePassword")}
             description={t("changePasswordHint")}
