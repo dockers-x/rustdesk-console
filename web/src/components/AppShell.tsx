@@ -187,14 +187,20 @@ const isItemActive = (pathname: string, item: NavItem) => {
   return pathname === item.to || pathname.startsWith(`${item.to}/`);
 };
 
+const MOBILE_QUERY = "(max-width: 767px)";
+
 export function AppShell() {
   const { t } = useTranslation();
   const appTitle = useAppTitle();
   const navigate = useNavigate();
   const location = useLocation();
-  const [collapsed, setCollapsed] = useState(
-    () => typeof window !== "undefined" && window.innerWidth < 768,
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+  const [isMobile, setIsMobile] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia(MOBILE_QUERY).matches,
   );
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dark, setDark] = useState(() => getMode() === "dark");
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(
     () =>
@@ -208,15 +214,27 @@ export function AppShell() {
   );
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 767px)");
-    if (media.matches) setCollapsed(true);
-
+    const media = window.matchMedia(MOBILE_QUERY);
+    const syncViewport = (matches: boolean) => {
+      setIsMobile(matches);
+      setMobileNavOpen(false);
+    };
+    syncViewport(media.matches);
     const onChange = (event: MediaQueryListEvent) => {
-      if (event.matches) setCollapsed(true);
+      syncViewport(event.matches);
     };
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);
   }, []);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileNavOpen]);
 
   const toggleTheme = () => {
     const next = !dark;
@@ -236,8 +254,11 @@ export function AppShell() {
   };
 
   const closeMobileNav = () => {
-    if (window.innerWidth < 768) setCollapsed(true);
+    if (isMobile) setMobileNavOpen(false);
   };
+
+  const navCompact = !isMobile && desktopCollapsed;
+  const navExpanded = isMobile ? mobileNavOpen : !desktopCollapsed;
 
   useEffect(() => {
     const activeSection = NAV_SECTIONS.find((section) =>
@@ -257,29 +278,41 @@ export function AppShell() {
       >
         {t("skipToContent")}
       </a>
-      {!collapsed && (
+      {isMobile && mobileNavOpen && (
         <button
           type="button"
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          className="fixed inset-0 z-30 bg-black/50"
           aria-label={t("collapseSidebar")}
-          onClick={() => setCollapsed(true)}
+          onClick={() => setMobileNavOpen(false)}
         />
       )}
       <aside
         className={cn(
-          "flex shrink-0 flex-col border-r border-kumo-line bg-kumo-elevated transition-[width] duration-150",
-          !collapsed && "max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40",
+          "fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-kumo-line bg-kumo-elevated",
+          "transition-transform duration-[180ms] motion-reduce:transition-none",
+          "[transition-timing-function:var(--ease-out)]",
+          isMobile && !mobileNavOpen && "pointer-events-none -translate-x-full",
+          isMobile && mobileNavOpen && "translate-x-0",
+          !isMobile && "relative z-auto translate-x-0 transition-none",
         )}
-        style={{ width: collapsed ? 64 : 220 }}
+        style={{
+          width: isMobile
+            ? "min(280px, calc(100vw - 48px))"
+            : navCompact
+              ? 64
+              : 220,
+        }}
+        aria-hidden={isMobile && !mobileNavOpen}
+        inert={isMobile && !mobileNavOpen}
       >
         <div
           className={cn(
             "flex h-14 items-center gap-2 px-4 font-semibold",
-            collapsed && "justify-center px-0",
+            navCompact && "justify-center px-0",
           )}
         >
           <Monitor size={20} />
-          {!collapsed && (
+          {!navCompact && (
             <span className="truncate" title={appTitle}>
               {appTitle}
             </span>
@@ -298,11 +331,11 @@ export function AppShell() {
                   sectionIndex > 0 && "mt-2 border-t border-kumo-line pt-2",
                 )}
               >
-                {!collapsed && (
+                {!navCompact && (
                   <button
                     type="button"
                     className={cn(
-                      "flex min-h-8 w-full items-center justify-between rounded-md px-3 pb-1 pt-1 text-left text-xs font-semibold transition-colors hover:bg-kumo-tint/70",
+                      "flex min-h-8 w-full items-center justify-between rounded-md px-3 pb-1 pt-1 text-left text-xs font-semibold transition-colors hover:bg-kumo-tint/70 max-md:min-h-11",
                       sectionActive ? "text-kumo-default" : "text-kumo-subtle",
                     )}
                     aria-expanded={openSections[section.key] ?? true}
@@ -323,7 +356,7 @@ export function AppShell() {
                     />
                   </button>
                 )}
-                {(collapsed || (openSections[section.key] ?? true)) &&
+                {(navCompact || (openSections[section.key] ?? true)) &&
                   section.items.map((item) => (
                     <NavLink
                       key={item.to}
@@ -333,9 +366,9 @@ export function AppShell() {
                       onClick={closeMobileNav}
                       className={({ isActive }) =>
                         cn(
-                          "group relative flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-[background-color,color,box-shadow,scale] duration-150 active:scale-[0.98]",
-                          collapsed && "justify-center",
-                          item.indent && !collapsed && "pl-7",
+                          "group relative flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-[background-color,color,box-shadow,scale] duration-150 active:scale-[0.98] focus-visible:scale-100 max-md:min-h-11",
+                          navCompact && "justify-center",
+                          item.indent && !navCompact && "pl-7",
                           isActive
                             ? "bg-kumo-tint font-medium text-kumo-default shadow-xs ring-1 ring-kumo-line/70"
                             : "text-kumo-subtle hover:bg-kumo-tint/70 hover:text-kumo-default",
@@ -346,7 +379,7 @@ export function AppShell() {
                         const Icon = NAV_ICONS[item.key] ?? Rows;
                         return (
                           <>
-                            {item.indent && !collapsed && (
+                            {item.indent && !navCompact && (
                               <span
                                 className={cn(
                                   "absolute left-3 top-1/2 h-4 w-px -translate-y-1/2 rounded-full",
@@ -356,7 +389,7 @@ export function AppShell() {
                               />
                             )}
                             <Icon size={18} weight={isActive ? "fill" : "regular"} />
-                            {!collapsed && (
+                            {!navCompact && (
                               <span className="truncate">{t(item.key)}</span>
                             )}
                           </>
@@ -375,28 +408,47 @@ export function AppShell() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setCollapsed((c) => !c)}
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? t("expandSidebar") : t("collapseSidebar")}
-            title={collapsed ? t("expandSidebar") : t("collapseSidebar")}
+            className="min-h-11 min-w-11 justify-center md:min-h-0 md:min-w-0"
+            onClick={() => {
+              if (isMobile) setMobileNavOpen((open) => !open);
+              else setDesktopCollapsed((collapsed) => !collapsed);
+            }}
+            aria-expanded={navExpanded}
+            aria-label={
+              navExpanded ? t("collapseSidebar") : t("expandSidebar")
+            }
+            title={navExpanded ? t("collapseSidebar") : t("expandSidebar")}
           >
             <List size={18} />
           </Button>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={toggleLang}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-11 md:min-h-0"
+              onClick={toggleLang}
+            >
               {i18n.language === "zh-CN" ? "EN" : "中文"}
             </Button>
             <Button
               variant="ghost"
               size="sm"
+              className="min-h-11 min-w-11 justify-center md:min-h-0 md:min-w-0"
               onClick={toggleTheme}
               aria-label={t("theme")}
             >
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </Button>
-            <Button variant="ghost" size="sm" onClick={logout}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-11 md:min-h-0"
+              onClick={logout}
+            >
               <SignOut size={18} />
-              <span className="ml-1">{t("logout")}</span>
+              <span className="ml-1 max-[359px]:sr-only max-[359px]:ml-0">
+                {t("logout")}
+              </span>
             </Button>
           </div>
         </header>
