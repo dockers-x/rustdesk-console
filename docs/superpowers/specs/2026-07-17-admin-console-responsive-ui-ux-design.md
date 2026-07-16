@@ -165,6 +165,24 @@ keyboard-visible. Keyboard-driven actions stay immediate. Hover effects are
 gated to devices with hover and a fine pointer. `prefers-reduced-motion` removes
 position and scale motion while retaining short opacity and color feedback.
 
+### Motion enhancement amendment
+
+Use motion at three visible boundaries without turning navigation into a show:
+
+- authenticated page content enters over 160ms with 4px of vertical travel;
+- the four primary overview metrics and two overview panels enter over 220ms
+  with 35ms spacing between the metric cards;
+- the mobile navigation backdrop fades in over 160ms while the drawer keeps its
+  existing 180ms spatial transition.
+
+All additions animate only transform and opacity. Reduced-motion mode removes
+the page, overview, backdrop, drawer, and press movement.
+
+Authentication state is reactive within the current tab and across storage
+events. When an API response clears an invalid token, the route guard rerenders
+and replaces the protected route with `/login`, preserving the attempted path
+for the post-login return.
+
 ## Initial Load Performance
 
 The login route currently imports the authenticated console and produces a

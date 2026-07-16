@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -201,6 +201,9 @@ export function AppShell() {
       window.matchMedia(MOBILE_QUERY).matches,
   );
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileNavRef = useRef<HTMLElement>(null);
+  const mobileNavToggleRef = useRef<HTMLButtonElement>(null);
+  const mobileNavWasOpen = useRef(false);
   const [dark, setDark] = useState(() => getMode() === "dark");
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(
     () =>
@@ -235,6 +238,32 @@ export function AppShell() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mobileNavOpen]);
+
+  useEffect(() => {
+    if (isMobile) setMobileNavOpen(false);
+  }, [isMobile, location.pathname, location.search]);
+
+  useEffect(() => {
+    if (!isMobile) {
+      mobileNavWasOpen.current = false;
+      return;
+    }
+    if (mobileNavOpen) {
+      mobileNavWasOpen.current = true;
+      const frame = window.requestAnimationFrame(() => {
+        mobileNavRef.current
+          ?.querySelector<HTMLElement>("button:not([disabled]), a[href]")
+          ?.focus();
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    if (!mobileNavWasOpen.current) return;
+    mobileNavWasOpen.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      mobileNavToggleRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isMobile, mobileNavOpen]);
 
   const toggleTheme = () => {
     const next = !dark;
@@ -274,6 +303,7 @@ export function AppShell() {
     <div className="relative flex h-full overflow-hidden bg-kumo-base text-kumo-default">
       <a
         href="#main-content"
+        inert={isMobile && mobileNavOpen}
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-kumo-elevated focus:px-3 focus:py-2 focus:text-sm focus:shadow"
       >
         {t("skipToContent")}
@@ -281,12 +311,14 @@ export function AppShell() {
       {isMobile && mobileNavOpen && (
         <button
           type="button"
-          className="fixed inset-0 z-30 bg-black/50"
+          tabIndex={-1}
+          className="admin-mobile-backdrop fixed inset-0 z-30 bg-black/50"
           aria-label={t("collapseSidebar")}
           onClick={() => setMobileNavOpen(false)}
         />
       )}
       <aside
+        ref={mobileNavRef}
         className={cn(
           "admin-mobile-nav fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-kumo-line bg-kumo-elevated",
           "transition-transform duration-[180ms] motion-reduce:transition-none",
@@ -303,7 +335,10 @@ export function AppShell() {
               : 220,
         }}
         aria-hidden={isMobile && !mobileNavOpen}
+        aria-label={isMobile ? t("mainNavigation") : undefined}
+        aria-modal={isMobile ? true : undefined}
         inert={isMobile && !mobileNavOpen}
+        role={isMobile ? "dialog" : undefined}
       >
         <div
           className={cn(
@@ -318,7 +353,10 @@ export function AppShell() {
             </span>
           )}
         </div>
-        <nav className="flex-1 overflow-y-auto px-2 py-2" aria-label="main">
+        <nav
+          className="flex-1 overflow-y-auto px-2 py-2"
+          aria-label={t("mainNavigation")}
+        >
           {NAV_SECTIONS.map((section, sectionIndex) => {
             const sectionActive = section.items.some((item) =>
               isItemActive(location.pathname, item),
@@ -403,9 +441,13 @@ export function AppShell() {
         </nav>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className="flex min-w-0 flex-1 flex-col"
+        inert={isMobile && mobileNavOpen}
+      >
         <header className="flex h-14 items-center justify-between border-b border-kumo-line px-4">
           <Button
+            ref={mobileNavToggleRef}
             variant="ghost"
             size="sm"
             className="min-h-11 min-w-11 justify-center md:min-h-0 md:min-w-0"
@@ -453,7 +495,9 @@ export function AppShell() {
           </div>
         </header>
         <main id="main-content" className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
-          <Outlet />
+          <div key={location.pathname} className="admin-page-enter min-h-full">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

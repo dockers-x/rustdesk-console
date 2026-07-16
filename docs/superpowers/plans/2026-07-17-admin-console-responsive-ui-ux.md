@@ -642,6 +642,15 @@ Using the local server and `agent-browser`, check light/dark themes at:
 
 At each applicable size verify login, sidebar/drawer, overview, users table, system welcome dialog, keyboard focus, and no document-level horizontal overflow. At 390px verify Escape closes the drawer; with reduced motion enabled verify positional animations are effectively removed.
 
+### Release review amendment
+
+- Make authentication storage observable so a 403-cleared token immediately
+  rerenders the route guard and redirects to login.
+- Add short page-entry, overview-stagger, and mobile-backdrop motion using only
+  transform and opacity, with all movement disabled by reduced motion.
+- Verify an invalid stored token redirects from `#/overview` to `#/login`, and
+  confirm the new animations stay at or below 220ms.
+
 - [ ] **Step 3: Bump the workspace version**
 
 Run:
@@ -689,7 +698,7 @@ git status --short
 git tag -a v0.2.29 -m "v0.2.29
 
 - Make the admin shell, dialogs, and tables responsive across mobile and desktop sizes.
-- Refine login, overview, motion, and device status presentation.
+- Refine login, overview, motion, device status, and expired-session handling.
 - Lazy-load authenticated routes to reduce the login-page payload.
 - Bump workspace package version to 0.2.29."
 ```

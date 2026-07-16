@@ -619,6 +619,9 @@ async fn admin_asset(path: &str) -> Response {
     if let Some(f) = AdminAssets::get(path) {
         return respond(f.data.into_owned(), path);
     }
+    if path.starts_with("assets/") || FsPath::new(path).extension().is_some() {
+        return (StatusCode::NOT_FOUND, "Admin asset not found").into_response();
+    }
     if let Some(f) = AdminAssets::get("index.html") {
         return respond(f.data.into_owned(), "index.html");
     }
@@ -642,6 +645,15 @@ pub async fn admin_path(Path(path): Path<String>) -> Response {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn missing_admin_assets_return_not_found_instead_of_spa_html() {
+        let response = admin_asset("assets/missing-chunk.js").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = admin_asset("missing.css").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 
     fn sample_webclient_config() -> WebClientConfig {
         WebClientConfig {

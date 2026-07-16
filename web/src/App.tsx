@@ -1,4 +1,11 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import {
+  Component,
+  lazy,
+  Suspense,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { Button } from "@cloudflare/kumo/components/button";
 import {
   HashRouter,
   Navigate,
@@ -7,13 +14,65 @@ import {
   useLocation,
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { isLoggedIn, mustChangePassword } from "./lib/auth";
+import { getAuthStateSnapshot, subscribeAuthState } from "./lib/auth";
 import { AppTitleController } from "./lib/adminTitle";
 import { ForceChangePasswordPage } from "./pages/ForceChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 
-const AuthenticatedApp = lazy(() => import("./AuthenticatedApp"));
+const AUTH_CHUNK_RELOAD_KEY = "rustdesk-console:auth-chunk-reload";
+
+const AuthenticatedApp = lazy(async () => {
+  try {
+    const module = await import("./AuthenticatedApp");
+    sessionStorage.removeItem(AUTH_CHUNK_RELOAD_KEY);
+    return module;
+  } catch (error) {
+    if (sessionStorage.getItem(AUTH_CHUNK_RELOAD_KEY) !== "1") {
+      sessionStorage.setItem(AUTH_CHUNK_RELOAD_KEY, "1");
+      window.location.reload();
+      return await new Promise<never>(() => undefined);
+    }
+    sessionStorage.removeItem(AUTH_CHUNK_RELOAD_KEY);
+    throw error;
+  }
+});
+
+function AuthenticatedRouteFallback() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-full items-center justify-center bg-kumo-base p-6 text-kumo-default">
+      <div className="max-w-md text-center">
+        <h1 className="text-xl font-semibold">{t("adminLoadFailed")}</h1>
+        <p className="mt-2 text-sm leading-6 text-kumo-subtle">
+          {t("adminLoadFailedHint")}
+        </p>
+        <Button className="mt-5" onClick={() => window.location.reload()}>
+          {t("reloadPage")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+class AuthenticatedRouteBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? (
+      <AuthenticatedRouteFallback />
+    ) : (
+      this.props.children
+    );
+  }
+}
 
 function RequireAuth({
   children,
@@ -23,7 +82,14 @@ function RequireAuth({
   allowPasswordChange?: boolean;
 }) {
   const location = useLocation();
-  if (!isLoggedIn()) {
+  const authState = useSyncExternalStore(
+    subscribeAuthState,
+    getAuthStateSnapshot,
+    () => "0:0",
+  );
+  const loggedIn = authState.startsWith("1:");
+  const passwordChangeRequired = authState.endsWith(":1");
+  if (!loggedIn) {
     return (
       <Navigate
         to="/login"
@@ -34,7 +100,7 @@ function RequireAuth({
       />
     );
   }
-  if (mustChangePassword() && !allowPasswordChange) {
+  if (passwordChangeRequired && !allowPasswordChange) {
     return <Navigate to="/change-password" replace />;
   }
   return <>{children}</>;
@@ -71,9 +137,11 @@ export default function App() {
           path="/*"
           element={
             <RequireAuth>
-              <Suspense fallback={<RouteLoading />}>
-                <AuthenticatedApp />
-              </Suspense>
+              <AuthenticatedRouteBoundary>
+                <Suspense fallback={<RouteLoading />}>
+                  <AuthenticatedApp />
+                </Suspense>
+              </AuthenticatedRouteBoundary>
             </RequireAuth>
           }
         />

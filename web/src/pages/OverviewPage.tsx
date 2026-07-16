@@ -98,7 +98,7 @@ export function OverviewPage() {
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="admin-overview-metrics grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           icon={<Users size={20} />}
           label={t("users")}
@@ -126,7 +126,7 @@ export function OverviewPage() {
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+        <section className="admin-overview-panel rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="mb-4 flex items-center gap-3">
             <ChartBar className="mt-0.5 shrink-0 text-kumo-brand" size={20} />
             <div>
@@ -159,7 +159,7 @@ export function OverviewPage() {
           </div>
         </section>
 
-        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+        <section className="admin-overview-panel rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="mb-4 flex items-center gap-3">
             <ClockCounterClockwise
               className="mt-0.5 shrink-0 text-kumo-brand"

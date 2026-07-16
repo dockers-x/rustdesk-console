@@ -22,13 +22,14 @@ body {
     sans-serif;
 }
 
-button:not(:disabled) {
-  transition-property: transform;
+button[data-kumo-component="Button"]:not(:disabled) {
+  transition-property:
+    transform, background-color, border-color, color, box-shadow;
   transition-duration: 140ms;
   transition-timing-function: var(--ease-out);
 }
 
-button:not(:disabled):active:not(:focus-visible) {
+button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
   transform: scale(0.98);
 }
 
@@ -45,6 +46,54 @@ button:not(:disabled):active:not(:focus-visible) {
     linear-gradient(to right, var(--color-kumo-line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--color-kumo-line) 1px, transparent 1px);
   background-size: 48px 48px;
+}
+
+@keyframes admin-page-enter {
+  from {
+    opacity: 0.82;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes admin-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes admin-backdrop-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+.admin-page-enter {
+  animation: admin-page-enter 160ms var(--ease-out) both;
+}
+
+.admin-overview-metrics > * {
+  animation: admin-card-enter 220ms var(--ease-out) both;
+}
+
+.admin-overview-metrics > :nth-child(2) {
+  animation-delay: 35ms;
+}
+
+.admin-overview-metrics > :nth-child(3) {
+  animation-delay: 70ms;
+}
+
+.admin-overview-metrics > :nth-child(4) {
+  animation-delay: 105ms;
+}
+
+.admin-overview-panel {
+  animation: admin-card-enter 220ms var(--ease-out) 90ms both;
+}
+
+.admin-mobile-backdrop {
+  animation: admin-backdrop-enter 160ms var(--ease-out) both;
 }
 
 .admin-dialog-panel {
@@ -83,11 +132,11 @@ button:not(:disabled):active:not(:focus-visible) {
     scroll-behavior: auto;
   }
 
-  button:not(:disabled) {
+  button[data-kumo-component="Button"]:not(:disabled) {
     transition: none;
   }
 
-  button:not(:disabled):active {
+  button[data-kumo-component="Button"]:not(:disabled):active {
     transform: none;
   }
 
@@ -95,7 +144,14 @@ button:not(:disabled):active:not(:focus-visible) {
     transition: none !important;
   }
 
-  [role="dialog"] {
+  .admin-mobile-backdrop,
+  .admin-overview-metrics > *,
+  .admin-overview-panel,
+  .admin-page-enter {
+    animation: none;
+  }
+
+  [role="dialog"]:not(.admin-mobile-nav) {
     scale: 1 !important;
     transition-property: opacity !important;
     transition-duration: 80ms !important;
