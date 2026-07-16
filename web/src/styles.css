@@ -4,6 +4,11 @@
 /* Let Tailwind discover the utility classes baked into kumo's components. */
 @source "../node_modules/@cloudflare/kumo/dist";
 
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
 html,
 body,
 #root {
@@ -15,6 +20,16 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
+}
+
+button:not(:disabled) {
+  transition-property: transform;
+  transition-duration: 140ms;
+  transition-timing-function: var(--ease-out);
+}
+
+button:not(:disabled):active:not(:focus-visible) {
+  transform: scale(0.98);
 }
 
 .login-grid-bg {
@@ -52,5 +67,29 @@ body {
   .admin-dialog-panel--wide {
     width: min(56rem, calc(100vw - 2rem)) !important;
     max-width: min(56rem, calc(100vw - 2rem)) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  button:not(:disabled) {
+    transition: none;
+  }
+
+  button:not(:disabled):active {
+    transform: none;
+  }
+
+  .admin-mobile-nav {
+    transition: none !important;
+  }
+
+  [role="dialog"] {
+    scale: 1 !important;
+    transition-property: opacity !important;
+    transition-duration: 80ms !important;
   }
 }

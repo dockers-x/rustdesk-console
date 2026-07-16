@@ -171,16 +171,12 @@ const peerOnlineStatusCol = {
             : "border-kumo-line bg-kumo-base text-kumo-subtle"
         }`}
       >
-        <span className="relative flex size-2.5" aria-hidden="true">
-          {online ? (
-            <>
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-kumo-success opacity-60 motion-reduce:hidden" />
-              <span className="relative inline-flex size-2.5 rounded-full bg-kumo-success" />
-            </>
-          ) : (
-            <span className="inline-flex size-2.5 rounded-full bg-kumo-subtle/60" />
-          )}
-        </span>
+        <span
+          className={`inline-flex size-2.5 rounded-full ${
+            online ? "bg-kumo-success" : "bg-kumo-subtle/60"
+          }`}
+          aria-hidden="true"
+        />
         {t(online ? "online" : "offline")}
       </span>
     );

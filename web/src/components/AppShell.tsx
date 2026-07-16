@@ -288,7 +288,7 @@ export function AppShell() {
       )}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-kumo-line bg-kumo-elevated",
+          "admin-mobile-nav fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-kumo-line bg-kumo-elevated",
           "transition-transform duration-[180ms] motion-reduce:transition-none",
           "[transition-timing-function:var(--ease-out)]",
           isMobile && !mobileNavOpen && "pointer-events-none -translate-x-full",
