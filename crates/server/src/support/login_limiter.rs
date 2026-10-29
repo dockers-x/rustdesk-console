@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 
+const MAX_CAPTCHAS: usize = 4096;
+
 #[derive(Clone, Copy)]
 pub struct SecurityPolicy {
     /// `< 0` disabled, `0` always, `> 0` enabled at this many attempts.
@@ -104,6 +106,7 @@ impl LoginLimiter {
 
     /// Generate a captcha and return its id + rendered base64 PNG.
     pub fn require_captcha(&self) -> Result<Captcha, String> {
+        self.check_captcha_capacity()?;
         let mut c = captcha::Captcha::new();
         c.add_chars(4)
             .apply_filter(captcha::filters::Noise::new(0.1))
@@ -118,6 +121,9 @@ impl LoginLimiter {
         );
         let id = uuid::Uuid::new_v4().to_string();
         let mut g = self.inner.lock().unwrap();
+        if g.captchas.len() >= MAX_CAPTCHAS {
+            return Err("captcha capacity reached".to_string());
+        }
         g.captchas.insert(
             id.clone(),
             CaptchaMetaInternal {
@@ -126,6 +132,16 @@ impl LoginLimiter {
             },
         );
         Ok(Captcha { id, b64 })
+    }
+
+    fn check_captcha_capacity(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let now = Instant::now();
+        inner.captchas.retain(|_, meta| meta.expires_at > now);
+        if inner.captchas.len() >= MAX_CAPTCHAS {
+            return Err("captcha capacity reached".to_string());
+        }
+        Ok(())
     }
 
     pub fn verify_captcha(&self, id: &str, answer: &str) -> bool {
@@ -180,6 +196,36 @@ impl LoginLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captcha_capacity_rejects_requests_until_entries_expire() {
+        let limiter = LoginLimiter::new(SecurityPolicy {
+            captcha_threshold: 0,
+            ban_threshold: 0,
+            attempts_window: Duration::from_secs(60),
+            ban_duration: Duration::from_secs(60),
+        });
+        {
+            let mut inner = limiter.inner.lock().unwrap();
+            for index in 0..MAX_CAPTCHAS {
+                inner.captchas.insert(
+                    index.to_string(),
+                    CaptchaMetaInternal {
+                        answer: "test".to_string(),
+                        expires_at: Instant::now() + Duration::from_secs(60),
+                    },
+                );
+            }
+        }
+        assert!(limiter.require_captcha().is_err());
+        {
+            let mut inner = limiter.inner.lock().unwrap();
+            for meta in inner.captchas.values_mut() {
+                meta.expires_at = Instant::now() - Duration::from_secs(1);
+            }
+        }
+        assert!(limiter.require_captcha().is_ok());
+    }
 
     #[test]
     fn disabled_captcha_stays_disabled_when_bans_are_enabled() {

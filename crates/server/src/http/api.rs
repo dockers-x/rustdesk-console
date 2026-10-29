@@ -548,7 +548,10 @@ pub async fn login_options(State(state): State<AppState>) -> Response {
 }
 
 pub async fn logout(State(state): State<AppState>, user: RustClientUser) -> Response {
-    let _ = services::user::logout(&state.db, user.user.id, &user.token).await;
+    if let Err(error) = services::user::logout(&state.db, user.user.id, &user.token).await {
+        tracing::warn!(%error, "failed to revoke client access token");
+        return resp::error("Failed to log out");
+    }
     Json(Value::Null).into_response()
 }
 
@@ -1112,6 +1115,17 @@ pub async fn device_deploy(
         .await;
         return Json(json!({ "error": "Unauthorized" })).into_response();
     }
+    if let Some(token) = &auth.deployment_token {
+        let claimed = services::deployment::claim_use(&state.db, token)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!("failed to claim deployment token use: {error}");
+                false
+            });
+        if !claimed {
+            return Json(json!({ "error": "Unauthorized" })).into_response();
+        }
+    }
     match upsert_deployed_peer(&state, &auth, None, &f.id, &f.uuid, Some(&f.pk), None).await {
         Ok(peer) => {
             if let Some(strategy_id) = auth
@@ -1128,10 +1142,6 @@ pub async fn device_deploy(
                     services::strategy::DEFAULT_PRIORITY,
                 )
                 .await;
-            }
-            if auth.is_deployment_token() {
-                let _ = services::deployment::increment_used(&state.db, auth.deployment_token_id())
-                    .await;
             }
             let _ = record_deployment_event(
                 &state,
@@ -1248,12 +1258,19 @@ pub async fn device_cli(
         .await;
         return "UNAUTHORIZED".into_response();
     }
+    if let Some(token) = &auth.deployment_token {
+        let claimed = services::deployment::claim_use(&state.db, token)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!("failed to claim deployment token use: {error}");
+                false
+            });
+        if !claimed {
+            return "UNAUTHORIZED".into_response();
+        }
+    }
     match apply_device_cli_assignment(&state, &auth, f).await {
         Ok(message) => {
-            if auth.is_deployment_token() {
-                let _ = services::deployment::increment_used(&state.db, auth.deployment_token_id())
-                    .await;
-            }
             let _ = record_deployment_event(
                 &state,
                 &auth,
@@ -1291,6 +1308,14 @@ async fn apply_device_cli_assignment(
 ) -> Result<String, String> {
     if f.id.trim().is_empty() || f.uuid.trim().is_empty() {
         return Err("INVALID_INPUT".to_string());
+    }
+    if let Some(caller) = auth.user.as_ref().filter(|user| !user.is_admin()) {
+        if option_text(&f.user_name).is_some_and(|name| name != caller.username)
+            || option_text(&f.device_group_name).is_some()
+            || option_text(&f.strategy_name).is_some()
+        {
+            return Err("UNAUTHORIZED".to_string());
+        }
     }
     let target_user = match option_text(&f.user_name) {
         Some(name) => services::user::info_by_username(&state.db, &name)
@@ -1428,6 +1453,13 @@ async fn upsert_deployed_peer(
         Some(mut p) => {
             if !p.uuid.is_empty() && p.uuid != uuid {
                 return Err(DeviceDeployError::IdTaken);
+            }
+            if auth
+                .user
+                .as_ref()
+                .is_some_and(|caller| !caller.is_admin() && p.user_id > 0 && p.user_id != caller.id)
+            {
+                return Err(DeviceDeployError::Other("UNAUTHORIZED".to_string()));
             }
             p.uuid = uuid.to_string();
             p.user_id = user.id;
@@ -2031,7 +2063,11 @@ pub async fn ab_update(
     {
         return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
-    let _ = services::tag::update_tags(&state.db, user.user.id, tc).await;
+    if let Err(error) =
+        services::tag::update_tags_collection(&state.db, user.user.id, cid, tc).await
+    {
+        return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), error));
+    }
     Json(Value::Null).into_response()
 }
 
@@ -3297,6 +3333,96 @@ pub(crate) mod deployment_tests {
     }
 
     #[tokio::test]
+    async fn review_cli_limits_regular_accounts_to_their_own_assignments() {
+        let state = directory_state().await;
+        let current = services::user::info_by_id(&state.db, 7)
+            .await
+            .unwrap()
+            .unwrap();
+        for extra in [
+            json!({"user_name":"colleague"}),
+            json!({"device_group_name":"Desktops"}),
+            json!({"strategy_name":"restricted"}),
+        ] {
+            let mut form = json!({"id":"review-device","uuid":"review-uuid"});
+            form.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let auth = DeploymentAuth {
+                user: Some(current.clone()),
+                token: String::new(),
+                deployment_token: None,
+            };
+            assert_eq!(
+                apply_device_cli_assignment(&state, &auth, serde_json::from_value(form).unwrap())
+                    .await
+                    .unwrap_err(),
+                "UNAUTHORIZED"
+            );
+            assert!(services::peer::find_by_id(&state.db, "review-device")
+                .await
+                .unwrap()
+                .is_none());
+        }
+        for (is_admin, target) in [(false, "deployer"), (true, "colleague")] {
+            let mut caller = current.clone();
+            caller.is_admin = Some(is_admin);
+            let auth = DeploymentAuth {
+                user: Some(caller),
+                token: String::new(),
+                deployment_token: None,
+            };
+            let form = serde_json::from_value(
+                json!({"id":format!("review-{target}"),"uuid":"review-uuid","user_name":target}),
+            )
+            .unwrap();
+            assert!(apply_device_cli_assignment(&state, &auth, form)
+                .await
+                .is_ok());
+        }
+        let auth = DeploymentAuth {
+            user: Some(current),
+            token: String::new(),
+            deployment_token: None,
+        };
+        let form =
+            serde_json::from_value(json!({"id":"review-colleague","uuid":"review-uuid"})).unwrap();
+        assert_eq!(
+            apply_device_cli_assignment(&state, &auth, form)
+                .await
+                .unwrap_err(),
+            "UNAUTHORIZED"
+        );
+        let form = serde_json::from_value(
+            json!({"id":"review-token","uuid":"review-uuid","user_name":"colleague"}),
+        )
+        .unwrap();
+        assert!(
+            apply_device_cli_assignment(&state, &deployment_auth(), form)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn review_client_logout_reports_a_database_failure() {
+        let state = test_state(setup_db().await);
+        let current = services::user::info_by_id(&state.db, 7)
+            .await
+            .unwrap()
+            .unwrap();
+        let response = logout(
+            State(state),
+            RustClientUser {
+                user: current,
+                token: "token".into(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(directory_response(response).await["error"].is_string());
+    }
+    #[tokio::test]
     async fn client_directory_users_filter_status_before_paginating_without_expanding_scope() {
         let state = directory_state().await;
         let current = services::user::info_by_id(&state.db, 7)
@@ -3666,6 +3792,67 @@ pub(crate) mod deployment_tests {
                 updated_at: None,
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_deploy_and_assign_share_one_token_use() {
+        let db = setup_db().await;
+        let schema = Schema::new(DbBackend::Sqlite);
+        for statement in [
+            schema.create_table_from_entity(deployment_token::Entity),
+            schema.create_table_from_entity(deployment_event::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&statement))
+                .await
+                .unwrap();
+        }
+        let mut token = deployment_auth().deployment_token.unwrap();
+        token.max_uses = 1;
+        let active: deployment_token::ActiveModel = token.into();
+        active.insert(&db).await.unwrap();
+        let state = test_state(db.clone());
+        let (deploy, assign) = tokio::join!(
+            device_deploy(
+                State(state.clone()),
+                ClientIp("127.0.0.1".to_string()),
+                deployment_auth(),
+                Json(DeviceDeployForm {
+                    id: "deploy-1".into(),
+                    uuid: "uuid-1".into(),
+                    pk: String::new(),
+                }),
+            ),
+            device_cli(
+                State(state),
+                ClientIp("127.0.0.1".to_string()),
+                deployment_auth(),
+                Json(DeviceCliForm {
+                    id: "assign-2".into(),
+                    uuid: "uuid-2".into(),
+                    ..Default::default()
+                }),
+            ),
+        );
+        let deploy = axum::body::to_bytes(deploy.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let deploy: Value = serde_json::from_slice(&deploy).unwrap();
+        let assign = axum::body::to_bytes(assign.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            usize::from(deploy["result"] == "OK") + usize::from(assign.is_empty()),
+            1
+        );
+        assert_eq!(peer::Entity::find().count(&db).await.unwrap(), 1);
+        assert_eq!(
+            services::deployment::info_by_id(&db, 42)
+                .await
+                .unwrap()
+                .unwrap()
+                .used_count,
+            1
+        );
     }
 
     #[tokio::test]

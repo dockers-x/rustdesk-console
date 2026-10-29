@@ -220,8 +220,10 @@ pub async fn captcha(
 }
 
 pub async fn logout(State(state): State<AppState>, user: BackendUser) -> Response {
-    let _ = services::user::logout(&state.db, user.user.id, &user.token).await;
-    resp::success(Value::Null)
+    match services::user::logout(&state.db, user.user.id, &user.token).await {
+        Ok(()) => resp::success(Value::Null),
+        Err(error) => resp::fail(101, error.to_string()),
+    }
 }
 
 pub async fn login_options(
@@ -3208,7 +3210,7 @@ pub async fn address_book_batch_create(
         if uid == 0 {
             continue;
         }
-        if let Ok(Some(_)) = services::address_book::info_by_user_id_and_id_and_cid(
+        match services::address_book::info_by_user_id_and_id_and_cid(
             &state.db,
             uid,
             &f.id,
@@ -3216,14 +3218,25 @@ pub async fn address_book_batch_create(
         )
         .await
         {
-            continue;
+            Ok(Some(_)) => continue,
+            Ok(None) => {}
+            Err(error) => {
+                return resp::fail(
+                    101,
+                    format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+                )
+            }
         }
         if let Err(e) = services::tag::ensure_names(&state.db, uid, f.collection_id, &f.tags).await
         {
-            tracing::warn!("failed to ensure address book tags for user {uid}: {e}");
-            continue;
+            return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
         }
-        let _ = services::address_book::create(&state.db, f.to_model(uid)).await;
+        if let Err(error) = services::address_book::create(&state.db, f.to_model(uid)).await {
+            return resp::fail(
+                101,
+                format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+            );
+        }
     }
     resp::success(Value::Null)
 }
@@ -3258,9 +3271,15 @@ pub async fn address_book_batch_create_from_peers(
     {
         return resp::fail(101, state.tr(&lang, "ItemNotFound"));
     }
-    let peers = services::peer::list_by_row_ids(&state.db, &f.peer_ids)
-        .await
-        .unwrap_or_default();
+    let peers = match services::peer::list_by_row_ids(&state.db, &f.peer_ids).await {
+        Ok(peers) => peers,
+        Err(error) => {
+            return resp::fail(
+                101,
+                format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+            )
+        }
+    };
     if let Err(e) =
         services::tag::ensure_names(&state.db, f.user_id, f.collection_id, &f.tags).await
     {
@@ -3272,7 +3291,7 @@ pub async fn address_book_batch_create_from_peers(
         ab.tags = tags.clone();
         ab.collection_id = f.collection_id;
         ab.user_id = f.user_id;
-        if let Ok(Some(_)) = services::address_book::info_by_user_id_and_id_and_cid(
+        match services::address_book::info_by_user_id_and_id_and_cid(
             &state.db,
             f.user_id,
             &ab.id,
@@ -3280,9 +3299,21 @@ pub async fn address_book_batch_create_from_peers(
         )
         .await
         {
-            continue;
+            Ok(Some(_)) => continue,
+            Ok(None) => {}
+            Err(error) => {
+                return resp::fail(
+                    101,
+                    format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+                )
+            }
         }
-        let _ = services::address_book::create(&state.db, ab).await;
+        if let Err(error) = services::address_book::create(&state.db, ab).await {
+            return resp::fail(
+                101,
+                format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+            );
+        }
     }
     resp::success(Value::Null)
 }
@@ -4164,6 +4195,126 @@ pub async fn user_register(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, DbBackend, Schema, Set, Statement};
+
+    async fn failed_write_state() -> (AppState, entity::user::Model, entity::user_token::Model) {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        for statement in [
+            schema.create_table_from_entity(entity::user::Entity),
+            schema.create_table_from_entity(entity::user_token::Entity),
+            schema.create_table_from_entity(entity::peer::Entity),
+            schema.create_table_from_entity(entity::address_book::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&statement))
+                .await
+                .unwrap();
+        }
+        let user = entity::user::ActiveModel {
+            username: Set("write-test".to_string()),
+            is_admin: Set(Some(true)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let token = entity::user_token::ActiveModel {
+            user_id: Set(user.id),
+            token: Set("test-token".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        entity::peer::ActiveModel {
+            row_id: Set(1),
+            user_id: Set(user.id),
+            id: Set("123456".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        for sql in [
+            "CREATE TRIGGER reject_ab_insert BEFORE INSERT ON address_books BEGIN SELECT RAISE(FAIL, 'test write failure'); END",
+            "CREATE TRIGGER reject_token_delete BEFORE DELETE ON user_tokens BEGIN SELECT RAISE(FAIL, 'test write failure'); END",
+        ] {
+            db.execute(Statement::from_string(DbBackend::Sqlite, sql)).await.unwrap();
+        }
+        (
+            crate::http::api::deployment_tests::test_state(db),
+            user,
+            token,
+        )
+    }
+
+    async fn response_code(response: Response) -> i64 {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice::<Value>(&bytes).unwrap()["code"]
+            .as_i64()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn logout_reports_token_revocation_failure() {
+        let (state, user, token) = failed_write_state().await;
+        let response = logout(
+            State(state),
+            BackendUser {
+                user,
+                token: token.token.clone(),
+                user_token: token,
+            },
+        )
+        .await;
+        assert_eq!(response_code(response).await, 101);
+    }
+
+    #[tokio::test]
+    async fn address_book_batch_handlers_report_failed_inserts() {
+        let (state, user, token) = failed_write_state().await;
+        let admin = || AdminUser {
+            user: user.clone(),
+            token: token.token.clone(),
+        };
+        let response = address_book_batch_create(
+            State(state.clone()),
+            AcceptLang(String::new()),
+            admin(),
+            Json(serde_json::from_value(json!({"id":"123456", "user_ids":[user.id]})).unwrap()),
+        )
+        .await;
+        assert_eq!(response_code(response).await, 101);
+        let response = address_book_batch_create_from_peers(
+            State(state.clone()),
+            AcceptLang(String::new()),
+            admin(),
+            Json(BatchCreateFromPeersForm {
+                user_id: user.id,
+                peer_ids: vec![1],
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(response_code(response).await, 101);
+        let response = crate::http::my::address_book_batch_create_from_peers(
+            State(state),
+            AcceptLang(String::new()),
+            BackendUser {
+                user,
+                token: token.token.clone(),
+                user_token: token,
+            },
+            Json(crate::http::my::MyBatchFromPeersForm {
+                peer_ids: vec![1],
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(response_code(response).await, 101);
+    }
 
     #[test]
     fn peer_form_keeps_omitted_fields_unset() {

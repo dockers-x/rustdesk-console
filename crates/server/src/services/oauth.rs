@@ -598,6 +598,14 @@ fn alg_matches_header(alg: &str, header_alg: jsonwebtoken::Algorithm) -> bool {
         .unwrap_or(false)
 }
 
+fn provider_numeric_id(profile: &serde_json::Value) -> Result<i64, String> {
+    profile
+        .get("id")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|id| *id > 0)
+        .ok_or_else(|| "GetOauthUserInfoError: missing or invalid user id".to_string())
+}
+
 pub async fn callback(
     cfg: &Config,
     db: &DatabaseConnection,
@@ -632,12 +640,15 @@ pub async fn callback(
         .send()
         .await
         .map_err(|e| format!("GetOauthTokenError: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("GetOauthTokenError: {e}"))?
         .json()
         .await
         .map_err(|e| format!("GetOauthTokenError: {e}"))?;
     let access_token = token_resp
         .get("access_token")
         .and_then(|v| v.as_str())
+        .filter(|token| !token.trim().is_empty())
         .ok_or("GetOauthTokenError")?
         .to_string();
 
@@ -661,6 +672,8 @@ pub async fn callback(
         .send()
         .await
         .map_err(|e| format!("GetOauthUserInfoError: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("GetOauthUserInfoError: {e}"))?
         .json()
         .await
         .map_err(|e| format!("DecodeOauthUserInfoError: {e}"))?;
@@ -674,7 +687,7 @@ pub async fn callback(
     };
     let oauth_user = match info.oauth_type.as_str() {
         oauth::TYPE_GITHUB => {
-            let id = info_resp.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+            let id = provider_numeric_id(&info_resp)?;
             let mut email = s("email");
             let mut verified_email = false;
             // GitHub may not return the email inline; fetch the primary verified one.
@@ -713,7 +726,7 @@ pub async fn callback(
             }
         }
         oauth::TYPE_LINUXDO => {
-            let id = info_resp.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+            let id = provider_numeric_id(&info_resp)?;
             OauthUser {
                 open_id: id.to_string(),
                 name: s("name"),
@@ -877,6 +890,19 @@ mod tests {
     use tokio::net::TcpListener;
 
     const TEST_KID: &str = "test-key";
+
+    #[test]
+    fn provider_numeric_id_rejects_error_profiles_and_invalid_ids() {
+        for profile in [
+            json!({"message": "Bad credentials"}),
+            json!({"id": 0}),
+            json!({"id": -1}),
+            json!({"id": "123"}),
+        ] {
+            assert!(provider_numeric_id(&profile).is_err());
+        }
+        assert_eq!(provider_numeric_id(&json!({"id": 123})).unwrap(), 123);
+    }
 
     fn oauth_model(oauth_type: &str) -> oauth::Model {
         oauth::Model {

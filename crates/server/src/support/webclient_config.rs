@@ -101,18 +101,7 @@ fn persist_to_config_file(path: &Path, cfg: &WebClientConfig) -> anyhow::Result<
     let raw = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read config {}: {}", path.display(), e))?;
     let updated = patch_rustdesk_section(&raw, cfg);
-    let permissions = std::fs::metadata(path).ok().map(|m| m.permissions());
-    let tmp_path = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp_path, updated)
-        .map_err(|e| anyhow::anyhow!("write temp config {}: {}", tmp_path.display(), e))?;
-    if let Some(permissions) = permissions {
-        std::fs::set_permissions(&tmp_path, permissions).map_err(|e| {
-            anyhow::anyhow!("set temp config permissions {}: {}", tmp_path.display(), e)
-        })?;
-    }
-    std::fs::rename(&tmp_path, path)
-        .map_err(|e| anyhow::anyhow!("replace config {}: {}", path.display(), e))?;
-    Ok(())
+    super::persist_config_file(path, &updated)
 }
 
 fn patch_rustdesk_section(raw: &str, cfg: &WebClientConfig) -> String {

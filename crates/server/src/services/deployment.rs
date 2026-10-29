@@ -147,8 +147,12 @@ pub async fn verify_token(
     Ok(Some(row))
 }
 
-pub async fn increment_used(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
-    deployment_token::Entity::update_many()
+pub async fn claim_use(
+    db: &DatabaseConnection,
+    token: &deployment_token::Model,
+) -> Result<bool, DbErr> {
+    let now_ts = chrono::Utc::now().timestamp();
+    let result = deployment_token::Entity::update_many()
         .col_expr(
             deployment_token::Column::UsedCount,
             Expr::col(deployment_token::Column::UsedCount).add(1),
@@ -157,10 +161,26 @@ pub async fn increment_used(db: &DatabaseConnection, id: i32) -> Result<(), DbEr
             deployment_token::Column::UpdatedAt,
             Expr::value(chrono::Utc::now().naive_utc()),
         )
-        .filter(deployment_token::Column::Id.eq(id))
+        .filter(deployment_token::Column::Id.eq(token.id))
+        .filter(deployment_token::Column::TokenHash.eq(&token.token_hash))
+        .filter(deployment_token::Column::RevokedAt.lte(0))
+        .filter(
+            Condition::any()
+                .add(deployment_token::Column::ExpiresAt.lte(0))
+                .add(deployment_token::Column::ExpiresAt.gt(now_ts)),
+        )
+        .filter(
+            Condition::any()
+                .add(deployment_token::Column::MaxUses.lte(0))
+                .add(
+                    Expr::col(deployment_token::Column::UsedCount)
+                        .lt(Expr::col(deployment_token::Column::MaxUses)),
+                ),
+        )
+        .filter(deployment_token::Column::UsedCount.lt(i32::MAX))
         .exec(db)
         .await?;
-    Ok(())
+    Ok(result.rows_affected == 1)
 }
 
 pub fn has_scope(row: &deployment_token::Model, scope: &str) -> bool {
@@ -287,5 +307,36 @@ mod tests {
             "deploy".to_string(),
         ]);
         assert_eq!(scopes, vec!["deploy".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn claim_rechecks_current_token_and_preserves_unlimited_uses() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(deployment_token::Entity)),
+        )
+        .await
+        .unwrap();
+        let token = deployment_token::ActiveModel {
+            token_hash: Set("test-hash".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let (first, second) = tokio::join!(claim_use(&db, &token), claim_use(&db, &token));
+        assert!(first.unwrap());
+        assert!(second.unwrap());
+        revoke_token(&db, token.id).await.unwrap();
+        assert!(!claim_use(&db, &token).await.unwrap());
+        let mut current: deployment_token::ActiveModel = token.clone().into();
+        current.revoked_at = Set(0);
+        current.expires_at = Set(chrono::Utc::now().timestamp() - 1);
+        current.update(&db).await.unwrap();
+        assert!(!claim_use(&db, &token).await.unwrap());
+        delete_token(&db, token.id).await.unwrap();
+        assert!(!claim_use(&db, &token).await.unwrap());
     }
 }

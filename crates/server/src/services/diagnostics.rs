@@ -190,7 +190,11 @@ pub async fn check_tcp_port(key: &str, label: &str, port: Option<u16>) -> Diagno
 }
 
 pub fn normalized_id_command_port(config: &Config) -> Option<u16> {
-    normalize_port(config.admin.id_server_port - 1)
+    config
+        .admin
+        .id_server_port
+        .checked_sub(1)
+        .and_then(normalize_port)
 }
 
 pub fn normalize_port(port: i32) -> Option<u16> {
@@ -227,6 +231,15 @@ mod tests {
         assert_eq!(normalize_port(-1), None);
         assert_eq!(normalize_port(65536), None);
         assert_eq!(normalize_port(21117), Some(21117));
+    }
+
+    #[test]
+    fn id_command_port_rejects_underflow_and_preserves_valid_port() {
+        let mut config = Config::default();
+        config.admin.id_server_port = i32::MIN;
+        assert_eq!(normalized_id_command_port(&config), None);
+        config.admin.id_server_port = 21116;
+        assert_eq!(normalized_id_command_port(&config), Some(21115));
     }
 
     #[test]

@@ -285,13 +285,22 @@ pub async fn ensure_names(
     Ok(())
 }
 
-/// Reconcile a user's tags against `name -> color` (≈ `TagService.UpdateTags`).
+/// Reconcile a user's legacy personal tags against `name -> color`.
 pub async fn update_tags(
     db: &DatabaseConnection,
     user_id: i32,
+    tags: std::collections::HashMap<String, i64>,
+) -> Result<(), DbErr> {
+    update_tags_collection(db, user_id, 0, tags).await
+}
+
+pub async fn update_tags_collection(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
     mut tags: std::collections::HashMap<String, i64>,
 ) -> Result<(), DbErr> {
-    let existing = list_by_user_id(db, user_id).await?;
+    let existing = list_by_user_and_collection(db, user_id, collection_id).await?;
     for t in existing {
         match tags.get(&t.name).copied() {
             None => {
@@ -309,7 +318,7 @@ pub async fn update_tags(
         }
     }
     for (name, color) in tags {
-        create(db, &name, color, user_id, 0).await?;
+        create(db, &name, color, user_id, collection_id).await?;
     }
     Ok(())
 }
@@ -441,6 +450,62 @@ mod tests {
 
         let updated = info_by_id(&db, tag.id).await.unwrap().unwrap();
         assert_eq!(updated.color, 0xFF00FF00);
+    }
+
+    #[tokio::test]
+    async fn legacy_sync_preserves_other_collection_tags() {
+        let db = setup_peer_tags_db().await;
+        create(&db, "old", 42, 1, 0).await.unwrap();
+        update_tags(&db, 1, std::collections::HashMap::new())
+            .await
+            .unwrap();
+
+        assert!(list_by_user_and_collection(&db, 1, 0)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            list_by_user_and_collection(&db, 1, 2).await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            list_by_user_and_collection(&db, 1, 3).await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            list_by_user_and_collection(&db, 2, 2).await.unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn collection_sync_updates_and_creates_only_selected_collection_tags() {
+        let db = setup_peer_tags_db().await;
+        update_tags_collection(
+            &db,
+            1,
+            2,
+            std::collections::HashMap::from([("old".to_string(), 99), ("new".to_string(), 100)]),
+        )
+        .await
+        .unwrap();
+
+        let tags = list_by_user_and_collection(&db, 1, 2).await.unwrap();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.iter().any(|tag| tag.name == "old" && tag.color == 99));
+        assert!(tags.iter().any(|tag| tag.name == "new" && tag.color == 100));
+        assert!(list_by_user_and_collection(&db, 1, 0)
+            .await
+            .unwrap()
+            .is_empty());
+        for (user_id, collection_id) in [(1, 3), (2, 2)] {
+            let tags = list_by_user_and_collection(&db, user_id, collection_id)
+                .await
+                .unwrap();
+            assert_eq!(tags.len(), 1);
+            assert_eq!(tags[0].name, "old");
+            assert_eq!(tags[0].color, 42);
+        }
     }
 
     #[tokio::test]

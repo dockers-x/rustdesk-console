@@ -60,9 +60,9 @@
     <script>
         var lang = navigator.language || navigator.userLanguage || 'zh-CN';
         var title = 'OauthFailed'
-        var msg = '{{.message}}'
+        var msg = {{.message}}
         var btn = 'Close'
-        document.writeln('<script src="/api/oidc/msg?lang=' + lang + '&msg=' + msg + '&title=OauthFailed"><\/script>');
+        document.writeln('<script src="/api/oidc/msg?lang=' + encodeURIComponent(lang) + '&msg=' + encodeURIComponent(msg) + '&title=OauthFailed"><\/script>');
     </script>
 </head>
 <body>

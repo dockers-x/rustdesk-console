@@ -139,7 +139,7 @@ pub async fn login(
         ip: Set(event.ip),
         r#type: Set(event.login_type),
         platform: Set(event.platform),
-        user_token_id: Set(u.id),
+        user_token_id: Set(ut.id),
         is_deleted: Set(0),
         created_at: Set(now()),
         updated_at: Set(now()),
@@ -558,4 +558,47 @@ pub async fn register(
         updated_at: None,
     };
     create(db, model).await.ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn login_log_references_the_created_token() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        for statement in [
+            schema.create_table_from_entity(user::Entity),
+            schema.create_table_from_entity(user_token::Entity),
+            schema.create_table_from_entity(login_log::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&statement))
+                .await
+                .unwrap();
+        }
+        let account = user::ActiveModel {
+            id: Set(42),
+            username: Set("login-test".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let event = LoginEvent {
+            client: login_log::CLIENT_APP.to_string(),
+            device_id: String::new(),
+            uuid: String::new(),
+            ip: "127.0.0.1".to_string(),
+            login_type: login_log::TYPE_ACCOUNT.to_string(),
+            platform: "Linux".to_string(),
+        };
+        let config = Config::default();
+        let jwt = Jwt::new("", config.app.token_expire_duration());
+        let token = login(&db, &jwt, &config, &account, event).await.unwrap();
+        let log = login_log::Entity::find().one(&db).await.unwrap().unwrap();
+        assert_ne!(account.id, token.id);
+        assert_eq!(log.user_id, account.id);
+        assert_eq!(log.user_token_id, token.id);
+    }
 }

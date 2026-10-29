@@ -1,5 +1,7 @@
 # Console 全量代码审查与本轮回归面
 
+此文记录 v0.2.38 及此前的审查。v0.2.39 的后续全 workspace 审核、验证码容量修复和新验证结果见 `2026-10-29-workspace-rust-review.md`；下列已知边界为当时状态。
+
 本轮按 `rust-review`、`rust-best-practices` 审阅所有 Rust 生产模块，
 不是仅检查新增功能。范围：`crates/entity`、三个辅助库、server 全部 HTTP、
 services（含 Geo 子模块）、support、入口、bootstrap、配置和资源模块。

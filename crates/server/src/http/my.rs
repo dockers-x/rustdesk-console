@@ -221,12 +221,18 @@ pub async fn address_book_batch_create_from_peers(
             _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
         }
     }
-    let peers: Vec<_> = services::peer::list_by_row_ids(&state.db, &f.peer_ids)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|p| p.user_id == uid)
-        .collect();
+    let peers: Vec<_> = match services::peer::list_by_row_ids(&state.db, &f.peer_ids).await {
+        Ok(peers) => peers
+            .into_iter()
+            .filter(|peer| peer.user_id == uid)
+            .collect(),
+        Err(error) => {
+            return resp::fail(
+                101,
+                format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+            )
+        }
+    };
     if let Err(e) = services::tag::ensure_names(&state.db, uid, f.collection_id, &f.tags).await {
         return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
@@ -236,7 +242,7 @@ pub async fn address_book_batch_create_from_peers(
         ab.tags = tags.clone();
         ab.collection_id = f.collection_id;
         ab.user_id = uid;
-        if let Ok(Some(_)) = services::address_book::info_by_user_id_and_id_and_cid(
+        match services::address_book::info_by_user_id_and_id_and_cid(
             &state.db,
             uid,
             &ab.id,
@@ -244,9 +250,21 @@ pub async fn address_book_batch_create_from_peers(
         )
         .await
         {
-            continue;
+            Ok(Some(_)) => continue,
+            Ok(None) => {}
+            Err(error) => {
+                return resp::fail(
+                    101,
+                    format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+                )
+            }
         }
-        let _ = services::address_book::create(&state.db, ab).await;
+        if let Err(error) = services::address_book::create(&state.db, ab).await {
+            return resp::fail(
+                101,
+                format!("{}{}", state.tr(&lang, "OperationFailed"), error),
+            );
+        }
     }
     resp::success(Value::Null)
 }

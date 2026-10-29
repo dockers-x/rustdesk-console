@@ -568,12 +568,12 @@ async fn seed(
 
 /// Build the full application state from a parsed config.
 pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result<AppState> {
+    let jwt = Jwt::try_new(&config.jwt.key, config.jwt.expire_duration())?;
     let db = connect(&config).await?;
     let i18n = I18n::load(&config.lang);
 
     migrate_and_seed(&db, &config, &i18n, &config.lang).await?;
 
-    let jwt = Jwt::new(&config.jwt.key, config.jwt.expire_duration());
     let limiter = LoginLimiter::new(SecurityPolicy {
         captcha_threshold: config.app.captcha_threshold,
         ban_threshold: config.app.ban_threshold,

@@ -122,6 +122,10 @@ impl FromRequestParts<AppState> for DeploymentAuth {
         if let Ok(Some((user, _ut))) =
             crate::services::user::info_by_access_token(&state.db, &token).await
         {
+            if user.must_change_password {
+                let lang = header(parts, "Accept-Language").unwrap_or_default();
+                return Err(response::error(state.tr(&lang, "PasswordChangeRequired")));
+            }
             return Ok(DeploymentAuth {
                 user: Some(user),
                 token,
@@ -158,7 +162,18 @@ impl FromRequestParts<AppState> for RustClientUser {
         }
         let token = auth[7..].to_string();
         match crate::services::user::info_by_access_token(&state.db, &token).await {
-            Ok(Some((user, _ut))) => Ok(RustClientUser { user, token }),
+            Ok(Some((user, _ut))) => {
+                if user.must_change_password
+                    && !matches!(
+                        parts.uri.path(),
+                        "/api/currentUser" | "/api/user/info" | "/api/logout"
+                    )
+                {
+                    let lang = header(parts, "Accept-Language").unwrap_or_default();
+                    return Err(response::error(state.tr(&lang, "PasswordChangeRequired")));
+                }
+                Ok(RustClientUser { user, token })
+            }
             _ => Err(response::unauthorized()),
         }
     }
@@ -247,5 +262,107 @@ impl FromRequestParts<AppState> for AdminUser {
             user: backend.user,
             token: backend.token,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, DbBackend, Schema, Set};
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn review_bearer_extractors_enforce_required_password_changes() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        for statement in [
+            schema.create_table_from_entity(user::Entity),
+            schema.create_table_from_entity(user_token::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&statement))
+                .await
+                .unwrap();
+        }
+        user::ActiveModel {
+            id: Set(1),
+            username: Set("temporary".into()),
+            status: Set(user::STATUS_ENABLE),
+            must_change_password: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        user_token::ActiveModel {
+            user_id: Set(1),
+            token: Set("temporary-token".into()),
+            expired_at: Set(chrono::Utc::now().timestamp() + 3600),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let state = crate::http::api::deployment_tests::test_state(db);
+        let app = crate::http::router::build(state.clone());
+        for path in ["/api/ab", "/api/devices/cli"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("authorization", "Bearer temporary-token")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                body["error"],
+                state.tr("", "PasswordChangeRequired"),
+                "{path}"
+            );
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/user/info")
+                    .header("authorization", "Bearer temporary-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        user::ActiveModel {
+            id: Set(1),
+            must_change_password: Set(false),
+            ..Default::default()
+        }
+        .update(&state.db)
+        .await
+        .unwrap();
+        let (mut parts, _) = Request::builder()
+            .uri("/api/ab")
+            .header("authorization", "Bearer temporary-token")
+            .body(Body::empty())
+            .unwrap()
+            .into_parts();
+        assert!(RustClientUser::from_request_parts(&mut parts, &state)
+            .await
+            .is_ok());
+        assert!(DeploymentAuth::from_request_parts(&mut parts, &state)
+            .await
+            .is_ok());
     }
 }

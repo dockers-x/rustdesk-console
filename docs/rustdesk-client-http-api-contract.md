@@ -219,6 +219,14 @@ the reverse connection; it fails closed and a user retry may be necessary.
   locally on the controller and does not call `/api/record` in the inspected
   client source.
 
+Deployment-token usage limits are claimed atomically before `/api/devices/deploy`
+or CLI assignment changes a device. Concurrent requests share the same limit;
+revoked, expired, deleted, or exhausted tokens cannot claim another use. A claimed
+use is consumed even if the subsequent deployment or assignment fails. There is
+no automatic refund or retry exemption: this deliberately favors enforcement of
+the configured limit over retry convenience. A `max_uses` value of zero continues
+to mean unlimited use. Account/admin bearer-token requests do not consume deployment-token uses.
+
 ## Recheck Procedure
 
 1. Update the source baseline at the top of this document.
