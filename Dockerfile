@@ -7,6 +7,7 @@
 FROM node:20-bookworm-slim AS webui
 WORKDIR /app
 COPY web ./web
+COPY docs/self-signed-client.*.md ./docs/
 RUN cd web \
     && npm install --global pnpm@10.34.0 \
     && pnpm install --frozen-lockfile \
