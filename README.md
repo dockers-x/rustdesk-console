@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.34-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![release](https://img.shields.io/badge/release-v0.2.35-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
@@ -62,7 +62,7 @@ Release tags build images for **GHCR** (`ghcr.io/dockers-x/rustdesk-console`).
 
 ```bash
 # 1) build the admin web UI (outputs into resources/admin)
-cd web && npm install && npx vite build && cd ..
+cd web && npx pnpm@10.34.0 install --frozen-lockfile && npx pnpm@10.34.0 run build && cd ..
 # 2) build the server (embeds the UI)
 cargo build --release
 ./target/release/rustdesk-console -c ./conf/config.yaml
@@ -278,8 +278,8 @@ For UI development:
 
 ```bash
 cd web
-npm install
-npm run dev    # dev server; proxies /api to http://127.0.0.1:21114
+npx pnpm@10.34.0 install --frozen-lockfile
+npx pnpm@10.34.0 run dev    # dev server; proxies /api to http://127.0.0.1:21114
 ```
 
 ## CLI

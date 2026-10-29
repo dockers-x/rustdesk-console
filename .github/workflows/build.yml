@@ -15,12 +15,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.0
       - name: Build admin web UI
         run: |
           cd web
-          npm install --no-audit --no-fund
-          npm test
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm run build
       - uses: actions/upload-artifact@v4
         with:
           name: admin-dist

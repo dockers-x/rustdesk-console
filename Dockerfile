@@ -8,8 +8,9 @@ FROM node:20-bookworm-slim AS webui
 WORKDIR /app
 COPY web ./web
 RUN cd web \
-    && npm install --no-audit --no-fund \
-    && npx vite build
+    && npm install --global pnpm@10.34.0 \
+    && pnpm install --frozen-lockfile \
+    && pnpm run build
 # vite outDir is ../resources/admin -> /app/resources/admin
 
 # ---------------------------------------------------------------------------

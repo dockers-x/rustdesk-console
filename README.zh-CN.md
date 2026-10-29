@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.34-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![release](https://img.shields.io/badge/release-v0.2.35-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
@@ -58,7 +58,7 @@ docker run -d --name rustdesk-console -p 21114:21114 \
 
 ```bash
 # 1) 构建后台 web（产物输出到 resources/admin）
-cd web && npm install && npx vite build && cd ..
+cd web && npx pnpm@10.34.0 install --frozen-lockfile && npx pnpm@10.34.0 run build && cd ..
 # 2) 编译服务（会把前端嵌进去）
 cargo build --release
 ./target/release/rustdesk-console -c ./conf/config.yaml
@@ -243,8 +243,8 @@ localStorage、导入配置串或安装包文件名。生成的命令需要在�
 
 ```bash
 cd web
-npm install
-npm run dev    # 开发服务器；/api 反向代理到 http://127.0.0.1:21114
+npx pnpm@10.34.0 install --frozen-lockfile
+npx pnpm@10.34.0 run dev    # 开发服务器；/api 反向代理到 http://127.0.0.1:21114
 ```
 
 ## 命令行
