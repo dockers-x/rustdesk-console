@@ -17,7 +17,7 @@
 | `http/oauth.rs::auth_query_pre/admin_confirm/admin_bind_confirm` | action 或 IdP callback 完成状态未验证，可以消费错误流程状态、写入空身份或重复绑定。 | 检查登录 action、完成状态、未绑定状态，查询失败不继续插入。§4、§5：显式验证状态及传播失败。 |
 | `http/oauth.rs::message` | 文案直接拼进 JavaScript 单引号字符串，撇号与换行可破坏脚本边界。 | 使用 JSON 字符串序列化，不再手写引号。§4：把外部文本当数据，不当代码。此接口返回外部 JavaScript，不是 HTML 内联 script。 |
 | `http/oauth.rs` HTML renderer 与 `resources/templates/oauth_{fail,success}.html` | 错误文案直接替换到内联脚本，引号导致语法错误，HTML script 结束标记也未转义；没有据此声称已证明完整远程 XSS。 | renderer 输出 JSON 字面量并转义 `<`，模板不再添加引号，URL 参数单独编码。§4：编码必须符合实际 HTML/JavaScript 上下文。 |
-| `services/oauth.rs` 的 token/userinfo 处理 | 上游错误响应未按 HTTP 状态拒绝；GitHub/LinuxDO 缺失 id 退化为同一个 `"0"` 身份。不同无效响应可能共享这个错误本地身份，不等于任意正常账户均可被接管。 | 拒绝非成功 HTTP 状态和缺失/非正整数 id；有效身份流程保留。§5：外部失败必须显式返回错误。 |
+| `services/oauth.rs` 的 token/userinfo 处理 | 上游错误响应未按 HTTP 状态拒绝；GitHub/LinuxDO 缺失 id 退化为同一个 `"0"` 身份。不同无效响应可能共享这个错误本地身份，不等于任意正常账户均可被接管。 | 拒绝 HTTP 4xx/5xx 错误状态和缺失/非正整数 id；有效身份流程保留。§5：外部失败必须显式返回错误。 |
 | `support/mod.rs::persist_config_file` 与三个配置 store | 固定临时文件先以默认权限写入完整含密配置，存在短暂可读窗口及符号链接截断风险；行补丁器还可能把合法多行 YAML 写坏。 | YAML 校验先于写盘；随机同目录临时文件、create_new、Unix 创建时0600，再恢复原权限并 rename；失败保持原文件与运行中设置。§5、§7：失败安全、资源操作显式处理，保留原进程内锁。 |
 | `services/deployment.rs`、`http/api.rs` 的部署 token 写入口 | 余额验证和后置计数分离，max_uses=1 的令牌可以并发完成多次设备写入。 | 在设备副作用前通过条件 UPDATE 原子领取已有额度，检查受影响行数；无新增计数状态或退款协调。§7：共享授权计数的检查和修改必须原子化。已领取后部署失败也消耗一次额度。 |
 
