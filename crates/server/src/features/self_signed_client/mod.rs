@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use axum::{
     extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -148,10 +148,14 @@ async fn update(
 }
 
 async fn generate(State(state): State<AppState>, _user: AdminUser) -> Response {
-    match state.features.generate().await {
+    let mut response = match state.features.generate().await {
         Ok(settings) => response::success(settings),
         Err(error) => operation_error(error),
-    }
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn sign(
@@ -360,7 +364,58 @@ mod tests {
             )
             .unwrap();
             assert_eq!(body["code"], 0);
+            assert!(body["data"].get("private_key").is_none());
         }
+        let response = app
+            .clone()
+            .oneshot(request(
+                "feature-admin",
+                "/api/admin/features/self-signed-client/keys/generate",
+                String::new(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let body: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), MAX_CONTENT_SIZE)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["code"], 0);
+        let encoded_secret = body["data"]["private_key"].as_str().unwrap();
+        let secret =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded_secret)
+                .unwrap();
+        let public = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            body["data"]["public_key"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(secret.len(), 64);
+        assert_eq!(public.len(), 32);
+        let pair =
+            ring::signature::Ed25519KeyPair::from_seed_and_public_key(&secret[..32], &secret[32..])
+                .unwrap();
+        assert_eq!(ring::signature::KeyPair::public_key(&pair).as_ref(), public);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/features/self-signed-client")
+                    .header("api-token", "feature-admin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response_body = to_bytes(response.into_body(), MAX_CONTENT_SIZE)
+            .await
+            .unwrap();
+        let settings: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+        assert!(settings["data"].get("private_key").is_none());
+        assert!(!String::from_utf8_lossy(&response_body).contains(encoded_secret));
         let response = app
             .oneshot(request(
                 "feature-admin",

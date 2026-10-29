@@ -22,7 +22,13 @@ API behavior or builds clients.
   public key, when supplied, must match the derived public32. Returns the
   redacted settings shape, never the secret.
 - `POST /api/admin/features/self-signed-client/keys/generate`: admin, enabled
-  only; generates and persists a new keypair. Returns redacted settings only.
+  only; generates and persists a new keypair. Only this generation response
+  returns `{enabled,public_key,key_configured,fingerprint,private_key}`, where
+  `private_key` is standard base64 libsodium secret64 for the newly generated
+  pair. The response has `Cache-Control: no-store`. The UI downloads the pair
+  immediately without putting its secret into query/mutation caches. Subsequent
+  settings reads and key imports never return the private key; this is not an
+  endpoint for exporting an existing key.
 - `POST /api/admin/features/self-signed-client/sign`: admin, enabled and keyed;
   body `{app_name:string,branding:Record<string,string>,default_settings:Record<string,string>,override_settings:Record<string,string>}`.
   Each map defaults to `{}`. Unknown request fields and unsupported branding
@@ -51,8 +57,10 @@ This service never signs as RustDesk or produces an official client binary.
 
 Storage is `<config-parent>/features/self-signed-client.json` (directory 0700,
 file 0600 on Unix). Enabled/public/private are persisted in one atomic file.
-Generated private keys are not returned; back up that file using server-side
-administrative tooling. Signing requires enabled; enabling does not require a key.
+Newly generated private keys are returned only in the generation response for
+an immediate local backup. Back up the full feature file using server-side
+administrative tooling to preserve its profile and enabled flag as well.
+Signing requires enabled; enabling does not require a key.
 
 ## Acceptance
 
@@ -62,5 +70,7 @@ administrative tooling. Signing requires enabled; enabling does not require a ke
 - Generated signatures verify as Ed25519 signed-message blobs; payload matches
   `src/common.rs::read_custom_client`'s JSON structure.
 - Wrong public/private pair and malformed secret64 are rejected without
-  changing persisted state. Get/put/generate/sign never expose private keys.
+  changing persisted state. Settings get/put and sign never expose private keys.
+  Generation returns only its new private key with `Cache-Control: no-store`;
+  its base64 secret64 and public32 must form a valid pair.
 - Persistence survives reload, with private directory/file modes on Unix.

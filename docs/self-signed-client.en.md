@@ -20,8 +20,12 @@ This uses Ed25519, not PEM, RSA or ECDSA. Generate a key pair in the UI or impor
 
 1. Sign in as an administrator and enable “Self-signed clients” in system settings.
 2. Open its menu, select “Keys & signing”, and click “Generate key pair”. The first generation runs directly. If a key is already configured, back up its file before confirming replacement.
-3. After success, the page displays the verification public key and fingerprint. The server generates and securely stores the private key. No API response returns it, and the UI has no private-key export button.
+3. After success, the server has automatically saved the new key pair, and the page displays the verification public key and fingerprint. Only the generation response also returns the new private key, with `Cache-Control: no-store`; the UI immediately starts downloading `self-signed-client-keypair.json` without retaining the private key in query or mutation caches.
 4. Copy the complete “Verification public key (standard base64)” value, including trailing `=` padding, for the source change in section 4. Do not substitute your hbbs public key.
+
+The downloaded JSON contains `algorithm`, `public_key`, `private_key` and `fingerprint`. It is an **unencrypted private-key backup**, not a client configuration or build resource. Use HTTPS and a trusted administrator browser. Confirm the download completed, move it out of shared download or sync folders into encrypted offline storage, and restrict local file access (for example, `chmod 600` on Unix). Never distribute it with clients or upload it to a public repository.
+
+Settings reads and key imports do not return the private key. There is no download endpoint for an existing stored key: each “Generate key pair” action replaces it with a new pair. If the download is blocked or lost, use the server-side backup procedure below rather than regenerating merely to retrieve the current key. To restore a downloaded key-pair backup, enable the feature and import its `private_key` value, optionally with its matching `public_key`; do not paste the whole JSON into the private-key input. This backup does not contain the saved profile or enabled flag.
 
 You do not need an externally generated key to enable the feature. For imports, supply the private key and optionally a matching public key. Key import or clearing requires the feature to be enabled. While disabled, only the feature toggle remains available; keys and signing cannot be configured.
 
@@ -44,7 +48,7 @@ Keys are not written into the ordinary `config.yaml`. The exact separate path is
 - This repository's Docker Compose mounts host `./conf` at container `/app/conf`. The container file `/app/conf/features/self-signed-client.json` therefore maps to host `./conf/features/self-signed-client.json`.
 - For custom arguments or mounts, resolve the actual configuration path. Persist this directory. Never place the key file in `resources`, an upload directory, a client release bundle or any Web-accessible location.
 
-Stop Console before backing up. Using the service account or an authorized server administrator, copy the entire file into encrypted offline backup storage. Do not export it through a browser API or print its contents into logs. This Unix example uses a placeholder private backup directory; replace it with your own:
+The one-time browser download supplements, rather than replaces, a full server-side backup. Stop Console before backing up. Using the service account or an authorized server administrator, copy the entire feature file into encrypted offline backup storage. Do not serve that file through a browser API or print its contents into logs. This Unix example uses a placeholder private backup directory; replace it with your own:
 
 ```sh
 umask 077

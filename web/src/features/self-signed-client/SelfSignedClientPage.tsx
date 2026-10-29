@@ -15,6 +15,7 @@ import { BuildAssets } from "./BuildAssets";
 import { Documentation } from "./Documentation";
 import {
   downloadFile,
+  downloadGeneratedKeypair,
   emptyProfile,
   featureError,
   selfSignedBase,
@@ -24,6 +25,7 @@ import {
   useFeatures,
   type ClientCatalog,
   type ClientProfile,
+  type GeneratedSigningSettings,
   type SignedConfig,
   type SigningSettings,
 } from "./api";
@@ -81,7 +83,10 @@ export function SelfSignedClientPage() {
   const saveKeys = useMutation({
     mutationFn: async (action: KeyAction) => {
       try {
-        if (action === "generate") return await apiPost<SigningSettings>(`${selfSignedBase}/keys/generate`);
+        if (action === "generate") {
+          const generated = await apiPost<GeneratedSigningSettings>(`${selfSignedBase}/keys/generate`);
+          return downloadGeneratedKeypair(generated);
+        }
         const secret = privateInput.current?.value.trim() ?? "";
         if (!secret) throw new Error(t("selfSignedImportRequired"));
         return await apiPut<SigningSettings>(selfSignedBase, {
@@ -93,11 +98,11 @@ export function SelfSignedClientPage() {
         throw new Error(featureError(error));
       }
     },
-    onSuccess: (next) => {
+    onSuccess: (next, action) => {
       if (privateInput.current) privateInput.current.value = "";
       queryClient.setQueryData(selfSignedSettingsKey, next);
       setKeyAction(null);
-      setMessage(t("selfSignedKeySaved"));
+      setMessage(t(action === "generate" ? "selfSignedKeyGenerated" : "selfSignedKeySaved"));
       setLocalError("");
     },
     gcTime: 0,
@@ -182,6 +187,7 @@ export function SelfSignedClientPage() {
               <label className="block space-y-2 text-sm font-medium"><span>{t("selfSignedPrivateKey")}</span><textarea ref={privateInput} className={`${fieldClass} min-h-20 font-mono text-xs`} autoComplete="off" spellCheck={false} rows={2} /></label>
               <p className="text-xs leading-5 text-kumo-subtle">{t("selfSignedPrivateHint")}</p>
               <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={() => startKeyAction("import")}>{t("selfSignedImport")}</Button><Button disabled={busy} loading={saveKeys.isPending} onClick={() => startKeyAction("generate")}><Key size={16} />{t("selfSignedGenerate")}</Button></div>
+              <p className="text-sm leading-6 text-kumo-subtle">{t("selfSignedKeyBackupHint")}</p>
               <p className="border-t border-kumo-line pt-4 text-sm leading-6 text-kumo-subtle">{t("selfSignedSignHint")}</p>
             </Panel>
           )}

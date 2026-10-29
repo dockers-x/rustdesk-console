@@ -39,6 +39,13 @@ pub struct PublicSettings {
     pub fingerprint: String,
 }
 
+#[derive(Serialize)]
+pub struct GeneratedKeyPair {
+    #[serde(flatten)]
+    pub settings: PublicSettings,
+    pub private_key: String,
+}
+
 #[derive(Debug)]
 pub enum OperationError {
     Disabled,
@@ -135,7 +142,7 @@ impl FeatureStore {
         .await
     }
 
-    pub async fn generate(&self) -> Result<PublicSettings, OperationError> {
+    pub async fn generate(&self) -> Result<GeneratedKeyPair, OperationError> {
         self.run(|path| {
             let mut settings = load(path)?;
             require_enabled(&settings)?;
@@ -151,7 +158,10 @@ impl FeatureStore {
             settings.public_key = STANDARD.encode(pair.public_key().as_ref());
             let redacted = public_settings(&settings)?;
             persist(path, &settings)?;
-            Ok(redacted)
+            Ok(GeneratedKeyPair {
+                settings: redacted,
+                private_key: settings.private_key,
+            })
         })
         .await
     }
@@ -396,7 +406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generated_key_signs_client_payload_and_never_appears_in_responses() {
+    async fn generated_key_is_returned_once_and_signatures_verify() {
         let (root, store) = store();
         store
             .update(SettingsUpdate {
@@ -406,7 +416,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let settings = store.generate().await.unwrap();
+        let generated = store.generate().await.unwrap();
+        let settings = generated.settings;
         let request = super::super::SignRequest {
             app_name: "OwnDesk".to_string(),
             default_settings: std::collections::BTreeMap::from([(
@@ -437,6 +448,7 @@ mod tests {
             "SavedDesk"
         );
         let stored = load(&store.path).unwrap();
+        assert_eq!(generated.private_key, stored.private_key);
         assert_eq!(STANDARD.decode(&stored.private_key).unwrap().len(), 64);
         for response in [
             serde_json::to_string(&settings).unwrap(),

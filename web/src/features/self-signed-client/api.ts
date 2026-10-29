@@ -17,6 +17,10 @@ export interface SigningSettings {
   fingerprint: string;
 }
 
+export interface GeneratedSigningSettings extends SigningSettings {
+  private_key: string;
+}
+
 export interface ClientProfile {
   app_name: string;
   branding: Record<string, string>;
@@ -69,6 +73,21 @@ export function downloadFile(filename: string, content: BlobPart, type = "text/p
   anchor.download = filename;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function downloadGeneratedKeypair(generated: GeneratedSigningSettings): SigningSettings {
+  downloadFile("self-signed-client-keypair.json", JSON.stringify({
+    algorithm: "Ed25519",
+    public_key: generated.public_key,
+    private_key: generated.private_key,
+    fingerprint: generated.fingerprint,
+  }, null, 2), "application/json;charset=utf-8");
+  return {
+    enabled: generated.enabled,
+    public_key: generated.public_key,
+    key_configured: generated.key_configured,
+    fingerprint: generated.fingerprint,
+  };
 }
 
 export function featureError(error: unknown): string {
