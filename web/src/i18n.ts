@@ -1,7 +1,9 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
+import { selfSignedMessages } from "./features/self-signed-client/messages";
 
 const en: Record<string, string> = {
+  ...selfSignedMessages.en,
   appTitle: "RustDesk Console",
   login: "Sign in",
   register: "Register",
@@ -660,9 +662,14 @@ const en: Record<string, string> = {
   strategyAutoDisconnectTimeout: "Auto-disconnect timeout",
   strategyAutoDisconnectTimeoutHint: "Timeout in minutes, used when auto disconnect is enabled.",
   strategyAutoRecordIncoming: "Auto-record incoming sessions",
+  strategyWindowsServiceRecordingDirectory: "Windows SYSTEM recording directory",
+  strategyWindowsServiceRecordingDirectoryHint: "Only applies to recordings made by the installed Windows service, not user-session recordings. Use an absolute Windows path writable by the service account. Relative paths are ignored by the client; this setting does not enable recording.",
+  strategyWindowsServiceRecordingDirectoryPlaceholder: "D:\\RustDesk\\recording",
   strategyKeepAwakeIncoming: "Keep awake during incoming sessions",
   strategyOnlyConnWindowOpen: "Allow only when connection window is open",
   strategyAdaptiveBitrate: "Adaptive bitrate",
+  strategyAndroidSoftwareHalfScale: "Android software encoding at half resolution",
+  strategyAndroidSoftwareHalfScaleHint: "Only applies to the controlled Android device when using software encoding. Hardware encoding is unaffected; the client applies the setting when it next configures capture scaling.",
   strategyRemoveWallpaper: "Remove wallpaper",
   strategyAlwaysSoftwareRender: "Always use software rendering",
   strategyHardwareCodec: "Hardware codec",
@@ -683,6 +690,8 @@ const en: Record<string, string> = {
   strategyApiServerPlaceholder: "https://api.example.com",
   strategyAllowWebSocket: "Allow WebSocket",
   strategyDisableUdp: "Disable UDP",
+  strategyKcpCongestionControl: "KCP congestion control",
+  strategyKcpCongestionControlHint: "Enables the sender-side congestion window for new KCP connections only; existing sessions are unchanged. Does not enable KCP or WebRTC. Disabled by default; may help congested links but can reduce throughput on links with random packet loss.",
   strategyIceServers: "ICE servers",
   strategyIceServersHint: "STUN/TURN server list accepted by the RustDesk client.",
   strategyIceServersPlaceholder: "stun:stun.example.com:3478",
@@ -894,6 +903,7 @@ const en: Record<string, string> = {
 };
 
 const zhCN: Record<string, string> = {
+  ...selfSignedMessages.zhCN,
   appTitle: "RustDesk 控制台",
   login: "登录",
   register: "注册",
@@ -1549,9 +1559,14 @@ const zhCN: Record<string, string> = {
   strategyAutoDisconnectTimeout: "自动断开超时",
   strategyAutoDisconnectTimeoutHint: "单位为分钟，启用自动断开时生效。",
   strategyAutoRecordIncoming: "自动录制传入会话",
+  strategyWindowsServiceRecordingDirectory: "Windows SYSTEM 录制目录",
+  strategyWindowsServiceRecordingDirectoryHint: "仅适用于已安装 Windows 服务产生的录制，不影响用户会话录制。请使用服务账户可写的 Windows 绝对路径。客户端会忽略相对路径；此设置本身不会启用录制。",
+  strategyWindowsServiceRecordingDirectoryPlaceholder: "D:\\RustDesk\\recording",
   strategyKeepAwakeIncoming: "传入会话期间保持唤醒",
   strategyOnlyConnWindowOpen: "仅连接窗口打开时允许",
   strategyAdaptiveBitrate: "自适应码率",
+  strategyAndroidSoftwareHalfScale: "Android 软件编码使用半分辨率",
+  strategyAndroidSoftwareHalfScaleHint: "仅对使用软件编码的 Android 被控端生效，不影响硬件编码；客户端下次配置捕获缩放时应用。",
   strategyRemoveWallpaper: "移除壁纸",
   strategyAlwaysSoftwareRender: "始终使用软件渲染",
   strategyHardwareCodec: "硬件编解码",
@@ -1572,6 +1587,8 @@ const zhCN: Record<string, string> = {
   strategyApiServerPlaceholder: "https://api.example.com",
   strategyAllowWebSocket: "允许 WebSocket",
   strategyDisableUdp: "禁用 UDP",
+  strategyKcpCongestionControl: "KCP 拥塞控制",
+  strategyKcpCongestionControlHint: "仅为后续新建 KCP 连接启用发送端拥塞窗口，不改变现有会话，也不会启用 KCP 或 WebRTC。默认禁用；可能改善拥塞链路，但随机丢包链路的吞吐可能下降。",
   strategyIceServers: "ICE 服务器",
   strategyIceServersHint: "RustDesk 客户端可使用的 STUN/TURN 服务器列表。",
   strategyIceServersPlaceholder: "stun:stun.example.com:3478",

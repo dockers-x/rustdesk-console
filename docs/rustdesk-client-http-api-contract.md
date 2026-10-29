@@ -4,6 +4,15 @@ This document records the RustDesk client HTTP requests that `rustdesk-console`
 tracks for compatibility. It is derived from the upstream client source, not from
 server-side assumptions.
 
+The ordinary compatibility paths continue to support stock clients without
+source customization. Console also has a separate, default-off self-signed
+client feature for users who build their own fork. Its admin APIs generate or
+import an independent configuration-signing key and export `custom.txt`; they
+do not make stock official binaries trust that key or provide a client build
+service. See [the self-signed client guide](self-signed-client.en.md). Signed
+profiles can populate LocalConfig defaults/overrides; this does not add
+LocalConfig delivery to the heartbeat protocol described here.
+
 ## Source Baseline
 
 - RustDesk repository: `https://github.com/rustdesk/rustdesk`

@@ -35,7 +35,9 @@ pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
     "temporary-password-length",
     "allow-numeric-one-time-password",
     "allow-auto-record-incoming",
+    "windows-service-video-save-directory",
     "enable-abr",
+    "enable-android-software-encoding-half-scale",
     "allow-remove-wallpaper",
     "allow-always-software-render",
     "allow-linux-headless",
@@ -54,6 +56,7 @@ pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
     "key",
     "allow-websocket",
     "disable-udp",
+    "allow-kcp-congestion-control",
     "ice-servers",
     "proxy-url",
     "proxy-username",
@@ -523,6 +526,24 @@ mod tests {
             Some(&"hbbs.example".to_string())
         );
         assert_eq!(decoded.get("proxy-password"), Some(&"secret".to_string()));
+    }
+
+    #[test]
+    fn accepts_platform_recording_and_transport_options() {
+        let options = HashMap::from([
+            ("allow-kcp-congestion-control".to_string(), "Y".to_string()),
+            (
+                "enable-android-software-encoding-half-scale".to_string(),
+                "N".to_string(),
+            ),
+            (
+                "windows-service-video-save-directory".to_string(),
+                r"D:\RustDesk\recording".to_string(),
+            ),
+        ]);
+
+        let encoded = encode_config_options(options.clone()).unwrap();
+        assert_eq!(decode_string_map(&encoded).unwrap(), options);
     }
 
     #[test]

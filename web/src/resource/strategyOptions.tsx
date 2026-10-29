@@ -241,6 +241,14 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     type: "tri_state",
   },
   {
+    key: "windows-service-video-save-directory",
+    label: "strategyWindowsServiceRecordingDirectory",
+    hint: "strategyWindowsServiceRecordingDirectoryHint",
+    group: "session",
+    type: "text",
+    placeholder: "strategyWindowsServiceRecordingDirectoryPlaceholder",
+  },
+  {
     key: "keep-awake-during-incoming-sessions",
     label: "strategyKeepAwakeIncoming",
     group: "session",
@@ -255,6 +263,13 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
   {
     key: "enable-abr",
     label: "strategyAdaptiveBitrate",
+    group: "performance",
+    type: "tri_state",
+  },
+  {
+    key: "enable-android-software-encoding-half-scale",
+    label: "strategyAndroidSoftwareHalfScale",
+    hint: "strategyAndroidSoftwareHalfScaleHint",
     group: "performance",
     type: "tri_state",
   },
@@ -358,6 +373,13 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
   {
     key: "disable-udp",
     label: "strategyDisableUdp",
+    group: "network",
+    type: "tri_state",
+  },
+  {
+    key: "allow-kcp-congestion-control",
+    label: "strategyKcpCongestionControl",
+    hint: "strategyKcpCongestionControlHint",
     group: "network",
     type: "tri_state",
   },

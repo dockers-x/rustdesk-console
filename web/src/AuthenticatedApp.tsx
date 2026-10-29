@@ -13,6 +13,7 @@ import { OverviewPage } from "./pages/OverviewPage";
 import { ServerCommandsPage } from "./pages/ServerCommandsPage";
 import { SystemSettingsPage } from "./pages/SystemSettingsPage";
 import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
+import { SelfSignedClientPage } from "./features/self-signed-client/SelfSignedClientPage";
 import { ResourcePage } from "./resource/ResourcePage";
 import { ALL_RESOURCES, resourcePath } from "./resource/registry";
 import { apiGet } from "./lib/api";
@@ -78,6 +79,7 @@ export default function AuthenticatedApp() {
           element={<NotificationRoutingPage />}
         />
         <Route path="/settings" element={<SystemSettingsPage />} />
+        <Route path="/self-signed-client" element={<SelfSignedClientPage />} />
         <Route path="/serverCmd" element={<ServerCommandsPage />} />
         <Route path="/geo-routing" element={<GeoRoutingPage />} />
         <Route

@@ -9,6 +9,7 @@ mod assets;
 mod bootstrap;
 mod config;
 mod error;
+mod features;
 mod http;
 mod i18n;
 mod logging;

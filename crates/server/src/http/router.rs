@@ -21,6 +21,7 @@ pub fn build(state: AppState) -> Router {
         .allow_headers(Any);
 
     let mut app = Router::new()
+        .merge(crate::features::routes())
         // web index + config
         .route("/", get(static_files::index))
         .route("/health", get(observability::health))

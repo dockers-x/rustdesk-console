@@ -6,14 +6,17 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{Duration, Utc};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 use entity::{
     address_book, address_book_collection, address_book_collection_rule, deployment_event,
-    deployment_token, group, login_log, peer,
+    deployment_token, group, login_log, peer, user,
 };
 
 use crate::http::middleware::{AcceptLang, ClientIp, DeploymentAuth, RustClientUser};
@@ -822,6 +825,8 @@ pub struct PageQuery {
     pub name: Option<String>,
     #[serde(default)]
     pub group_name: Option<String>,
+    #[serde(default)]
+    pub status: Option<i32>,
 }
 
 pub async fn group_users(
@@ -838,7 +843,12 @@ pub async fn group_users(
         .flatten();
     let is_share = gr.map(|g| g.r#type == group::TYPE_SHARE).unwrap_or(false);
 
-    let (users, total) = if !u.is_admin() && !is_share {
+    let (users, total) = if let Some(status) = q.status {
+        match directory_users_with_status(&state.db, u, is_share, &q, status).await {
+            Ok(result) => result,
+            Err(error) => return resp::error(error.to_string()),
+        }
+    } else if !u.is_admin() && !is_share {
         (vec![u.clone()], 1i64)
     } else if u.is_admin() {
         let r = services::user::list(
@@ -908,6 +918,38 @@ fn strip_like(value: String) -> String {
     value.trim().trim_matches('%').to_string()
 }
 
+async fn directory_users_with_status(
+    db: &DatabaseConnection,
+    current: &user::Model,
+    is_share: bool,
+    query: &PageQuery,
+    status: i32,
+) -> Result<(Vec<user::Model>, i64), DbErr> {
+    let mut users = user::Entity::find().filter(user::Column::Status.eq(status));
+    if !current.is_admin() {
+        users = if is_share {
+            users.filter(user::Column::GroupId.eq(current.group_id))
+        } else {
+            users.filter(user::Column::Id.eq(current.id))
+        };
+    } else if let Some(name) = query.name.as_deref() {
+        let name = name.trim().trim_matches('%');
+        if !name.is_empty() {
+            users = users.filter(user::Column::Username.contains(name));
+        }
+    }
+    let total = users.clone().count(db).await? as i64;
+    let (page, page_size) =
+        services::paginate(query.page.unwrap_or(1), query.page_size.unwrap_or(10));
+    let users = users
+        .order_by_asc(user::Column::Id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok((users, total))
+}
+
 pub async fn group_peers(
     State(state): State<AppState>,
     user: RustClientUser,
@@ -920,7 +962,12 @@ pub async fn group_peers(
         .flatten();
     let is_share = gr.map(|g| g.r#type == group::TYPE_SHARE).unwrap_or(false);
 
-    let users = if !u.is_admin() && !is_share {
+    let users = if u.is_admin() {
+        match user::Entity::find().all(&state.db).await {
+            Ok(users) => users,
+            Err(error) => return resp::error(error.to_string()),
+        }
+    } else if !is_share {
         vec![u.clone()]
     } else {
         services::user::list_id_and_name_by_group_id(&state.db, u.group_id)
@@ -937,21 +984,29 @@ pub async fn group_peers(
     let dgroup_names: std::collections::HashMap<i32, String> =
         dgroups.iter().map(|g| (g.id, g.name.clone())).collect();
 
-    let pl = services::peer::list_by_user_ids(
-        &state.db,
-        &user_ids,
-        q.page.unwrap_or(1),
-        q.page_size.unwrap_or(10),
-    )
-    .await
-    .unwrap_or(services::peer::PeerListResult {
-        list: vec![],
-        page: 1,
-        page_size: 10,
-        total: 0,
-    });
-    let data: Vec<GroupPeerPayload> = pl
-        .list
+    let (peers, total) = if u.is_admin() || q.status.is_some() {
+        let visible_user_ids = (!u.is_admin()).then_some(user_ids.as_slice());
+        match directory_peers(&state.db, visible_user_ids, &q).await {
+            Ok(result) => result,
+            Err(error) => return resp::error(error.to_string()),
+        }
+    } else {
+        let result = services::peer::list_by_user_ids(
+            &state.db,
+            &user_ids,
+            q.page.unwrap_or(1),
+            q.page_size.unwrap_or(10),
+        )
+        .await
+        .unwrap_or(services::peer::PeerListResult {
+            list: vec![],
+            page: 1,
+            page_size: 10,
+            total: 0,
+        });
+        (result.list, result.total)
+    };
+    let data: Vec<GroupPeerPayload> = peers
         .iter()
         .map(|p| {
             let uname = names.get(&p.user_id).cloned().unwrap_or_default();
@@ -959,20 +1014,56 @@ pub async fn group_peers(
             GroupPeerPayload::from_peer(p, &uname, &dgname)
         })
         .collect();
-    resp::data_response(pl.total, data)
+    resp::data_response(total, data)
+}
+
+async fn directory_peers(
+    db: &DatabaseConnection,
+    visible_user_ids: Option<&[i32]>,
+    query: &PageQuery,
+) -> Result<(Vec<peer::Model>, i64), DbErr> {
+    let mut peers = peer::Entity::find();
+    if let Some(user_ids) = visible_user_ids {
+        peers = peers.filter(peer::Column::UserId.is_in(user_ids.iter().copied()));
+    }
+    if let Some(status) = query.status {
+        peers = peers.filter(peer::Column::Status.eq(status));
+    }
+    let total = peers.clone().count(db).await? as i64;
+    let (page, page_size) =
+        services::paginate(query.page.unwrap_or(1), query.page_size.unwrap_or(10));
+    let peers = peers
+        .order_by_asc(peer::Column::RowId)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all(db)
+        .await?;
+    Ok((peers, total))
 }
 
 pub async fn device_group_accessible(
     State(state): State<AppState>,
     user: RustClientUser,
+    Query(query): Query<PageQuery>,
 ) -> Response {
     if !user.user.is_admin() {
         return resp::error("Permission denied");
     }
-    let dgroups = services::group::device_group_list_all(&state.db)
+    let mut dgroups = services::group::device_group_list_all(&state.db)
         .await
         .unwrap_or_default();
-    resp::data_response(0, dgroups)
+    let total = dgroups.len() as i64;
+    if query.page.is_some() || query.page_size.is_some() {
+        let (page, page_size) =
+            services::paginate(query.page.unwrap_or(1), query.page_size.unwrap_or(10));
+        dgroups.sort_by_key(|group| group.id);
+        dgroups = dgroups
+            .into_iter()
+            .skip(usize::try_from((page - 1) * page_size).unwrap_or(usize::MAX))
+            .take(usize::try_from(page_size).unwrap_or(usize::MAX))
+            .collect();
+    }
+    resp::data_response(total, dgroups)
 }
 
 // ---------- device deployment / CLI assignment ----------
@@ -3063,7 +3154,7 @@ mod pagination_tests {
 }
 
 #[cfg(test)]
-mod deployment_tests {
+pub(crate) mod deployment_tests {
     use super::*;
     use crate::config::{Config, RecordStorage};
     use crate::i18n::I18n;
@@ -3103,9 +3194,10 @@ mod deployment_tests {
         db
     }
 
-    fn test_state(db: DatabaseConnection) -> AppState {
+    pub(crate) fn test_state(db: DatabaseConnection) -> AppState {
         let config = Config::default();
         AppState {
+            features: Arc::new(crate::features::FeatureStore::new(&PathBuf::from("/tmp/rustdesk-console-test-config.yaml"))),
             db,
             config: Arc::new(config.clone()),
             jwt: Arc::new(Jwt::new("test", StdDuration::from_secs(3600))),
@@ -3133,6 +3225,210 @@ mod deployment_tests {
             )),
             start_time: Arc::new(String::new()),
             version: Arc::new("test".to_string()),
+        }
+    }
+
+    async fn directory_state() -> AppState {
+        let db = setup_db().await;
+        let backend = db.get_database_backend();
+        let schema = Schema::new(DbBackend::Sqlite);
+        for statement in [
+            schema.create_table_from_entity(group::Entity),
+            schema.create_table_from_entity(entity::device_group::Entity),
+        ] {
+            db.execute(backend.build(&statement)).await.unwrap();
+        }
+        group::ActiveModel {
+            id: Set(1),
+            name: Set("Shared".into()),
+            r#type: Set(group::TYPE_SHARE),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        for (user_id, username, status) in [(8, "disabled", 2), (9, "colleague", 1)] {
+            user::ActiveModel {
+                id: Set(user_id),
+                username: Set(username.into()),
+                group_id: Set(1),
+                status: Set(status),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        for (name, user_id, status) in [
+            ("disabled", 7, 2),
+            ("own", 7, 1),
+            ("other", 8, 1),
+            ("unowned", 0, 1),
+        ] {
+            peer::ActiveModel {
+                id: Set(name.into()),
+                user_id: Set(user_id),
+                status: Set(status),
+                group_id: Set(1),
+                alias: Set(format!("{name} note")),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        for name in ["Desktops", "Servers"] {
+            entity::device_group::ActiveModel {
+                name: Set(name.into()),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        test_state(db)
+    }
+
+    async fn directory_response(response: Response) -> Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn client_directory_users_filter_status_before_paginating_without_expanding_scope() {
+        let state = directory_state().await;
+        let current = services::user::info_by_id(&state.db, 7)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut admin = current.clone();
+        admin.is_admin = Some(true);
+        for (current, query, expected_total, expected_name) in [
+            (
+                admin.clone(),
+                json!({"current":2,"pageSize":1,"status":1}),
+                2,
+                "colleague",
+            ),
+            (admin, json!({"current":2,"pageSize":1}), 3, "disabled"),
+            (current, json!({"status":1}), 1, "deployer"),
+            (
+                services::user::info_by_id(&state.db, 9)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                json!({"status":1}),
+                1,
+                "colleague",
+            ),
+        ] {
+            let response = group_users(
+                State(state.clone()),
+                HeaderMap::new(),
+                RustClientUser {
+                    user: current,
+                    token: String::new(),
+                },
+                Query(serde_json::from_value(query).unwrap()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = directory_response(response).await;
+            assert_eq!(body["total"], expected_total);
+            assert_eq!(body["data"].as_array().unwrap().len(), 1);
+            assert_eq!(body["data"][0]["name"], expected_name);
+        }
+    }
+
+    #[tokio::test]
+    async fn client_directory_peers_include_admin_cross_group_devices_and_preserve_peer_status() {
+        let state = directory_state().await;
+        let current = services::user::info_by_id(&state.db, 7)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut admin = current.clone();
+        admin.is_admin = Some(true);
+        for (current, query, expected_total, expected_id, expected_status) in [
+            (
+                admin.clone(),
+                json!({"current":2,"pageSize":1,"status":1}),
+                3,
+                "other",
+                1,
+            ),
+            (
+                admin.clone(),
+                json!({"current":3,"pageSize":1,"status":1}),
+                3,
+                "unowned",
+                1,
+            ),
+            (admin, json!({"current":1,"pageSize":1}), 4, "disabled", 2),
+            (current, json!({"status":1}), 1, "own", 1),
+            (
+                services::user::info_by_id(&state.db, 9)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                json!({"status":1}),
+                1,
+                "other",
+                1,
+            ),
+        ] {
+            let response = group_peers(
+                State(state.clone()),
+                RustClientUser {
+                    user: current,
+                    token: String::new(),
+                },
+                Query(serde_json::from_value(query).unwrap()),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = directory_response(response).await;
+            assert_eq!(body["total"], expected_total);
+            assert_eq!(body["data"].as_array().unwrap().len(), 1);
+            assert_eq!(body["data"][0]["id"], expected_id);
+            assert_eq!(body["data"][0]["status"], expected_status);
+            assert_eq!(body["data"][0]["note"], format!("{expected_id} note"));
+        }
+    }
+
+    #[tokio::test]
+    async fn client_directory_device_groups_page_with_a_real_total_and_retain_admin_access() {
+        let state = directory_state().await;
+        let mut current = services::user::info_by_id(&state.db, 7)
+            .await
+            .unwrap()
+            .unwrap();
+        for is_admin in [true, false] {
+            current.is_admin = Some(is_admin);
+            let response = device_group_accessible(
+                State(state.clone()),
+                RustClientUser {
+                    user: current.clone(),
+                    token: String::new(),
+                },
+                Query(serde_json::from_value(json!({"current":2,"pageSize":1})).unwrap()),
+            )
+            .await;
+            if is_admin {
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = directory_response(response).await;
+                assert_eq!(body["total"], 2);
+                assert_eq!(body["data"].as_array().unwrap().len(), 1);
+                assert_eq!(body["data"][0]["name"], "Servers");
+            } else {
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(
+                    directory_response(response).await["error"],
+                    "Permission denied"
+                );
+            }
         }
     }
 

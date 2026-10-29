@@ -591,6 +591,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
         .map(Arc::new);
 
     Ok(AppState {
+        features: Arc::new(crate::features::FeatureStore::new(&config_path)),
         db,
         admin_config: Arc::new(AdminConfigStore::new(
             config_path.clone(),

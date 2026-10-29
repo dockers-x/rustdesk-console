@@ -27,6 +27,7 @@ import {
 import { InlineMessage } from "../components/InlineMessage";
 import { TableState } from "../components/TableState";
 import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
+import { SelfSignedClientFeatureToggle } from "../features/self-signed-client/FeatureToggle";
 
 interface AdminConfigView {
   title: string;
@@ -75,7 +76,7 @@ interface EmailSettingsForm {
   from_name: string;
   tls: string;
 }
-type SettingsTab = "site" | "security";
+type SettingsTab = "site" | "security" | "features";
 
 const emptyForm: AdminConfigForm = {
   title: "",
@@ -402,6 +403,11 @@ export function SystemSettingsPage() {
       label: t("settingsTabLoginSecurity"),
       hint: t("settingsTabLoginSecurityHint"),
     },
+    {
+      key: "features",
+      label: t("selfSignedFeatureTab"),
+      hint: t("selfSignedFeatureTabHint"),
+    },
   ];
 
   return (
@@ -424,7 +430,7 @@ export function SystemSettingsPage() {
       <div
         role="tablist"
         aria-label={t("systemSettings")}
-        className="grid gap-1 rounded-lg border border-kumo-line bg-kumo-elevated p-1 sm:grid-cols-2"
+        className="grid gap-1 rounded-lg border border-kumo-line bg-kumo-elevated p-1 sm:grid-cols-3"
       >
         {tabs.map((tab) => {
           const selected = activeTab === tab.key;
@@ -452,6 +458,7 @@ export function SystemSettingsPage() {
       {activeTab === "site" && message && (
         <InlineMessage tone="success">{message}</InlineMessage>
       )}
+      {activeTab === "features" && <SelfSignedClientFeatureToggle />}
       {activeTab === "site" && error && (
         <InlineMessage tone="error">{error}</InlineMessage>
       )}

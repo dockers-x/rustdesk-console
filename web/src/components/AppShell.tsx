@@ -42,6 +42,7 @@ import { clearToken } from "../lib/auth";
 import { canAccessConsolePath } from "../lib/access";
 import { useAppTitle } from "../lib/adminTitle";
 import { getMode, setMode } from "../lib/theme";
+import { selfSignedEnabled, useFeatures } from "../features/self-signed-client/api";
 import {
   ADMIN_RESOURCES,
   MY_RESOURCES,
@@ -89,6 +90,7 @@ const NAV_ICONS: Record<string, IconType> = {
   systemSettings: GearSix,
   diagnostics: Pulse,
   webClientSettings: SlidersHorizontal,
+  selfSignedClients: ShieldCheck,
 };
 
 interface NavItem {
@@ -96,6 +98,7 @@ interface NavItem {
   key: string;
   end?: boolean;
   indent?: boolean;
+  feature?: "self_signed_client";
 }
 
 const adminItem = (key: string): NavItem => {
@@ -182,6 +185,7 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
       { to: "/serverCmd", key: "serverCommands" },
       { to: "/geo-routing", key: "geoRouting" },
       { to: "/webclient-settings", key: "webClientSettings" },
+      { to: "/self-signed-client", key: "selfSignedClients", feature: "self_signed_client" },
     ],
   },
 ];
@@ -195,6 +199,8 @@ const MOBILE_QUERY = "(max-width: 767px)";
 
 export function AppShell({ isAdmin }: { isAdmin: boolean }) {
   const { t } = useTranslation();
+  const features = useFeatures(isAdmin);
+  const showSelfSignedClients = selfSignedEnabled(features.data);
   const appTitle = useAppTitle();
   const navigate = useNavigate();
   const location = useLocation();
@@ -214,10 +220,10 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
       NAV_SECTIONS.map((section) => ({
         ...section,
         items: section.items.filter((item) =>
-          canAccessConsolePath(item.to, isAdmin),
+          canAccessConsolePath(item.to, isAdmin) && (!item.feature || showSelfSignedClients),
         ),
       })).filter((section) => section.items.length > 0),
-    [isAdmin],
+    [isAdmin, showSelfSignedClients],
   );
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(
     () =>

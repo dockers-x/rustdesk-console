@@ -103,10 +103,10 @@ impl GroupPeerPayload {
                 os: p.os.clone(),
                 username: p.username.clone(),
             },
-            status: 0,
+            status: p.status,
             user: String::new(),
             user_name: username.to_string(),
-            note: String::new(),
+            note: p.alias.clone(),
             device_group_name: device_group_name.to_string(),
         }
     }

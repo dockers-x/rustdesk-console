@@ -18,6 +18,7 @@ use crate::support::webclient_config::WebClientConfigStore;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub features: Arc<crate::features::FeatureStore>,
     pub db: DatabaseConnection,
     pub config: Arc<Config>,
     pub jwt: Arc<Jwt>,
