@@ -649,6 +649,13 @@ const en: Record<string, string> = {
   strategyWhitelist: "IP whitelist",
   strategyWhitelistHint: "Only clients from these IP/CIDR entries can connect. Separate entries with commas, semicolons, spaces, or new lines.",
   strategyWhitelistPlaceholder: "192.168.1.0/24\n10.0.0.8",
+  strategyIdWhitelist: "ID whitelist",
+  strategyIdWhitelistHint: "Only clients matching these comma-separated IDs can connect. Supports * and ? wildcards (case-insensitive); an empty client value allows all IDs.",
+  strategyIdWhitelistPlaceholder: "123456789,123*,abc?",
+  strategyScopeViolationAlarm: "Report session scope violations",
+  strategyScopeViolationAlarmHint: "Report an alarm for the first occurrence of each out-of-scope message type in a session. Disabled by default; Y enables it, N or an empty client value disables it.",
+  strategyScopeViolationClose: "Close sessions on scope violations",
+  strategyScopeViolationCloseHint: "Close a session when it sends an out-of-scope message. Disabled by default; Y enables it, N or an empty client value disables it.",
   strategyAutoDisconnect: "Auto disconnect",
   strategyAutoDisconnectTimeout: "Auto-disconnect timeout",
   strategyAutoDisconnectTimeoutHint: "Timeout in minutes, used when auto disconnect is enabled.",
@@ -1531,6 +1538,13 @@ const zhCN: Record<string, string> = {
   strategyWhitelist: "IP 白名单",
   strategyWhitelistHint: "只有这些 IP/CIDR 来源可以连接；可用逗号、分号、空格或换行分隔。",
   strategyWhitelistPlaceholder: "192.168.1.0/24\n10.0.0.8",
+  strategyIdWhitelist: "ID 白名单",
+  strategyIdWhitelistHint: "只有匹配这些逗号分隔 ID 的客户端可以连接。支持 * 和 ? 通配符（不区分大小写）；客户端值为空时允许所有 ID。",
+  strategyIdWhitelistPlaceholder: "123456789,123*,abc?",
+  strategyScopeViolationAlarm: "上报会话范围违规",
+  strategyScopeViolationAlarmHint: "会话中每种越界消息首次出现时上报告警。默认禁用；Y 启用，N 或空的客户端值禁用。",
+  strategyScopeViolationClose: "范围违规时关闭会话",
+  strategyScopeViolationCloseHint: "会话发送越界消息时关闭连接。默认禁用；Y 启用，N 或空的客户端值禁用。",
   strategyAutoDisconnect: "自动断开",
   strategyAutoDisconnectTimeout: "自动断开超时",
   strategyAutoDisconnectTimeoutHint: "单位为分钟，启用自动断开时生效。",
@@ -1784,6 +1798,10 @@ function detectLang(): string {
   }
   return "en";
 }
+
+i18n.on("languageChanged", (language) => {
+  document.documentElement.lang = language;
+});
 
 void i18n.use(initReactI18next).init({
   resources: {

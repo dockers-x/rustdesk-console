@@ -7,6 +7,7 @@ import {
   ClockCounterClockwise,
   Desktop,
   PlugsConnected,
+  ArrowClockwise,
   ShareNetwork,
   ShieldCheck,
   SignIn,
@@ -80,19 +81,20 @@ export function OverviewPage() {
   const maxPlatform = Math.max(1, ...data.platforms.map((row) => row.count));
 
   return (
-    <div className="space-y-5">
+    <div className="mx-auto max-w-[1600px] space-y-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">{t("overview")}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("overview")}</h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-kumo-subtle">
             {t("overviewHint")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs tabular-nums text-kumo-subtle">
+          <span className="rounded-md border border-kumo-line bg-kumo-base px-2 py-1 text-xs tabular-nums text-kumo-subtle">
             {t("consoleVersion")} {data.version}
           </span>
-          <Button variant="secondary" onClick={() => void overview.refetch()}>
+          <Button variant="secondary" disabled={overview.isFetching} onClick={() => void overview.refetch()}>
+            <ArrowClockwise size={16} aria-hidden="true" />
             {t("refresh")}
           </Button>
         </div>
@@ -125,12 +127,12 @@ export function OverviewPage() {
         />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <section className="admin-overview-panel rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+        <section className="admin-overview-panel admin-surface rounded-xl border border-kumo-line bg-kumo-base p-5">
           <div className="mb-4 flex items-center gap-3">
             <ChartBar className="mt-0.5 shrink-0 text-kumo-brand" size={20} />
             <div>
-              <h2 className="text-lg font-semibold">{t("platformBreakdown")}</h2>
+              <h2 className="font-semibold">{t("platformBreakdown")}</h2>
               <p className="mt-1 text-sm text-kumo-subtle">
                 {t("platformBreakdownHint")}
               </p>
@@ -159,18 +161,18 @@ export function OverviewPage() {
           </div>
         </section>
 
-        <section className="admin-overview-panel rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+        <section className="admin-overview-panel admin-surface rounded-xl border border-kumo-line bg-kumo-base p-5">
           <div className="mb-4 flex items-center gap-3">
             <ClockCounterClockwise
               className="mt-0.5 shrink-0 text-kumo-brand"
               size={20}
             />
             <div>
-              <h2 className="text-lg font-semibold">{t("recentActivity")}</h2>
+              <h2 className="font-semibold">{t("recentActivity")}</h2>
               <p className="mt-1 text-sm text-kumo-subtle">{t("recentActivityHint")}</p>
             </div>
           </div>
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-4 2xl:grid-cols-2">
             <RecentLoginTable rows={data.recent_logins} />
             <RecentConnectionTable rows={data.recent_connections} />
           </div>
@@ -228,26 +230,24 @@ function MetricCard({
 }) {
   return (
     <section
-      className={`rounded-lg border border-kumo-line p-4 ${
-        secondary ? "bg-kumo-base" : "bg-kumo-elevated"
-      }`}
+      className="admin-surface rounded-xl border border-kumo-line bg-kumo-base p-5"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-kumo-subtle">{label}</p>
           <p
             className={`mt-2 font-semibold tabular-nums ${
-              secondary ? "text-xl" : "text-2xl"
+              secondary ? "text-xl" : "text-3xl tracking-tight"
             }`}
           >
             {value}
           </p>
         </div>
-        <div className="shrink-0 text-kumo-brand" aria-hidden="true">
+        <div className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${secondary ? "text-kumo-subtle" : "bg-kumo-tint text-kumo-brand"}`} aria-hidden="true">
           {icon}
         </div>
       </div>
-      <p className="mt-3 truncate text-xs text-kumo-subtle" title={detail}>
+      <p className="mt-4 break-words border-t border-kumo-line/60 pt-3 text-xs leading-5 text-kumo-subtle">
         {detail}
       </p>
     </section>
@@ -257,7 +257,7 @@ function MetricCard({
 function RecentLoginTable({ rows }: { rows: Overview["recent_logins"] }) {
   const { t } = useTranslation();
   return (
-    <div className="min-w-0 overflow-x-auto rounded-lg border border-kumo-line">
+    <div className="min-w-0 overflow-x-auto rounded-lg border border-kumo-line [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
       <Table>
         <Table.Header>
           <Table.Row>
@@ -284,7 +284,7 @@ function RecentLoginTable({ rows }: { rows: Overview["recent_logins"] }) {
 function RecentConnectionTable({ rows }: { rows: Overview["recent_connections"] }) {
   const { t } = useTranslation();
   return (
-    <div className="min-w-0 overflow-x-auto rounded-lg border border-kumo-line">
+    <div className="min-w-0 overflow-x-auto rounded-lg border border-kumo-line [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
       <Table>
         <Table.Header>
           <Table.Row>

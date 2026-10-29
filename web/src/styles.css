@@ -20,6 +20,29 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.admin-workspace {
+  background: color-mix(in srgb, var(--color-kumo-elevated) 65%, var(--color-kumo-base));
+  scrollbar-gutter: stable;
+}
+
+.admin-surface {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
+}
+
+.admin-shell table {
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-shell thead {
+  background: var(--color-kumo-elevated);
+}
+
+.admin-shell tbody tr:hover {
+  background: var(--color-kumo-tint);
 }
 
 button[data-kumo-component="Button"]:not(:disabled) {
@@ -98,6 +121,7 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
 
 .admin-dialog-panel {
   display: flex;
+  top: 0.5rem !important;
   width: calc(100vw - 1rem) !important;
   min-width: 0 !important;
   max-width: calc(100vw - 1rem) !important;
@@ -108,7 +132,8 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
 
 @media (min-width: 640px) {
   .admin-dialog-panel {
-    max-height: min(90vh, 760px);
+    top: min(4rem, 5svh) !important;
+    max-height: min(90svh, 760px);
   }
 
   .admin-dialog-panel--compact {

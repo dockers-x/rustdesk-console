@@ -302,6 +302,12 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
 
   const navCompact = !isMobile && desktopCollapsed;
   const navExpanded = isMobile ? mobileNavOpen : !desktopCollapsed;
+  const activeSection = visibleNavSections.find((section) =>
+    section.items.some((item) => isItemActive(location.pathname, item)),
+  );
+  const activeItem = activeSection?.items.find((item) =>
+    isItemActive(location.pathname, item),
+  );
 
   useEffect(() => {
     const activeSection = visibleNavSections.find((section) =>
@@ -314,7 +320,7 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
   }, [location.pathname, visibleNavSections]);
 
   return (
-    <div className="relative flex h-full overflow-hidden bg-kumo-base text-kumo-default">
+    <div className="admin-shell relative flex h-full overflow-hidden bg-kumo-base text-kumo-default">
       <a
         href="#main-content"
         inert={isMobile && mobileNavOpen}
@@ -346,7 +352,7 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
             ? "min(280px, calc(100vw - 48px))"
             : navCompact
               ? 64
-              : 220,
+              : 240,
         }}
         aria-hidden={isMobile && !mobileNavOpen}
         aria-label={isMobile ? t("mainNavigation") : undefined}
@@ -360,7 +366,9 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
             navCompact && "justify-center px-0",
           )}
         >
-          <Monitor size={20} />
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-kumo-tint text-kumo-brand">
+            <Monitor size={20} />
+          </span>
           {!navCompact && (
             <span className="truncate" title={appTitle}>
               {appTitle}
@@ -380,7 +388,7 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
                 key={section.key}
                 className={cn(
                   "pb-2",
-                  sectionIndex > 0 && "mt-2 border-t border-kumo-line pt-2",
+                  sectionIndex > 0 && "mt-1 border-t border-kumo-line/60 pt-2",
                 )}
               >
                 {!navCompact && (
@@ -459,7 +467,8 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
         className="flex min-w-0 flex-1 flex-col"
         inert={isMobile && mobileNavOpen}
       >
-        <header className="flex h-14 items-center justify-between border-b border-kumo-line px-4">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-kumo-line bg-kumo-base px-3 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
           <Button
             ref={mobileNavToggleRef}
             variant="ghost"
@@ -477,7 +486,15 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
           >
             <List size={18} />
           </Button>
-          <div className="flex items-center gap-2">
+          {activeSection && activeItem && (
+            <div className="hidden min-w-0 items-center gap-2 text-xs sm:flex">
+              <span className="truncate text-kumo-subtle">{t(activeSection.key)}</span>
+              <span className="text-kumo-subtle" aria-hidden="true">/</span>
+              <span className="truncate font-medium">{t(activeItem.key)}</span>
+            </div>
+          )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
@@ -508,7 +525,7 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
             </Button>
           </div>
         </header>
-        <main id="main-content" className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
+        <main id="main-content" className="admin-workspace min-h-0 flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
           <div key={location.pathname} className="admin-page-enter min-h-full">
             <Outlet />
           </div>
