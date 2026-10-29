@@ -8,12 +8,12 @@ server-side assumptions.
 
 - RustDesk repository: `https://github.com/rustdesk/rustdesk`
 - RustDesk source: `/home/czyt/code/rust/rustdesk`
-- RustDesk git commit: `bf206dc309fda20097ef0335c3563812296a5553`
-- RustDesk git describe: `1.4.7-9-gbf206dc30`
-- RustDesk Cargo version: `1.4.7`
-- RustDesk Flutter version: `1.4.7+65`
+- RustDesk git commit: `bd9262397208c509ea97af61f0d44621ef25611c`
+- RustDesk git describe: `1.5.0-61-gbd9262397`
+- RustDesk Cargo version: `1.5.1`
+- RustDesk Flutter version: `1.5.1+68`
 - RustDesk branch at inspection time: `master`
-- Inspected date: `2026-06-18`
+- Inspected date: `2026-10-29`
 
 Primary client files inspected:
 
@@ -98,9 +98,9 @@ separate from ordinary permission policies.
 | `PUT` | `/api/ab/peer/update/:guid` | Always includes `id`; update fields can be `tags`, `alias`, `note`, `hash`, `password`, `username`, `hostname`, `platform`, `forceAlwaysRelay`, `rdpPort`, `rdpUsername`, `loginName`, `sameServer`/`same_server`. | Empty string on success or JSON error. |
 | `DELETE` | `/api/ab/peer/:guid` | JSON array of peer IDs | Empty string on success or JSON error. |
 | `POST` | `/api/ab/tag/add/:guid` | `name`, `color` | Empty string on success or JSON error. |
-| `PUT` | `/api/ab/tag/rename/:guid` | `old`, `new` | Empty string on success or JSON error. |
+| `PUT` | `/api/ab/tag/rename/:guid` | `old`, `new` | Empty string on success or JSON error. Rename also updates exact tag references on peers belonging to the same owner and book, in one transaction. |
 | `PUT` | `/api/ab/tag/update/:guid` | `name`, `color` | Empty string on success or JSON error. |
-| `DELETE` | `/api/ab/tag/:guid` | JSON array of tag names | Empty string on success or JSON error. |
+| `DELETE` | `/api/ab/tag/:guid` | JSON array of tag names | Empty string on success or JSON error. Removes references from peers of the same owner and book atomically per tag. |
 
 RustDesk `Peer.fromJson` fields currently include:
 
@@ -124,11 +124,53 @@ RustDesk `Peer.fromJson` fields currently include:
 
 | Method | Endpoint | Client request fields | Client expects |
 | --- | --- | --- | --- |
-| `POST` | `/api/audit/conn` | Lifecycle events use `id`, `uuid`, `conn_id`, `session_id`, `action=new|close`, `ip`. Peer update event uses `peer=[id,name]`, `type`. Note update can send `note`, `session_id`. | `null` success body. Server stores one lifecycle row per `conn_id`, keeps large numeric `session_id` as a string. |
+| `POST` | `/api/audit/conn` | Lifecycle events use `id`, `uuid`, `conn_id`, `session_id`, `action=new|close`, `ip`. Peer update event uses `peer=[id,name]`, `type`. Note update can send `note`, `session_id`. Current retryable events include `nonce` and may carry `conn_audit_ref`. | **Empty** 2xx body; JSON `null` is not success to `post_audit_async`. Lifecycle updates are scoped to the local device and connection; large numeric `session_id` remains a string. |
 | `GET` | `/api/audit/conn/active` | Query: `id`, `session_id`, `conn_type` | JSON string audit row id/guid, or empty string. |
 | `PUT` | `/api/audit` | `guid`, `note` | `null` success body. |
-| `POST` | `/api/audit/file` | `id`, `uuid`, `peer_id`, `type`, `path`, `is_file`, `info`. `info` is a JSON string containing at least `ip`, `name`, `num`, and `files`. | `null` success body. Compatibility mapping follows the Go API: stored `peer_id` is request `id`; stored `from_peer` is request `peer_id`; `from_name`, `ip`, and `num` are parsed from `info` unless explicit top-level values are present. |
-| `POST` | `/api/audit/alarm` | `id`, `uuid`, `typ`, `info` | `null` success body. |
+| `POST` | `/api/audit/file` | `id`, `uuid`, `peer_id`, `type`, `path`, `is_file`, `info`, optional `conn_id`, `nonce`, `conn_audit_ref`. `info` is a JSON string containing at least `ip`, `name`, `num`, and `files`. | Empty 2xx body. Stored `peer_id` is request `id`; stored `from_peer` is request `peer_id`; `from_name`, `ip`, and `num` are parsed from `info` unless explicit top-level values are present. |
+| `POST` | `/api/audit/alarm` | `id`, `uuid`, `typ`, `info`, optional `conn_id`, `nonce`, `conn_audit_ref` | Empty 2xx body after persistence. Admin-only `/api/audits/alarm` returns paginated `{total,data}`. |
+
+Nonce-bearing audit events deduplicate by event kind, device ID, device UUID and
+nonce. The receipt and event write commit in the same transaction; a failed
+event can be retried. Raw metadata is retained in the receipt. Legacy requests
+without a nonce use the existing ingest path. Storage failures return HTTP 500
+with an error object, never a successful acknowledgement. Receipt retention is
+currently unbounded, like the existing audit history; operators should account
+for its storage growth.
+
+### Switch Sides Routing Grant
+
+`POST /api/switch-grant` accepts the client's signed tuple: `id`,
+`switch_code_verifier`, decimal-string `timestamp`, and standard-base64 Ed25519
+`signature`. It does not require an account token. Console forwards it through
+the existing local ID-server control channel; **hbbs**, not unauthenticated
+sysinfo metadata, supplies the trusted registered device public key.
+
+The signed message is `switch-grant\0` + ID + NUL + verifier + NUL + timestamp.
+Given canonical UUID text U, the client sends C = standard-base64(SHA256(U)) in
+rendezvous requests; the registered verifier is standard-base64(SHA256(
+`switch-grant-verifier\0` + C)). Only hbbs confirmation yields
+`{"accepted":true}`. Missing/old/offline hbbs, malformed replies and capacity
+exhaustion reject. Authenticated clock skew may return integer `server_time`
+for the client's one re-sign/retry.
+
+The paired hbbs implementation must support `register-switch-grant`. The grant
+is a destination-bound, desktop-only **routing capability**, reusable during its
+original 10-second lifetime for punch/relay fallback. It is not a login token.
+Duplicate registration cannot extend or resurrect it; replay protection lasts
+through the signature's acceptance window. The actual password-free switch is
+still authorized once by the destination client's raw UUID check. Existing
+whitelists and endpoint permissions remain effective.
+
+Grants are an alternative to hbbs mandatory-login token authentication, not a
+new requirement when mandatory login is disabled. ID-only deployments retain
+their old switch behavior; valid account-token authentication can still work
+if grant registration is absent or races the reverse request.
+
+Deploy Console and its authoritative hbbs in the same trusted loopback network
+namespace, as required by existing runtime commands. Multiple independent hbbs
+instances do not share grants. A fire-and-forget client registration can race
+the reverse connection; it fails closed and a user retry may be necessary.
 
 ### Deployment And Recording
 
@@ -153,6 +195,16 @@ RustDesk `Peer.fromJson` fields currently include:
   first-report user, device-group, strategy, and address-book assignment.
 - `/api/heartbeat` supports strategy delivery through `strategy.config_options`;
   `extra` is sent for metadata but standard clients only apply `config_options`.
+- `id-whitelist`, `allow-scope-violation-alarm` and
+  `allow-scope-violation-close` are supported Config keys. For the latter two,
+  only `Y` enables the option; `N` and an empty value disable it.
+- Strategy updates merge into Config. Removing an option, disabling a strategy
+  or unassigning it does not restore the user's earlier value. Send an explicit
+  empty value to reset an option; advanced defaults may still apply.
+- WebRTC enable/punch/fallback switches are **LocalConfig**, not Config. The
+  current heartbeat consumer cannot apply them via `strategy.config_options`.
+  Set them in the client's supported local UI; `ice-servers` remains a supported
+  ordinary Config option. No proprietary client build is required or planned.
 - `/api/record` is only used when the RustDesk client sends recording upload
   events. The controller toolbar's manual "Start session recording" path records
   locally on the controller and does not call `/api/record` in the inspected

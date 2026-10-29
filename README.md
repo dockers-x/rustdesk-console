@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.33-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![release](https://img.shields.io/badge/release-v0.2.34-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
