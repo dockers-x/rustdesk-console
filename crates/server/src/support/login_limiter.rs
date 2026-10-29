@@ -97,7 +97,8 @@ impl LoginLimiter {
         let cutoff = now.checked_sub(self.policy.attempts_window).unwrap_or(now);
         Self::prune_attempts(&mut g, ip, cutoff);
         let count = g.attempts.get(ip).map(|v| v.len()).unwrap_or(0) as i32;
-        let captcha_required = count >= self.policy.captcha_threshold;
+        let captcha_required =
+            self.policy.captcha_threshold >= 0 && count >= self.policy.captcha_threshold;
         (false, captcha_required)
     }
 
@@ -173,5 +174,25 @@ impl LoginLimiter {
             g.attempts.insert(ip.to_string(), valid.clone());
         }
         valid
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_captcha_stays_disabled_when_bans_are_enabled() {
+        let limiter = LoginLimiter::new(SecurityPolicy {
+            captcha_threshold: -1,
+            ban_threshold: 2,
+            attempts_window: Duration::from_secs(60),
+            ban_duration: Duration::from_secs(60),
+        });
+        assert_eq!(limiter.check_security_status("test-ip"), (false, false));
+        limiter.record_failed_attempt("test-ip");
+        assert_eq!(limiter.check_security_status("test-ip"), (false, false));
+        limiter.record_failed_attempt("test-ip");
+        assert_eq!(limiter.check_security_status("test-ip"), (true, false));
     }
 }

@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_plain_filename_hint_supported_by_rustdesk() {
+    fn builds_encoded_filename_hint_supported_by_rustdesk() {
         assert_eq!(
             filename_hint(&ServerConfig::new(
                 "id.example.com:21116",
@@ -204,7 +204,15 @@ mod tests {
                 "https://api.example.com",
                 "pk",
             )),
-            "rustdesk-host=id.example.com:21116,api=https://api.example.com,key=pk,relay=relay.example.com:21117.exe"
+            format!(
+                "rustdesk--{}.exe",
+                encode_server_config(&ServerConfig::new(
+                    "id.example.com:21116",
+                    "relay.example.com:21117",
+                    "https://api.example.com",
+                    "pk",
+                ))
+            )
         );
     }
 

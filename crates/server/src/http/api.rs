@@ -377,6 +377,9 @@ pub async fn login(
     if state.config.app.disable_pwd_login {
         return resp::error(state.tr(&lang, "PwdLoginDisabled"));
     }
+    if state.limiter.check_security_status(&ip).0 {
+        return resp::error(state.tr(&lang, "LoginBanned"));
+    }
     if !form.secret.trim().is_empty() {
         let (user, device) = match services::login_security::verify_login_challenge(
             &state.db,
@@ -1570,10 +1573,17 @@ pub async fn shared_peer(State(state): State<AppState>, Json(body): Json<Value>)
 // ---------- audit ----------
 
 pub async fn audit_conn(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
-    if let Err(e) = services::audit::record_conn_event(&state.db, &body).await {
-        tracing::warn!("failed to record audit conn event: {e}");
-    }
-    Json(Value::Null).into_response()
+    let result = if services::audit_receipt::has_nonce(&body) {
+        services::audit_receipt::record_event(
+            &state.db,
+            services::audit_receipt::Kind::Connection,
+            &body,
+        )
+        .await
+    } else {
+        services::audit::record_conn_event(&state.db, &body).await
+    };
+    audit_response(result)
 }
 
 #[derive(Deserialize, Default)]
@@ -1605,15 +1615,67 @@ pub async fn audit_conn_active(
 }
 
 pub async fn audit_file(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
-    if let Err(e) = services::audit::record_file_event(&state.db, &body).await {
-        tracing::warn!("failed to record audit file event: {e}");
-    }
-    Json(Value::Null).into_response()
+    let result = if services::audit_receipt::has_nonce(&body) {
+        services::audit_receipt::record_event(
+            &state.db,
+            services::audit_receipt::Kind::File,
+            &body,
+        )
+        .await
+    } else {
+        services::audit::record_file_event(&state.db, &body).await
+    };
+    audit_response(result)
 }
 
-pub async fn audit_alarm(Json(body): Json<Value>) -> Response {
-    tracing::warn!("received rustdesk alarm audit event: {}", body);
-    Json(Value::Null).into_response()
+pub async fn audit_alarm(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    let result = if services::audit_receipt::has_nonce(&body) {
+        services::audit_receipt::record_event(
+            &state.db,
+            services::audit_receipt::Kind::Alarm,
+            &body,
+        )
+        .await
+    } else {
+        services::audit_alarm::record_event(&state.db, &body).await
+    };
+    audit_response(result)
+}
+
+fn audit_response(result: Result<(), sea_orm::DbErr>) -> Response {
+    match result {
+        Ok(()) => "".into_response(),
+        Err(error) => {
+            tracing::warn!("failed to store audit event: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to store audit event"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod audit_response_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn stored_audits_return_the_empty_success_body_expected_by_the_client() {
+        let response = audit_response(Ok(()));
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(to_bytes(response.into_body(), 1024).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn storage_failures_return_a_retryable_error_instead_of_success() {
+        let response = audit_response(Err(sea_orm::DbErr::Custom("unavailable".to_owned())));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"], "Failed to store audit event");
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -1765,30 +1827,24 @@ async fn record_remove(state: &AppState, filename: &str) -> Result<(), String> {
             filename,
         )?,
     };
-    if let Err(e) = services::record_storage::delete_object(
+    services::record_storage::delete_object(
         &cfg,
         &state.config.gin.resources_path,
         &location.backend,
         &location.key,
         filename,
     )
-    .await
-    {
-        tracing::warn!("failed to remove record object: {e}");
-    }
-    if let Err(e) = services::record_storage::cleanup_staging(
+    .await?;
+    services::record_storage::cleanup_staging(
         &cfg,
         &state.config.gin.resources_path,
         &location.backend,
         filename,
     )
-    .await
-    {
-        tracing::warn!("failed to remove record staging file: {e}");
-    }
-    if let Err(e) = services::record_file::delete_by_filename(&state.db, filename).await {
-        tracing::warn!("failed to delete record file row: {e}");
-    }
+    .await?;
+    services::record_file::delete_by_filename(&state.db, filename)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2139,11 +2195,11 @@ pub async fn ab_shared_profiles(
         .collect();
     let total = res.len() as i64;
     let (page, page_size) = script_page(q.page, q.page_size);
-    let start = ((page - 1) * page_size) as usize;
+    let start = usize::try_from((page - 1).saturating_mul(page_size)).unwrap_or(usize::MAX);
     res = res
         .into_iter()
         .skip(start)
-        .take(page_size as usize)
+        .take(usize::try_from(page_size).unwrap_or(usize::MAX))
         .collect();
     Json(json!({ "total": total, "data": res })).into_response()
 }
@@ -2294,11 +2350,11 @@ pub async fn ab_peers(
     });
     let total = abs.len() as i64;
     let (page, page_size) = script_page(q.page, q.page_size);
-    let start = ((page - 1) * page_size) as usize;
+    let start = usize::try_from((page - 1).saturating_mul(page_size)).unwrap_or(usize::MAX);
     let abs: Vec<address_book::Model> = abs
         .into_iter()
         .skip(start)
-        .take(page_size as usize)
+        .take(usize::try_from(page_size).unwrap_or(usize::MAX))
         .collect();
     Json(json!({
         "total": total,
@@ -2611,7 +2667,7 @@ pub async fn ab_tag_rename(
         Ok(true) => {}
         _ => return resp::error("NoAccess"),
     }
-    let mut tag =
+    let tag =
         match services::tag::info_by_user_name_collection(&state.db, uid, &t.old, cid).await {
             Ok(Some(tag)) => tag,
             _ => return resp::error(state.tr(&lang, "ItemNotFound")),
@@ -2621,8 +2677,7 @@ pub async fn ab_tag_rename(
     {
         return resp::error(state.tr(&lang, "ItemExists"));
     }
-    tag.name = t.new;
-    if let Err(e) = services::tag::update(&state.db, &tag).await {
+    if let Err(e) = services::tag::rename_with_peers(&state.db, &tag, &t.new).await {
         return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
     "".into_response()
@@ -2690,7 +2745,7 @@ pub async fn ab_tag_del(
     for name in names {
         match services::tag::info_by_user_name_collection(&state.db, uid, &name, cid).await {
             Ok(Some(tag)) => {
-                if let Err(e) = services::tag::delete(&state.db, tag.id).await {
+                if let Err(e) = services::tag::delete_with_peers(&state.db, &tag).await {
                     return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
                 }
             }
@@ -3078,6 +3133,219 @@ mod deployment_tests {
             )),
             start_time: Arc::new(String::new()),
             version: Arc::new("test".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn switch_grant_route_rejects_unavailable_control_and_oversized_body() {
+        use axum::{body::{to_bytes, Body}, http::{Request, StatusCode}};
+        use tower::ServiceExt;
+
+        let mut state = test_state(DatabaseConnection::Disconnected);
+        Arc::make_mut(&mut state.config).admin.id_server_port = 0;
+        let app = crate::http::router::build(state);
+        let grant = json!({
+            "id": "123456789",
+            "switch_code_verifier": "A".repeat(43) + "=",
+            "timestamp": "1793232000",
+            "signature": "A".repeat(86) + "==",
+        });
+        let request = |body: String| Request::builder()
+            .method("POST")
+            .uri("/api/switch-grant")
+            .header("content-type", "application/json")
+            .body(Body::from(body)).unwrap();
+        let response = app.clone().oneshot(request(grant.to_string())).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"accepted": false}));
+        let response = app.oneshot(request(" ".repeat(1025))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn uploaded_content_has_a_sandbox_and_cannot_override_its_mime_type() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let app = crate::http::router::build(test_state(DatabaseConnection::Disconnected));
+        let response = app.oneshot(Request::builder().uri("/upload/missing.html")
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.headers()["content-security-policy"], "sandbox; default-src 'none'");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    }
+
+    #[tokio::test]
+    async fn access_token_stops_authenticating_when_user_is_disabled() {
+        let db = setup_db().await;
+        let schema = Schema::new(DbBackend::Sqlite);
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(entity::user_token::Entity)),
+        )
+        .await
+        .unwrap();
+        entity::user_token::ActiveModel {
+            user_id: Set(7),
+            token: Set("existing-token".to_string()),
+            expired_at: Set(chrono::Utc::now().timestamp() + 3600),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        assert!(services::user::info_by_access_token(&db, "existing-token")
+            .await
+            .unwrap()
+            .is_some());
+        entity::user::ActiveModel {
+            id: Set(7),
+            status: Set(entity::user::STATUS_DISABLED),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+        assert!(services::user::info_by_access_token(&db, "existing-token")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn password_login_preserves_legacy_hash_upgrade() {
+        let db = setup_db().await;
+        entity::user::ActiveModel {
+            id: Set(7),
+            password: Set(crate::support::password::md5_hex("passwordrustdesk-api")),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+        let user = services::user::info_by_username_password(
+            &db,
+            &Config::default(),
+            "deployer",
+            "password",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(user.password.starts_with("$2"));
+        assert_eq!(
+            services::user::info_by_id(&db, 7)
+                .await
+                .unwrap()
+                .unwrap()
+                .password,
+            user.password
+        );
+        assert!(services::user::info_by_username_password(
+            &db,
+            &Config::default(),
+            "deployer",
+            "wrong",
+        )
+        .await
+        .unwrap()
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn banned_ip_cannot_submit_password_or_challenge_login() {
+        let mut state = test_state(setup_db().await);
+        state.limiter = Arc::new(LoginLimiter::new(SecurityPolicy {
+            captcha_threshold: -1,
+            ban_threshold: 1,
+            attempts_window: StdDuration::from_secs(60),
+            ban_duration: StdDuration::from_secs(60),
+        }));
+        state.limiter.record_failed_attempt("test-ip");
+        for secret in ["", "challenge-secret"] {
+            let native = login(
+                State(state.clone()),
+                AcceptLang("en".into()),
+                ClientIp("test-ip".into()),
+                HeaderMap::new(),
+                Json(LoginForm {
+                    secret: secret.into(),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            let body = axum::body::to_bytes(native.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"], state.tr("en", "LoginBanned"));
+            let admin = crate::http::admin::login(
+                State(state.clone()),
+                AcceptLang("en".into()),
+                ClientIp("test-ip".into()),
+                Json(crate::http::admin::LoginForm {
+                    secret: secret.into(),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            let body = axum::body::to_bytes(admin.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["code"], 101);
+            assert_eq!(body["message"], state.tr("en", "LoginBanned"));
+        }
+    }
+
+    #[tokio::test]
+    async fn record_deletion_reports_failures_and_preserves_metadata() {
+        for backend in ["s3", "local"] {
+            let db = setup_db().await;
+            let schema = Schema::new(DbBackend::Sqlite);
+            db.execute(
+                db.get_database_backend()
+                    .build(&schema.create_table_from_entity(entity::record_file::Entity)),
+            )
+            .await
+            .unwrap();
+            let row = entity::record_file::ActiveModel {
+                filename: Set("test.webm".into()),
+                storage_backend: Set(backend.into()),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+            if backend == "local" {
+                db.execute(sea_orm::Statement::from_string(
+                    DbBackend::Sqlite,
+                    "CREATE TRIGGER reject_record_delete BEFORE DELETE ON record_files BEGIN SELECT RAISE(FAIL, 'delete failed'); END;",
+                ))
+                .await
+                .unwrap();
+            }
+            let state = test_state(db.clone());
+            assert!(record_remove(&state, "test.webm").await.is_err());
+            let admin = crate::http::admin::record_file_delete(
+                State(state),
+                AcceptLang("en".into()),
+                crate::http::middleware::AdminUser {
+                    user: services::user::info_by_id(&db, 7).await.unwrap().unwrap(),
+                    token: String::new(),
+                },
+                Json(crate::http::admin::IdForm { id: row.id }),
+            )
+            .await;
+            let body = axum::body::to_bytes(admin.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["code"], 101);
+            assert!(services::record_file::info_by_id(&db, row.id)
+                .await
+                .unwrap()
+                .is_some());
         }
     }
 

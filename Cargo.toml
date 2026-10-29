@@ -21,7 +21,7 @@ tokio = { version = "1", features = ["full"] }
 # Web
 axum = { version = "0.7", features = ["macros", "multipart"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"] }
 # ORM
 sea-orm = { version = "1.1", features = [
     "sqlx-sqlite",

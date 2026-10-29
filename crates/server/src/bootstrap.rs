@@ -16,7 +16,7 @@ use sea_orm::{
 
 use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
-    audit_conn, audit_file, deployment_event, deployment_token, device_group,
+    audit_alarm, audit_conn, audit_file, audit_receipt, deployment_event, deployment_token, device_group,
     device_presence_state, group, login_log, login_verification, message, message_read, oauth,
     peer, record_file, server_cmd, share_record, smtp_email_config, strategy, strategy_assignment,
     system_setting, tag, trusted_login_device, user, user_third, user_token, version,
@@ -70,17 +70,19 @@ const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
     },
 ];
 
-/// Connect to the configured database.
-pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
-    let url = match config.db.r#type.as_str() {
+fn database_url(config: &Config) -> String {
+    match config.db.r#type.as_str() {
         config::DB_TYPE_MYSQL => format!(
             "mysql://{}:{}@{}/{}",
-            config.mysql.username, config.mysql.password, config.mysql.addr, config.mysql.dbname
+            urlencoding::encode(&config.mysql.username),
+            urlencoding::encode(&config.mysql.password),
+            config.mysql.addr,
+            config.mysql.dbname
         ),
         config::DB_TYPE_POSTGRESQL => format!(
             "postgres://{}:{}@{}:{}/{}?sslmode={}",
-            config.postgresql.user,
-            config.postgresql.password,
+            urlencoding::encode(&config.postgresql.user),
+            urlencoding::encode(&config.postgresql.password),
             config.postgresql.host,
             config.postgresql.port,
             config.postgresql.dbname,
@@ -95,9 +97,12 @@ pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
             std::fs::create_dir_all("./data").ok();
             "sqlite://./data/rustdeskapi.db?mode=rwc".to_string()
         }
-    };
+    }
+}
 
-    let mut opt = ConnectOptions::new(url);
+/// Connect to the configured database.
+pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
+    let mut opt = ConnectOptions::new(database_url(config));
     if config.db.max_open_conns > 0 {
         opt.max_connections(config.db.max_open_conns);
     }
@@ -143,6 +148,8 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(share_record::Entity);
     create!(audit_conn::Entity);
     create!(audit_file::Entity);
+    create!(audit_alarm::Entity);
+    create!(audit_receipt::Entity);
     create!(record_file::Entity);
     create!(deployment_token::Entity);
     create!(deployment_event::Entity);
@@ -610,6 +617,27 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
 mod tests {
     use super::*;
     use sea_orm::{Database, DbBackend, EntityTrait};
+
+    #[test]
+    fn database_credentials_cannot_change_url_structure() {
+        let mut config = Config::default();
+        for kind in [config::DB_TYPE_MYSQL, config::DB_TYPE_POSTGRESQL] {
+            config.db.r#type = kind.to_string();
+            config.mysql.username = "user@/#?%:".to_string();
+            config.mysql.password = "pass@/#?%:".to_string();
+            config.mysql.addr = "localhost:3306".to_string();
+            config.postgresql.user = config.mysql.username.clone();
+            config.postgresql.password = config.mysql.password.clone();
+            config.postgresql.host = "localhost".to_string();
+            let parsed = url::Url::parse(&database_url(&config)).unwrap();
+            assert_eq!(parsed.host_str(), Some("localhost"));
+            assert_eq!(urlencoding::decode(parsed.username()).unwrap(), "user@/#?%:");
+            assert_eq!(
+                urlencoding::decode(parsed.password().unwrap()).unwrap(),
+                "pass@/#?%:"
+            );
+        }
+    }
 
     async fn memory_db() -> DatabaseConnection {
         let mut options = ConnectOptions::new("sqlite::memory:");

@@ -520,10 +520,10 @@ pub fn parse_go_duration(s: &str) -> Option<Duration> {
                 's' => 1.0,
                 _ => return None,
             };
-            total += Duration::from_secs_f64(val * unit);
+            total = total.checked_add(Duration::try_from_secs_f64(val * unit).ok()?)?;
         }
     }
-    Some(total)
+    num.is_empty().then_some(total)
 }
 
 #[cfg(test)]
@@ -542,6 +542,15 @@ mod tests {
         assert_eq!(parse_go_duration("30m").unwrap().as_secs(), 1800);
         assert_eq!(parse_go_duration("604800").unwrap().as_secs(), 604800);
         assert!(parse_go_duration("").is_none());
+    }
+
+    #[test]
+    fn rejects_overflowing_and_incomplete_durations() {
+        assert!(parse_go_duration("999999999999999999999999999h").is_none());
+        assert!(parse_go_duration("18000000000000000000s18000000000000000000s").is_none());
+        assert!(parse_go_duration("1h30").is_none());
+        assert!(parse_go_duration("1.5").is_none());
+        assert_eq!(parse_go_duration("1h30m"), Some(Duration::from_secs(5400)));
     }
 
     #[test]

@@ -1,13 +1,15 @@
 //! Route table, ports of `http/router/{api,admin,router}.go`.
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::http::{admin, api, file, my, oauth, observability, pro_api, static_files};
+use crate::http::{admin, api, file, my, oauth, observability, pro_api, static_files, switch_grant};
 use crate::state::AppState;
 
 pub fn build(state: AppState) -> Router {
@@ -27,6 +29,10 @@ pub fn build(state: AppState) -> Router {
         .route("/api/", get(api::index))
         .route("/api/version", get(api::version))
         .route("/api/heartbeat", post(api::heartbeat))
+        .route(
+            "/api/switch-grant",
+            post(switch_grant::register).layer(DefaultBodyLimit::max(1024)),
+        )
         .route("/api/login-options", get(api::login_options))
         .route("/api/login", post(api::login))
         .route("/api/logout", post(api::logout))
@@ -90,7 +96,7 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/api/audits/conn", get(pro_api::audits_conn))
         .route("/api/audits/file", get(pro_api::audits_file))
-        .route("/api/audits/alarm", get(pro_api::audits_empty))
+        .route("/api/audits/alarm", get(pro_api::audits_alarm))
         .route("/api/audits/console", get(pro_api::audits_empty))
         .route(
             "/api/device-group/accessible",
@@ -187,7 +193,19 @@ pub fn build(state: AppState) -> Router {
         };
         format!("{base}/public/upload")
     };
-    app = app.nest_service("/upload", ServeDir::new(upload_dir));
+    app = app.nest_service(
+        "/upload",
+        tower::ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox; default-src 'none'"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ))
+            .service(ServeDir::new(upload_dir)),
+    );
 
     app.layer(cors)
         .layer(TraceLayer::new_for_http())

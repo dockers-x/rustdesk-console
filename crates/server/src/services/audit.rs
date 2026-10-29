@@ -89,7 +89,7 @@ struct ConnEvent {
     peer: Option<ConnPeer>,
 }
 
-pub async fn record_conn_event(db: &DatabaseConnection, body: &JsonValue) -> Result<(), DbErr> {
+pub async fn record_conn_event(db: &impl ConnectionTrait, body: &JsonValue) -> Result<(), DbErr> {
     let event = ConnEvent::from_json(body);
 
     if let Some(note) = &event.note {
@@ -149,7 +149,7 @@ pub async fn update_conn_note_by_guid(
     update_conn_note(db, guid, note).await
 }
 
-async fn insert_conn_event(db: &DatabaseConnection, event: &ConnEvent) -> Result<(), DbErr> {
+async fn insert_conn_event(db: &impl ConnectionTrait, event: &ConnEvent) -> Result<(), DbErr> {
     let now = crate::services::now();
     let am = audit_conn::ActiveModel {
         action: Set(event.action.clone().unwrap_or_default()),
@@ -172,7 +172,7 @@ async fn insert_conn_event(db: &DatabaseConnection, event: &ConnEvent) -> Result
 }
 
 async fn update_conn_note(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     session_id: &str,
     note: &str,
 ) -> Result<(), DbErr> {
@@ -188,7 +188,10 @@ async fn update_conn_note(
     Ok(())
 }
 
-async fn close_conn_event(db: &DatabaseConnection, event: &ConnEvent) -> Result<(), DbErr> {
+async fn close_conn_event(db: &impl ConnectionTrait, event: &ConnEvent) -> Result<(), DbErr> {
+    if event.peer_id.is_empty() {
+        return Err(DbErr::Custom("missing audit device identity".to_string()));
+    }
     let close_time = if event.close_time > 0 {
         event.close_time
     } else {
@@ -202,12 +205,21 @@ async fn close_conn_event(db: &DatabaseConnection, event: &ConnEvent) -> Result<
             Expr::value(crate::services::now().unwrap()),
         )
         .filter(audit_conn::Column::ConnId.eq(event.conn_id))
+        .filter(audit_conn::Column::PeerId.eq(&event.peer_id))
+        .filter(
+            Condition::all().add_option(
+                (!event.uuid.is_empty()).then(|| audit_conn::Column::Uuid.eq(&event.uuid)),
+            ),
+        )
         .exec(db)
         .await?;
     Ok(())
 }
 
-async fn update_conn_peer(db: &DatabaseConnection, event: &ConnEvent) -> Result<(), DbErr> {
+async fn update_conn_peer(db: &impl ConnectionTrait, event: &ConnEvent) -> Result<(), DbErr> {
+    if event.peer_id.is_empty() {
+        return Err(DbErr::Custom("missing audit device identity".to_string()));
+    }
     let peer = event.peer.as_ref();
     let from_peer = peer.map(|p| p.id.as_str()).unwrap_or(&event.from_peer);
     let from_name = peer.map(|p| p.name.as_str()).unwrap_or(&event.from_name);
@@ -230,12 +242,25 @@ async fn update_conn_peer(db: &DatabaseConnection, event: &ConnEvent) -> Result<
             Expr::value(event.session_id.clone()),
         )
         .col_expr(audit_conn::Column::Type, Expr::value(event.r#type))
-        .col_expr(audit_conn::Column::Uuid, Expr::value(event.uuid.clone()))
+        .col_expr(
+            audit_conn::Column::Uuid,
+            if event.uuid.is_empty() {
+                Expr::col(audit_conn::Column::Uuid).into()
+            } else {
+                Expr::value(event.uuid.clone())
+            },
+        )
         .col_expr(
             audit_conn::Column::UpdatedAt,
             Expr::value(crate::services::now().unwrap()),
         )
         .filter(audit_conn::Column::ConnId.eq(event.conn_id))
+        .filter(audit_conn::Column::PeerId.eq(&event.peer_id))
+        .filter(
+            Condition::all().add_option(
+                (!event.uuid.is_empty()).then(|| audit_conn::Column::Uuid.eq(&event.uuid)),
+            ),
+        )
         .exec(db)
         .await?;
     Ok(())
@@ -469,6 +494,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connection_events_only_update_the_reporting_device() {
+        let db = setup_audit_db().await;
+        for (id, uuid) in [("device-a", "uuid-a"), ("device-b", "uuid-b")] {
+            record_conn_event(
+                &db,
+                &json!({"action": "new", "conn_id": 1, "id": id, "uuid": uuid}),
+            )
+            .await
+            .unwrap();
+        }
+        record_conn_event(&db, &json!({"conn_id": 1, "id": "device-a", "peer": ["remote", "operator"], "session_id": "session-a"}))
+            .await.unwrap();
+        record_conn_event(
+            &db,
+            &json!({"action": "close", "conn_id": 1, "id": "device-a", "uuid": "uuid-a"}),
+        )
+        .await
+        .unwrap();
+        let rows = audit_conn::Entity::find()
+            .order_by_asc(audit_conn::Column::Id)
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].action, "close");
+        assert_eq!(rows[0].from_peer, "remote");
+        assert_eq!(rows[0].session_id, "session-a");
+        assert_eq!(rows[1].action, "new");
+        assert_eq!(rows[1].uuid, "uuid-b");
+        assert!(rows[1].from_peer.is_empty());
+        assert!(rows[1].session_id.is_empty());
+        for body in [
+            json!({"action": "close", "conn_id": 1}),
+            json!({"peer": ["remote", "operator"], "conn_id": 1}),
+        ] {
+            assert!(record_conn_event(&db, &body).await.is_err());
+        }
+    }
+
+    #[tokio::test]
     async fn active_conn_guid_can_update_note_by_guid() {
         let db = setup_audit_db().await;
 
@@ -583,7 +647,7 @@ pub async fn file_list(
     })
 }
 
-pub async fn record_file_event(db: &DatabaseConnection, body: &JsonValue) -> Result<(), DbErr> {
+pub async fn record_file_event(db: &impl ConnectionTrait, body: &JsonValue) -> Result<(), DbErr> {
     let event = FileEvent::from_json(body);
     let now = crate::services::now();
     let am = audit_file::ActiveModel {

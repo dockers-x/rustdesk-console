@@ -95,6 +95,9 @@ impl WebClientConfigStore {
 }
 
 fn persist_to_config_file(path: &Path, cfg: &WebClientConfig) -> anyhow::Result<()> {
+    let _guard = super::CONFIG_PERSISTENCE_LOCK
+        .lock()
+        .map_err(|error| anyhow::anyhow!("config persistence lock poisoned: {error}"))?;
     let raw = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read config {}: {}", path.display(), e))?;
     let updated = patch_rustdesk_section(&raw, cfg);

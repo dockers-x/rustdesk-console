@@ -10,3 +10,4 @@ pub mod pro_api;
 pub mod response;
 pub mod router;
 pub mod static_files;
+pub mod switch_grant;

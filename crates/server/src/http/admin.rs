@@ -68,6 +68,10 @@ pub async fn login(
     if state.config.app.disable_pwd_login {
         return resp::fail(101, state.tr(&lang, "PwdLoginDisabled"));
     }
+    let (banned, need_captcha) = state.limiter.check_security_status(&ip);
+    if banned {
+        return resp::fail(101, state.tr(&lang, "LoginBanned"));
+    }
     if !f.secret.trim().is_empty() {
         let (user, device) = match services::login_security::verify_login_challenge(
             &state.db,
@@ -110,8 +114,6 @@ pub async fn login(
         state.limiter.remove_attempts(&ip);
         return resp::success(AdminLoginPayload::from_user(&user, ut.token));
     }
-    let (_banned, need_captcha) = state.limiter.check_security_status(&ip);
-
     if f.username.len() < 2 || f.password.len() < 4 {
         state.limiter.record_failed_attempt(&ip);
         return resp::fail(101, state.tr(&lang, "ParamsError"));
@@ -257,6 +259,9 @@ pub async fn password_reset_request(
     ClientIp(ip): ClientIp,
     Json(f): Json<PasswordResetRequestForm>,
 ) -> Response {
+    if state.limiter.check_security_status(&ip).0 {
+        return resp::fail(101, "LoginBanned");
+    }
     if f.account.trim().is_empty() {
         return resp::fail(101, "ParamsError");
     }
@@ -281,8 +286,12 @@ pub struct PasswordResetConfirmForm {
 pub async fn password_reset_confirm(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
+    ClientIp(ip): ClientIp,
     Json(f): Json<PasswordResetConfirmForm>,
 ) -> Response {
+    if state.limiter.check_security_status(&ip).0 {
+        return resp::fail(101, state.tr(&lang, "LoginBanned"));
+    }
     if f.secret.trim().is_empty()
         || f.code.trim().is_empty()
         || f.password.len() < 4
@@ -299,7 +308,10 @@ pub async fn password_reset_confirm(
     .await
     {
         Ok(_) => resp::success(Value::Null),
-        Err(e) => resp::fail(101, e),
+        Err(e) => {
+            state.limiter.record_failed_attempt(&ip);
+            resp::fail(101, e)
+        }
     }
 }
 
@@ -2785,7 +2797,7 @@ pub async fn record_file_delete(
     )
     .await
     {
-        tracing::warn!("failed to remove record object: {e}");
+        return resp::fail(101, e);
     }
     if let Err(e) = services::record_storage::cleanup_staging(
         &storage_cfg,
@@ -2795,7 +2807,7 @@ pub async fn record_file_delete(
     )
     .await
     {
-        tracing::warn!("failed to remove record staging file: {e}");
+        return resp::fail(101, e);
     }
     match services::record_file::delete(&state.db, f.id).await {
         Ok(_) => resp::success(Value::Null),

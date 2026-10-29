@@ -112,6 +112,9 @@ async fn auth_query_pre(
     else {
         return Err(resp::error(state.tr(lang, "UserNotFound")));
     };
+    if !u.is_enabled() {
+        return Err(resp::error(state.tr(lang, "UserDisabled")));
+    }
     state.oauth_cache.delete(code);
     let ut = services::user::login(
         &state.db,

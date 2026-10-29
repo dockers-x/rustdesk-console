@@ -4,7 +4,7 @@ use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Address, Message, SmtpTransport, Transport};
 use rand::RngCore;
-use sea_orm::*;
+use sea_orm::{sea_query::Expr, *};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -474,7 +474,7 @@ pub async fn request_password_reset(
     if !u.is_enabled() || u.email.trim().is_empty() {
         return Ok(secret);
     }
-    if let Some(existing) = login_verification::Entity::find()
+    if login_verification::Entity::find()
         .filter(login_verification::Column::UserId.eq(u.id))
         .filter(login_verification::Column::Kind.eq(login_verification::KIND_PASSWORD_RESET))
         .filter(login_verification::Column::VerifiedAt.eq(0))
@@ -483,8 +483,9 @@ pub async fn request_password_reset(
         .one(db)
         .await
         .map_err(|e| e.to_string())?
+        .is_some()
     {
-        return Ok(existing.secret);
+        return Ok(secret);
     }
     let email = match email_settings(db).await {
         Ok(email) if email.is_configured() => email,
@@ -538,7 +539,17 @@ pub async fn confirm_password_reset(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "The verification code is incorrect or has expired".to_string())?;
-    if challenge.expires_at < now_ts || hash_code(&challenge.secret, code) != challenge.code_hash {
+    if challenge.expires_at < now_ts {
+        return Err("The verification code is incorrect or has expired".to_string());
+    }
+    let claimed = login_verification::Entity::update_many()
+        .col_expr(login_verification::Column::VerifiedAt, Expr::value(now_ts))
+        .filter(login_verification::Column::Id.eq(challenge.id))
+        .filter(login_verification::Column::VerifiedAt.eq(0))
+        .exec(db)
+        .await
+        .map_err(|e| e.to_string())?;
+    if claimed.rows_affected != 1 || hash_code(&challenge.secret, code) != challenge.code_hash {
         return Err("The verification code is incorrect or has expired".to_string());
     }
     let u = user::Entity::find_by_id(challenge.user_id)
@@ -1014,6 +1025,55 @@ mod tests {
         let raw = b"12345678901234567890";
         let encoded = base32_encode(raw);
         assert_eq!(base32_decode(&encoded).unwrap(), raw);
+    }
+
+    #[tokio::test]
+    async fn password_reset_hides_active_secret_and_rejects_retries_after_wrong_code() {
+        let db = smtp_test_db().await;
+        let backend = db.get_database_backend();
+        let schema = Schema::new(backend);
+        db.execute(backend.build(&schema.create_table_from_entity(user::Entity)))
+            .await
+            .unwrap();
+        db.execute(backend.build(&schema.create_table_from_entity(login_verification::Entity)))
+            .await
+            .unwrap();
+        let user = user::ActiveModel {
+            username: Set("reset-user".into()),
+            email: Set("reset@example.com".into()),
+            status: Set(user::STATUS_ENABLE),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        login_verification::ActiveModel {
+            user_id: Set(user.id),
+            secret: Set("original-secret".into()),
+            kind: Set(login_verification::KIND_PASSWORD_RESET.into()),
+            code_hash: Set(hash_code("original-secret", "123456")),
+            expires_at: Set(Utc::now().timestamp() + 60),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        assert_ne!(
+            request_password_reset(&db, "reset-user", "other-ip")
+                .await
+                .unwrap(),
+            "original-secret"
+        );
+        assert!(
+            confirm_password_reset(&db, "original-secret", "wrong", "new-password")
+                .await
+                .is_err()
+        );
+        assert!(
+            confirm_password_reset(&db, "original-secret", "123456", "new-password")
+                .await
+                .is_err()
+        );
     }
 
     #[test]

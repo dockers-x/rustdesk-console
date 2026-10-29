@@ -43,7 +43,11 @@ pub async fn info_by_username_password(
     let Some(u) = info_by_username(db, username).await? else {
         return Ok(None);
     };
-    let (ok, new_hash) = verify_password(&u.password, password);
+    let hash = u.password.clone();
+    let password = password.to_string();
+    let (ok, new_hash) = tokio::task::spawn_blocking(move || verify_password(&hash, &password))
+        .await
+        .map_err(|e| DbErr::Custom(e.to_string()))?;
     if !ok {
         return Ok(None);
     }
@@ -76,6 +80,9 @@ pub async fn info_by_access_token(
     let Some(u) = info_by_id(db, ut.user_id).await? else {
         return Ok(None);
     };
+    if !u.is_enabled() {
+        return Ok(None);
+    }
     Ok(Some((u, ut)))
 }
 
@@ -304,7 +311,11 @@ pub async fn create(
         return Err("UsernameExists".to_string());
     }
     model.username = format_username(&model.username);
-    model.password = encrypt_password(&model.password).map_err(|e| e.to_string())?;
+    let password = std::mem::take(&mut model.password);
+    model.password = tokio::task::spawn_blocking(move || encrypt_password(&password))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     let am = user::ActiveModel {
         username: Set(model.username),
         email: Set(model.email),
@@ -421,7 +432,11 @@ pub async fn update_password(
     u: &user::Model,
     password: &str,
 ) -> Result<(), String> {
-    let hash = encrypt_password(password).map_err(|e| e.to_string())?;
+    let password = password.to_string();
+    let hash = tokio::task::spawn_blocking(move || encrypt_password(&password))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     let mut am: user::ActiveModel = u.clone().into();
     am.password = Set(hash);
     am.must_change_password = Set(false);

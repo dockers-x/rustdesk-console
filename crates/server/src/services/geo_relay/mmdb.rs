@@ -4,12 +4,11 @@ use maxminddb::Reader;
 use reqwest::{redirect::Policy, Client, Url};
 use std::{
     fs::OpenOptions,
-    io::Write,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
-use tokio::net::lookup_host;
+use tokio::{io::AsyncWriteExt, net::lookup_host};
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -101,7 +100,7 @@ pub async fn download(
         Uuid::new_v4().simple()
     ));
     let mut temporary_guard = TemporaryGuard::new(temporary.clone());
-    let mut file = private_file(&temporary)?;
+    let mut file = tokio::fs::File::from_std(private_file(&temporary)?);
     let mut downloaded = 0_u64;
     let mut response = response;
     while let Some(chunk) = response
@@ -118,15 +117,24 @@ pub async fn download(
             ));
         }
         file.write_all(&chunk)
+            .await
             .map_err(|error| format!("cannot write MMDB temporary file: {error}"))?;
     }
     file.sync_all()
+        .await
         .map_err(|error| format!("cannot sync MMDB temporary file: {error}"))?;
     drop(file);
-    validate_database(&temporary, kind)?;
+    let validation_path = temporary.clone();
+    tokio::task::spawn_blocking(move || validate_database(&validation_path, kind))
+        .await
+        .map_err(|error| format!("MMDB validation task failed: {error}"))??;
     let warning = replace_with_backup(&temporary, &target, kind)?;
     temporary_guard.disarm();
-    let mut status = database_status(config, kind, None)?;
+    let status_config = config.clone();
+    let mut status =
+        tokio::task::spawn_blocking(move || database_status(&status_config, kind, None))
+            .await
+            .map_err(|error| format!("MMDB status task failed: {error}"))??;
     status.error = warning;
     Ok(status)
 }

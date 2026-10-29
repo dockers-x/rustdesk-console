@@ -27,6 +27,9 @@ pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
     "allow-auto-disconnect",
     "auto-disconnect-timeout",
     "whitelist",
+    "id-whitelist",
+    "allow-scope-violation-alarm",
+    "allow-scope-violation-close",
     "allow-remote-config-modification",
     "enable-remote-printer",
     "temporary-password-length",
@@ -520,6 +523,23 @@ mod tests {
             Some(&"hbbs.example".to_string())
         );
         assert_eq!(decoded.get("proxy-password"), Some(&"secret".to_string()));
+    }
+
+    #[test]
+    fn accepts_client_whitelist_and_scope_options() {
+        let mut options = HashMap::new();
+        options.insert("id-whitelist".to_string(), "123*,abc?".to_string());
+        options.insert("allow-scope-violation-alarm".to_string(), "Y".to_string());
+        options.insert("allow-scope-violation-close".to_string(), "N".to_string());
+
+        let encoded = encode_config_options(options.clone()).unwrap();
+        assert_eq!(decode_string_map(&encoded).unwrap(), options);
+
+        for value in options.values_mut() {
+            value.clear();
+        }
+        let encoded = encode_config_options(options.clone()).unwrap();
+        assert_eq!(decode_string_map(&encoded).unwrap(), options);
     }
 
     #[tokio::test]

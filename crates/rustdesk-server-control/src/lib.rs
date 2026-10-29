@@ -22,7 +22,7 @@ pub struct ControlPorts {
 impl ControlPorts {
     pub fn from_config_ports(id_server_port: i32, relay_server_port: i32) -> Self {
         Self {
-            id_server_cmd_port: normalize_port(id_server_port - 1),
+            id_server_cmd_port: id_server_port.checked_sub(1).and_then(normalize_port),
             relay_server_cmd_port: normalize_port(relay_server_port),
         }
     }
@@ -126,13 +126,18 @@ async fn send_socket_cmd(addr: &str, port: u16, cmd: &str) -> Result<String, Str
         .await
         .map_err(|e| format!("send cmd failed: {e}"))?;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut buf = vec![0u8; 4096];
-    let n = match tokio::time::timeout(Duration::from_secs(3), conn.read(&mut buf)).await {
-        Ok(Ok(n)) => n,
+    const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+    let mut buf = Vec::new();
+    let mut response = conn.take((MAX_RESPONSE_BYTES + 1) as u64);
+    match tokio::time::timeout(Duration::from_secs(3), response.read_to_end(&mut buf)).await {
+        Ok(Ok(_)) => {}
         Ok(Err(e)) => return Err(format!("read response failed: {e}")),
-        Err(_) => 0,
-    };
-    Ok(String::from_utf8_lossy(&buf[..n]).to_string())
+        Err(_) => return Err("read response timed out".to_string()),
+    }
+    if buf.len() > MAX_RESPONSE_BYTES {
+        return Err("response exceeds 1 MiB limit".to_string());
+    }
+    Ok(String::from_utf8_lossy(&buf).to_string())
 }
 
 #[cfg(test)]
@@ -151,5 +156,58 @@ mod tests {
         let ports = ControlPorts::from_config_ports(21116, 21117);
         assert_eq!(target_port(ports, TARGET_ID_SERVER), Some(21115));
         assert_eq!(target_port(ports, TARGET_RELAY_SERVER), Some(21117));
+        assert_eq!(
+            ControlPorts::from_config_ports(i32::MIN, 0).id_server_cmd_port,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_complete_response_across_multiple_packets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let expected = "reply".repeat(3000);
+        let reply = expected.clone();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut command = [0; 1];
+            conn.read_exact(&mut command).await.unwrap();
+            conn.write_all(&reply.as_bytes()[..5000]).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            conn.write_all(&reply.as_bytes()[5000..]).await.unwrap();
+        });
+        assert_eq!(
+            send_socket_cmd("127.0.0.1", port, "h").await.unwrap(),
+            expected
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_response_timeout_as_an_error() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (_conn, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let error = send_socket_cmd("127.0.0.1", port, "h").await.unwrap_err();
+        assert!(error.contains("timed out"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_response() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut command = [0; 1];
+            conn.read_exact(&mut command).await.unwrap();
+            conn.write_all(&vec![b'a'; 1024 * 1024 + 1]).await.unwrap();
+        });
+        let error = send_socket_cmd("127.0.0.1", port, "h").await.unwrap_err();
+        assert!(error.contains("limit"));
+        server.await.unwrap();
     }
 }

@@ -146,11 +146,11 @@ pub async fn devices(
         .filter(|d| matches_like(&d.device_username, q.device_username.as_deref()))
         .collect();
     let total = filtered.len() as i64;
-    let start = ((page - 1) * page_size) as usize;
+    let start = usize::try_from((page - 1).saturating_mul(page_size)).unwrap_or(usize::MAX);
     let rows: Vec<ProDevice> = filtered
         .into_iter()
         .skip(start)
-        .take(page_size as usize)
+        .take(usize::try_from(page_size).unwrap_or(usize::MAX))
         .collect();
     resp::data_response(total, rows)
 }
@@ -240,11 +240,11 @@ pub async fn device_groups(
         .filter(|g| matches_like(&g.name, q.name.as_deref()))
         .collect();
     let total = rows.len() as i64;
-    let start = ((page - 1) * page_size) as usize;
+    let start = usize::try_from((page - 1).saturating_mul(page_size)).unwrap_or(usize::MAX);
     rows = rows
         .into_iter()
         .skip(start)
-        .take(page_size as usize)
+        .take(usize::try_from(page_size).unwrap_or(usize::MAX))
         .collect();
     resp::data_response(total, rows)
 }
@@ -471,11 +471,11 @@ pub async fn user_groups(
         .filter(|g| matches_like(&g.name, q.name.as_deref()))
         .collect();
     let total = rows.len() as i64;
-    let start = ((page - 1) * page_size) as usize;
+    let start = usize::try_from((page - 1).saturating_mul(page_size)).unwrap_or(usize::MAX);
     rows = rows
         .into_iter()
         .skip(start)
-        .take(page_size as usize)
+        .take(usize::try_from(page_size).unwrap_or(usize::MAX))
         .collect();
     resp::data_response(total, rows)
 }
@@ -847,6 +847,27 @@ pub async fn audits_file(
     {
         Ok(r) => resp::data_response(r.total, r.list),
         Err(e) => resp::error(e.to_string()),
+    }
+}
+
+pub async fn audits_alarm(
+    State(state): State<AppState>,
+    user: RustClientUser,
+    Query(q): Query<ProPageQuery>,
+) -> Response {
+    if !user.user.is_admin() {
+        return resp::error("Permission denied");
+    }
+    match services::audit_alarm::list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        q.remote.or(q.id),
+    )
+    .await
+    {
+        Ok(result) => resp::data_response(result.total, result.list),
+        Err(error) => resp::error(error.to_string()),
     }
 }
 

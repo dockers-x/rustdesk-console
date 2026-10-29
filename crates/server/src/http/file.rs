@@ -32,14 +32,14 @@ pub async fn upload(
         if field.name() != Some("file") {
             continue;
         }
-        let filename = field
-            .file_name()
-            .map(sanitize)
-            .unwrap_or_else(|| "file".to_string());
         let data = match field.bytes().await {
             Ok(d) => d,
             Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
         };
+        let Some(extension) = image_extension(&data) else {
+            return resp::fail(101, "Only PNG, JPEG, GIF and WebP images are supported");
+        };
+        let filename = format!("{}.{}", uuid::Uuid::new_v4(), extension);
         let dir = format!("{}/{}", upload_root(&state), date);
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
@@ -54,12 +54,48 @@ pub async fn upload(
     resp::fail(101, state.tr(&lang, "ParamsError"))
 }
 
-fn sanitize(name: &str) -> String {
-    name.chars()
-        .filter(|c| !matches!(c, '/' | '\\' | '\0'))
-        .collect::<String>()
-        .trim_start_matches('.')
-        .to_string()
+fn image_extension(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if data.starts_with(b"\xff\xd8\xff") {
+        Some("jpg")
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_active_content_regardless_of_claimed_filename() {
+        for data in [
+            b"<html><script>alert(1)</script></html>".as_slice(),
+            b"<svg onload='alert(1)'/>",
+            b"",
+            b"RIFF",
+        ] {
+            assert_eq!(image_extension(data), None);
+        }
+    }
+
+    #[test]
+    fn uses_canonical_extensions_for_passive_raster_signatures() {
+        for (data, extension) in [
+            (b"\x89PNG\r\n\x1a\n".as_slice(), "png"),
+            (b"\xff\xd8\xff", "jpg"),
+            (b"GIF87a", "gif"),
+            (b"GIF89a", "gif"),
+            (b"RIFF\0\0\0\0WEBP", "webp"),
+        ] {
+            assert_eq!(image_extension(data), Some(extension));
+        }
+    }
 }
 
 /// `GET /api/admin/file/oss_token` — signed OSS post-policy for direct upload.

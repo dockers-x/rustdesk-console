@@ -77,18 +77,11 @@ pub fn mobile_config_text(encoded_config: &str) -> String {
     format!("config={}", encoded_config.trim())
 }
 
+/// Builds a Windows-safe configuration filename recognized by RustDesk.
+/// Long configurations can exceed filesystem filename limits; use configuration
+/// import or commands instead of renaming the executable in that case.
 pub fn filename_hint(config: &ServerConfig) -> String {
-    let mut parts = vec![format!("host={}", config.id_server)];
-    if !config.api_server.is_empty() {
-        parts.push(format!("api={}", config.api_server));
-    }
-    if !config.key.is_empty() {
-        parts.push(format!("key={}", config.key));
-    }
-    if !config.relay_server.is_empty() {
-        parts.push(format!("relay={}", config.relay_server));
-    }
-    format!("rustdesk-{}.exe", parts.join(","))
+    format!("rustdesk--{}.exe", encode_server_config(config))
 }
 
 pub fn config_commands(encoded_config: &str) -> DesktopCommandSet {
@@ -193,16 +186,20 @@ mod tests {
     }
 
     #[test]
-    fn builds_plain_filename_hint_supported_by_rustdesk() {
-        assert_eq!(
-            filename_hint(&ServerConfig::new(
-                "id.example.com:21116",
-                "relay.example.com:21117",
-                "https://api.example.com",
-                "pk",
-            )),
-            "rustdesk-host=id.example.com:21116,api=https://api.example.com,key=pk,relay=relay.example.com:21117.exe"
+    fn builds_windows_safe_filename_hint_supported_by_rustdesk() {
+        let config = ServerConfig::new(
+            "id.example.com:21116",
+            "relay.example.com:21117",
+            "https://api.example.com",
+            "pk+/=",
         );
+        let filename = filename_hint(&config);
+        assert_eq!(
+            filename,
+            format!("rustdesk--{}.exe", encode_server_config(&config))
+        );
+        assert!(!filename.contains(['<', '>', ':', '"', '/', '\\', '|', '?', '*']));
+        assert!(filename.len() <= 255);
     }
 
     #[test]

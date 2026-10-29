@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use sea_orm::*;
 
-use ::entity::tag;
+use ::entity::{address_book, tag};
 
 use crate::services::{now, paginate};
 
@@ -131,6 +131,87 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
     Ok(())
 }
 
+pub async fn rename_with_peers(
+    db: &DatabaseConnection,
+    model: &tag::Model,
+    new_name: &str,
+) -> Result<(), DbErr> {
+    let transaction = db.begin().await?;
+    let current = tag::Entity::find_by_id(model.id)
+        .filter(tag::Column::UserId.eq(model.user_id))
+        .filter(tag::Column::CollectionId.eq(model.collection_id))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("Tag not found".to_string()))?;
+    tag::ActiveModel {
+        id: Set(current.id),
+        name: Set(new_name.to_string()),
+        updated_at: Set(now()),
+        ..Default::default()
+    }
+    .update(&transaction)
+    .await?;
+    update_peer_tags(&transaction, &current, Some(new_name)).await?;
+    transaction.commit().await
+}
+
+pub async fn delete_with_peers(db: &DatabaseConnection, model: &tag::Model) -> Result<(), DbErr> {
+    let transaction = db.begin().await?;
+    let current = tag::Entity::find_by_id(model.id)
+        .filter(tag::Column::UserId.eq(model.user_id))
+        .filter(tag::Column::CollectionId.eq(model.collection_id))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("Tag not found".to_string()))?;
+    tag::Entity::delete_by_id(current.id)
+        .exec(&transaction)
+        .await?;
+    update_peer_tags(&transaction, &current, None).await?;
+    transaction.commit().await
+}
+
+async fn update_peer_tags(
+    transaction: &DatabaseTransaction,
+    model: &tag::Model,
+    replacement: Option<&str>,
+) -> Result<(), DbErr> {
+    let peers = address_book::Entity::find()
+        .filter(address_book::Column::UserId.eq(model.user_id))
+        .filter(address_book::Column::CollectionId.eq(model.collection_id))
+        .all(transaction)
+        .await?;
+    for peer in peers {
+        let mut tags = peer.tags;
+        let Some(names) = tags.as_array_mut() else {
+            continue;
+        };
+        if !names
+            .iter()
+            .any(|name| name.as_str() == Some(model.name.as_str()))
+        {
+            continue;
+        }
+        if let Some(replacement) = replacement {
+            for name in names {
+                if name.as_str() == Some(model.name.as_str()) {
+                    *name = serde_json::Value::String(replacement.to_string());
+                }
+            }
+        } else {
+            names.retain(|name| name.as_str() != Some(model.name.as_str()));
+        }
+        address_book::ActiveModel {
+            row_id: Set(peer.row_id),
+            tags: Set(tags),
+            updated_at: Set(now()),
+            ..Default::default()
+        }
+        .update(transaction)
+        .await?;
+    }
+    Ok(())
+}
+
 fn rustdesk_named_tag_color(name: &str) -> Option<i64> {
     match name.to_lowercase().as_str() {
         "red" => Some(0xfff44336),
@@ -237,6 +318,111 @@ pub async fn update_tags(
 mod tests {
     use super::*;
     use sea_orm::{ConnectionTrait, Database, DbBackend, Schema};
+
+    async fn setup_peer_tags_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let schema = Schema::new(DbBackend::Sqlite);
+        for statement in [
+            schema.create_table_from_entity(tag::Entity),
+            schema.create_table_from_entity(address_book::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&statement))
+                .await
+                .unwrap();
+        }
+        for (user_id, collection_id) in [(1, 2), (1, 3), (2, 2)] {
+            create(&db, "old", 42, user_id, collection_id)
+                .await
+                .unwrap();
+            address_book::ActiveModel {
+                user_id: Set(user_id),
+                collection_id: Set(collection_id),
+                tags: Set(serde_json::json!(["old", "older", "keep"])),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        db
+    }
+
+    #[tokio::test]
+    async fn rename_updates_only_same_owner_and_book_peer_tags() {
+        let db = setup_peer_tags_db().await;
+        let tag = info_by_user_name_collection(&db, 1, "old", 2)
+            .await
+            .unwrap()
+            .unwrap();
+        rename_with_peers(&db, &tag, "new").await.unwrap();
+        let renamed = info_by_id(&db, tag.id).await.unwrap().unwrap();
+        assert_eq!(renamed.name, "new");
+        assert_eq!(renamed.color, 42);
+        for peer in address_book::Entity::find().all(&db).await.unwrap() {
+            let expected = if peer.user_id == 1 && peer.collection_id == 2 {
+                serde_json::json!(["new", "older", "keep"])
+            } else {
+                serde_json::json!(["old", "older", "keep"])
+            };
+            assert_eq!(peer.tags, expected);
+        }
+        assert_eq!(
+            tag::Entity::find()
+                .filter(tag::Column::Name.eq("old"))
+                .count(&db)
+                .await
+                .unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_updates_only_same_owner_and_book_peer_tags() {
+        let db = setup_peer_tags_db().await;
+        let tag = info_by_user_name_collection(&db, 1, "old", 2)
+            .await
+            .unwrap()
+            .unwrap();
+        delete_with_peers(&db, &tag).await.unwrap();
+        assert!(info_by_id(&db, tag.id).await.unwrap().is_none());
+        for peer in address_book::Entity::find().all(&db).await.unwrap() {
+            let expected = if peer.user_id == 1 && peer.collection_id == 2 {
+                serde_json::json!(["older", "keep"])
+            } else {
+                serde_json::json!(["old", "older", "keep"])
+            };
+            assert_eq!(peer.tags, expected);
+        }
+        assert_eq!(tag::Entity::find().count(&db).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn peer_update_failure_rolls_back_tag_rename_and_delete() {
+        for delete_tag in [false, true] {
+            let db = setup_peer_tags_db().await;
+            db.execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "CREATE TRIGGER reject_peer_tags BEFORE UPDATE OF tags ON address_books \
+                 BEGIN SELECT RAISE(ABORT, 'peer update failed'); END",
+            ))
+            .await
+            .unwrap();
+            let tag = info_by_user_name_collection(&db, 1, "old", 2)
+                .await
+                .unwrap()
+                .unwrap();
+            let result = if delete_tag {
+                delete_with_peers(&db, &tag).await
+            } else {
+                rename_with_peers(&db, &tag, "new").await
+            };
+            assert!(result.is_err());
+            assert_eq!(info_by_id(&db, tag.id).await.unwrap(), Some(tag));
+            for peer in address_book::Entity::find().all(&db).await.unwrap() {
+                assert_eq!(peer.tags, serde_json::json!(["old", "older", "keep"]));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn update_persists_color_changes() {

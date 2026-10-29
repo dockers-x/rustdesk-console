@@ -899,7 +899,7 @@ pub async fn message_users(
     let total = query.clone().count(&state.db).await.unwrap_or(0) as i64;
     let rows = query
         .order_by_asc(user_entity::Column::Username)
-        .offset((page - 1) * page_size)
+        .offset((page - 1).saturating_mul(page_size))
         .limit(page_size.min(50))
         .all(&state.db)
         .await
