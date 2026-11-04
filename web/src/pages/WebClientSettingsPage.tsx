@@ -19,6 +19,7 @@ import {
 } from "@phosphor-icons/react";
 import { InlineMessage } from "../components/InlineMessage";
 import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
+import { copyToClipboard } from "../lib/clipboard";
 
 type SaveTarget = "local" | "server";
 type WsMode = "auto" | "proxy" | "custom";
@@ -1869,7 +1870,7 @@ function CopyField({
   const display = value || t("emptyValue");
   const copy = async () => {
     if (!value) return;
-    await navigator.clipboard.writeText(value);
+    if (!(await copyToClipboard(value))) return;
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
   };

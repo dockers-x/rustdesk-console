@@ -10,6 +10,7 @@ import {
   dialogPanelClass,
 } from "./DialogLayout";
 import { apiPost, ApiError } from "../lib/api";
+import { copyToClipboard } from "../lib/clipboard";
 import {
   getPreferredWebClientVersion,
   openWebClientPeer,
@@ -32,8 +33,7 @@ interface ShareResult {
 }
 
 async function copyText(value: string) {
-  if (!value) return;
-  await navigator.clipboard?.writeText(value);
+  await copyToClipboard(value);
 }
 
 export function WebClientActions({
