@@ -120,6 +120,8 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
 }
 
 .admin-dialog-panel {
+  /* Keep Kumo’s horizontal centering without shifting the top-anchored panel upward. */
+  translate: -50% 0 !important;
   display: flex;
   top: 0.5rem !important;
   width: calc(100vw - 1rem) !important;
