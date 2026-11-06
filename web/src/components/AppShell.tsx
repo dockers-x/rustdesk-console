@@ -91,6 +91,9 @@ const NAV_ICONS: Record<string, IconType> = {
   diagnostics: Pulse,
   webClientSettings: SlidersHorizontal,
   selfSignedClients: ShieldCheck,
+  developerKeys: Key,
+  developerSdks: Terminal,
+  developerOpenapi: FileText,
 };
 
 interface NavItem {
@@ -176,6 +179,14 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
       adminItem("auditConn"),
       adminItem("auditFile"),
       adminItem("recordFiles"),
+    ],
+  },
+  {
+    key: "developerAccess",
+    items: [
+      { to: "/developer/keys", key: "developerKeys" },
+      { to: "/developer/sdks", key: "developerSdks" },
+      { to: "/developer/openapi", key: "developerOpenapi" },
     ],
   },
   {

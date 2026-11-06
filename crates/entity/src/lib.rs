@@ -5,6 +5,7 @@
 //! so the wire format is identical to the original server.
 
 pub mod datetime;
+pub mod developer_key;
 
 pub mod active_connection;
 pub mod address_book;

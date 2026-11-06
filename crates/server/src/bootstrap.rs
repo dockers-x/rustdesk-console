@@ -35,7 +35,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 273;
+pub const DATABASE_VERSION: i32 = 274;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 type MigrationFn = for<'a> fn(&'a DatabaseConnection, &'a Config) -> MigrationFuture<'a>;
@@ -67,6 +67,11 @@ const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
         version: 273,
         name: "smtp sender display names",
         apply: migration_273,
+    },
+    SchemaMigration {
+        version: 274,
+        name: "developer device group notes",
+        apply: migration_274,
     },
 ];
 
@@ -152,6 +157,7 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(audit_receipt::Entity);
     create!(record_file::Entity);
     create!(deployment_token::Entity);
+    create!(entity::developer_key::Entity);
     create!(deployment_event::Entity);
     create!(webhook_subscription::Entity);
     create!(webhook_delivery::Entity);
@@ -177,6 +183,24 @@ fn migration_272<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> Migrati
 
 fn migration_273<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_273_smtp_sender_names(db).await })
+}
+
+fn migration_274<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        if !column_exists(db, "device_groups", "note").await? {
+            let statement = Table::alter()
+                .table(device_group::Entity)
+                .add_column(
+                    ColumnDef::new(device_group::Column::Note)
+                        .string()
+                        .not_null()
+                        .default(""),
+                )
+                .to_owned();
+            db.execute(db.get_database_backend().build(&statement)).await?;
+        }
+        Ok(())
+    })
 }
 
 async fn migrate_271_legacy_columns(
@@ -700,7 +724,20 @@ mod tests {
             .map(|row| row.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, vec![271, 272, DATABASE_VERSION]);
+        assert_eq!(versions, vec![271, 272, 273, DATABASE_VERSION]);
+    }
+
+    #[tokio::test]
+    async fn existing_device_groups_preserve_rows_and_gain_developer_notes() {
+        let db = memory_db().await;
+        db.execute_unprepared("CREATE TABLE device_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at DATETIME, updated_at DATETIME)").await.unwrap();
+        db.execute_unprepared("INSERT INTO device_groups (id,name) VALUES (7,'Existing fleet')").await.unwrap();
+        let cfg = test_config("");
+        migrate_and_seed(&db, &cfg, &I18n::load("en"), "en").await.unwrap();
+        let group = device_group::Entity::find_by_id(7).one(&db).await.unwrap().unwrap();
+        assert_eq!(group.name, "Existing fleet");
+        assert_eq!(group.note, "");
+        assert!(entity::developer_key::Entity::find().all(&db).await.unwrap().is_empty());
     }
 
     #[tokio::test]

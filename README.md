@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.35-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![release](https://img.shields.io/badge/release-v0.2.40-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
@@ -27,6 +27,8 @@ with its own brand-new admin web interface (not the original web project).
   login (GitHub, Google, OIDC, LinuxDO), web SSO, and LDAP.
 - **Personal area** for each user to manage their own devices, address book, tags,
   share records and login history.
+- **Developer access**: scoped, expiring API keys, Rust/Go/Node.js SDK examples,
+  and public OpenAPI at `/api/v1/openapi.json`. See [the integration guide](docs/developer-access.en.md).
 - **Server commands**: send commands to your RustDesk ID/relay server from the console.
 - **Geo relay routing**: manage ordered country/city/subdivision/ASN/network rules and
   optional MMDB downloads from the existing admin console.

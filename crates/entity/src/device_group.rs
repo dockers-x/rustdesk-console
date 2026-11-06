@@ -8,6 +8,8 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(default_value = "")]
     pub name: String,
+    #[sea_orm(default_value = "")]
+    pub note: String,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

@@ -22,6 +22,7 @@ pub fn build(state: AppState) -> Router {
 
     let mut app = Router::new()
         .merge(crate::features::routes())
+        .merge(crate::http::developer::routes())
         // web index + config
         .route("/", get(static_files::index))
         .route("/health", get(observability::health))

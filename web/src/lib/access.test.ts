@@ -21,6 +21,10 @@ describe("console access", () => {
     expect(canAccessConsolePath("/my", false)).toBe(true);
     expect(canAccessConsolePath("/my/peers", false)).toBe(true);
     expect(canAccessConsolePath("/messages", false)).toBe(true);
+    expect(canAccessConsolePath("/developer/keys", false)).toBe(true);
+    expect(canAccessConsolePath("/developer/sdks", false)).toBe(true);
+    expect(canAccessConsolePath("/developer/openapi", false)).toBe(true);
+    expect(canAccessConsolePath("/developer/admin", false)).toBe(false);
     expect(canAccessConsolePath("/messages?folder=sent", false)).toBe(true);
     expect(canAccessConsolePath("/oauth/bind/code", false)).toBe(true);
 

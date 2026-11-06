@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.35-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![release](https://img.shields.io/badge/release-v0.2.40-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
@@ -13,6 +13,8 @@
 ---
 
 ## 功能
+
+- **开发者接入**：独立分类提供可撤销、有权限范围及有效期的 API 密钥、Rust/Go/Node.js SDK 示例，以及公开的 `/api/v1/openapi.json`；详见[接入指南](docs/developer-access.zh-CN.md)。
 
 - **开箱即用对接 RustDesk 客户端**：登录、心跳、设备上报、地址簿、群组、web 客户端配置。
   JSON 字段、请求头、令牌都与原版一致，现有客户端无需改动。

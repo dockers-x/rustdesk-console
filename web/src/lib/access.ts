@@ -26,6 +26,9 @@ export function canAccessConsolePath(
     pathname === "/my" ||
     pathname.startsWith("/my/") ||
     pathname === "/messages" ||
+    pathname === "/developer/keys" ||
+    pathname === "/developer/sdks" ||
+    pathname === "/developer/openapi" ||
     pathname.startsWith("/oauth/")
   );
 }

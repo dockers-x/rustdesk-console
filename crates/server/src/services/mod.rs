@@ -8,6 +8,7 @@ pub mod audit;
 pub mod audit_alarm;
 pub mod audit_receipt;
 pub mod deployment;
+pub mod developer;
 pub mod diagnostics;
 pub mod group;
 pub mod geo_relay;

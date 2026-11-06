@@ -14,6 +14,7 @@ import { ServerCommandsPage } from "./pages/ServerCommandsPage";
 import { SystemSettingsPage } from "./pages/SystemSettingsPage";
 import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { SelfSignedClientPage } from "./features/self-signed-client/SelfSignedClientPage";
+import { DeveloperPage } from "./features/developer/DeveloperPage";
 import { ResourcePage } from "./resource/ResourcePage";
 import { ALL_RESOURCES, resourcePath } from "./resource/registry";
 import { apiGet } from "./lib/api";
@@ -80,6 +81,9 @@ export default function AuthenticatedApp() {
         />
         <Route path="/settings" element={<SystemSettingsPage />} />
         <Route path="/self-signed-client" element={<SelfSignedClientPage />} />
+        <Route path="/developer/keys" element={<DeveloperPage section="keys" isAdmin={isAdmin} />} />
+        <Route path="/developer/sdks" element={<DeveloperPage section="sdks" isAdmin={isAdmin} />} />
+        <Route path="/developer/openapi" element={<DeveloperPage section="openapi" isAdmin={isAdmin} />} />
         <Route path="/serverCmd" element={<ServerCommandsPage />} />
         <Route path="/geo-routing" element={<GeoRoutingPage />} />
         <Route
