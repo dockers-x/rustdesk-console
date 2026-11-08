@@ -1828,7 +1828,7 @@ i18n.on("languageChanged", (language) => {
 void i18n.use(initReactI18next).init({
   resources: {
     en: { translation: en },
-    ru: { translation: ru },
+    ru: { translation: { ...developerMessages.ru, ...ru } },
     "zh-CN": { translation: zhCN },
   },
   lng: detectLang(),
