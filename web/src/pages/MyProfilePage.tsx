@@ -31,6 +31,7 @@ import { InlineMessage } from "../components/InlineMessage";
 import { TableState } from "../components/TableState";
 import { apiGet, apiPost, http, ApiError } from "../lib/api";
 import { clearToken, currentUserQueryKey } from "../lib/auth";
+import { copyToClipboard } from "../lib/clipboard";
 import { formatUnixSeconds } from "../lib/dateFormat";
 
 interface CurrentUser {
@@ -394,12 +395,11 @@ export function MyProfilePage() {
     : t("disabled");
   const copySecurityText = async (value: string) => {
     if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
+    if (await copyToClipboard(value)) {
       setSecurityMessage(t("copied"));
       setSecurityError("");
-    } catch (err) {
-      setSecurityError((err as Error).message || t("operationFailed"));
+    } else {
+      setSecurityError(t("operationFailed"));
     }
   };
 
