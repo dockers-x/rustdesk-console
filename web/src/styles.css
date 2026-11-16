@@ -122,6 +122,9 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
 .admin-dialog-panel {
   display: flex;
   top: 0.5rem !important;
+  /* Kumo центрирует диалог через translate(-50%, -50%). Мы переопределяем top,
+     поэтому вертикальный сдвиг нужно убрать, иначе окно уезжает выше экрана. */
+  translate: -50% 0 !important;
   width: calc(100vw - 1rem) !important;
   min-width: 0 !important;
   max-width: calc(100vw - 1rem) !important;

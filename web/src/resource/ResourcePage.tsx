@@ -20,6 +20,7 @@ import {
 import { TableState } from "../components/TableState";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiGet, apiPost, http } from "../lib/api";
+import { copyToClipboard } from "../lib/clipboard";
 import {
   formatDateTime,
   formatUnixSeconds,
@@ -269,7 +270,7 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
               className="ml-2"
               size="sm"
               variant="secondary"
-              onClick={() => void navigator.clipboard.writeText(oneTimeSecret)}
+              onClick={() => void copyToClipboard(oneTimeSecret)}
             >
               {t("copy")}
             </Button>

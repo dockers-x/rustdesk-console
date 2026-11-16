@@ -303,7 +303,9 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const toggleLang = () => {
-    const next = i18n.language === "zh-CN" ? "en" : "zh-CN";
+    const order = ["en", "ru", "zh-CN"];
+    const current = i18n.language;
+    const next = order[(order.indexOf(current) + 1) % order.length];
     localStorage.setItem("lang", next);
     void i18n.changeLanguage(next);
   };
@@ -518,7 +520,7 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
               className="min-h-11 md:min-h-0"
               onClick={toggleLang}
             >
-              {i18n.language === "zh-CN" ? "EN" : "中文"}
+              {i18n.language === "zh-CN" ? "EN" : i18n.language === "ru" ? "中文" : "RU"}
             </Button>
             <Button
               variant="ghost"
