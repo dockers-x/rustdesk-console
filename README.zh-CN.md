@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.40-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![release](https://img.shields.io/badge/release-v0.2.41-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 [RustDesk](https://rustdesk.com) 的**自建 API 服务**——用户与设备管理、地址簿、审计日志，
 以及内置的管理后台，全部打包成**一个独立的二进制文件**。
@@ -22,7 +22,7 @@
   - 用户、群组、设备分组、标签、设备
   - 地址簿、地址簿集合、共享规则
   - OAuth 提供商、登录日志、连接/文件审计、分享记录、登录凭证
-  - 明/暗主题，中文 / English
+  - 明/暗主题，中文 / English / Русский
 - **登录方式**：账号密码（含验证码 + 失败限流）、第三方登录（GitHub、Google、OIDC、
   LinuxDO）、Web SSO、LDAP。
 - **个人中心**：每个用户管理自己的设备、地址簿、标签、分享记录和登录历史。

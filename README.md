@@ -1,6 +1,6 @@
 # RustDesk Console
 
-![release](https://img.shields.io/badge/release-v0.2.40-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![release](https://img.shields.io/badge/release-v0.2.41-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 A self-hosted **API server for [RustDesk](https://rustdesk.com)** — user & device
 management, address books, audit logs and a built-in admin web UI, all shipped as a
@@ -22,7 +22,7 @@ with its own brand-new admin web interface (not the original web project).
   - Users, groups, device groups, tags, devices
   - Address books, collections and share rules
   - OAuth providers, login logs, connection/file audit logs, share records, tokens
-  - Light/dark theme, English / 中文
+  - Light/dark theme, English / Русский / 中文
 - **Sign-in options**: username/password (with captcha + rate limiting), third-party
   login (GitHub, Google, OIDC, LinuxDO), web SSO, and LDAP.
 - **Personal area** for each user to manage their own devices, address book, tags,
