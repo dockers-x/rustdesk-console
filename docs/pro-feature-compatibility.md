@@ -27,7 +27,7 @@
 | TOTP、邮件、登录设备验证 | 已有 | `services/login_security.rs`；此次加强禁用账户、封禁与密码重置挑战处理。 |
 | OIDC/SSO、GitHub/Google/LinuxDO | 已有代码，需真实身份源验收 | `services/oauth.rs`；issuer、audience、nonce、JWKS 校验存在。 |
 | LDAP | 已有代码，需真实目录验收 | `services/ldap.rs`；保留当前显式本地密码回退策略，不声称完全等价于任意企业目录部署。 |
-| 登录/连接/文件/告警审计 | 已有 | `services/audit*.rs`；重试事务去重，空成功响应，告警可查询；原版匿名上报需显式开启兼容选项，不是可信网络侧审计。 |
+| 登录/连接/文件/告警审计 | 已有 | `services/audit*.rs`；重试事务去重，空成功响应，告警可查询；默认接收原版匿名上报，可显式关闭，不是可信网络侧审计。 |
 | 录制上传与存储 | 服务端接口及存储已有 | `services/record_storage.rs` 支持本地、S3、WebDAV；当前客户端 `record_upload.rs` 的上传开关默认关闭，不能据此声称自动上传可用，也不能主动取回控制端工具栏录在本地的文件。 |
 | 管理台操作审计 | 尚未实现 | `/api/audits/console` 仍是空结果兼容入口，不应和真实连接/文件/告警日志混为一谈。 |
 | 集中策略与安全设置同步 | 已有 | `services/strategy.rs` 和客户端 heartbeat。增量合并，不自动回滚原值；不是不可修改的客户端锁定。 |

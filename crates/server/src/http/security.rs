@@ -328,8 +328,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stock_client_heartbeat_refreshes_online_time_by_default() {
+        let state = fixture().await;
+        let app = super::super::router::build(state.clone());
+        let before = chrono::Utc::now().timestamp();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/heartbeat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"id": "device-1", "uuid": "device-uuid", "version": "1.4.6"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+                .unwrap();
+        assert!(body.get("strategy").is_some());
+        let device = services::peer::find_by_id(&state.db, "device-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(device.last_online_time >= before);
+        assert_eq!(device.user_id, 1);
+    }
+
+    #[tokio::test]
+    async fn stock_client_sysinfo_discovers_unowned_devices_by_default() {
+        let state = fixture().await;
+        let response = super::super::router::build(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sysinfo")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": "new-device",
+                            "uuid": "new-device-uuid",
+                            "hostname": "stock-client",
+                            "preset-user-name": "user-2",
+                            "preset-device-group-name": "injected-group"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), 1024).await.unwrap(),
+            "SYSINFO_UPDATED"
+        );
+        let device = services::peer::find_by_id(&state.db, "new-device")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(device.hostname, "stock-client");
+        assert_eq!(device.uuid, "new-device-uuid");
+        assert_eq!(device.user_id, 0);
+        assert_eq!(device.group_id, 0);
+    }
+
+    #[tokio::test]
+    async fn stock_client_audit_reports_are_accepted_by_default() {
+        let state = fixture().await;
+        let response = super::super::router::build(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/audit/conn")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "id": "device-1", "uuid": "device-uuid", "action": "new",
+                            "peer_id": "remote-device", "session_id": "stock-client-session"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let record = entity::audit_conn::Entity::find()
+            .one(&state.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.peer_id, "device-1");
+        assert_eq!(record.session_id, "stock-client-session");
+    }
+
+    #[tokio::test]
     async fn reports_reject_anonymous_and_cross_owner_writes_and_ignore_presets() {
         let mut state = fixture().await;
+        Arc::make_mut(&mut state.config)
+            .security
+            .allow_legacy_device_reports = false;
         let empty = HeaderMap::new();
         assert!(authorize_report(&state, &empty, "device-1", "device-uuid")
             .await
@@ -378,7 +481,10 @@ mod tests {
 
     #[tokio::test]
     async fn anonymous_routes_are_closed_and_login_uuid_does_not_change_ownership() {
-        let state = fixture().await;
+        let mut state = fixture().await;
+        Arc::make_mut(&mut state.config)
+            .security
+            .allow_legacy_device_reports = false;
         for path in [
             "/api/heartbeat",
             "/api/sysinfo",

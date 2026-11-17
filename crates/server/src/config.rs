@@ -43,12 +43,20 @@ pub struct Config {
     pub security: Security,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Security {
     /// Stock clients send unauthenticated telemetry. This weakens report integrity.
     #[serde(rename = "allow-legacy-device-reports")]
     pub allow_legacy_device_reports: bool,
+}
+
+impl Default for Security {
+    fn default() -> Self {
+        Self {
+            allow_legacy_device_reports: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -539,6 +547,41 @@ pub fn parse_go_duration(s: &str) -> Option<Duration> {
 mod tests {
     use super::*;
     use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    #[test]
+    fn stock_client_reports_are_enabled_by_default() {
+        assert!(Config::default().security.allow_legacy_device_reports);
+        for value in [serde_json::json!({}), serde_json::json!({"security": {}})] {
+            let cfg: Config = serde_json::from_value(value).unwrap();
+            assert!(cfg.security.allow_legacy_device_reports);
+        }
+        let cfg: Config = config::Config::builder()
+            .add_source(config::File::from_str(
+                include_str!("../../../conf/config.yaml"),
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert!(cfg.security.allow_legacy_device_reports);
+    }
+
+    #[test]
+    fn stock_client_reports_can_be_explicitly_disabled() {
+        let cfg: Config = serde_json::from_value(serde_json::json!({
+            "security": {"allow-legacy-device-reports": false}
+        }))
+        .unwrap();
+        assert!(!cfg.security.allow_legacy_device_reports);
+        let _guard = env_lock();
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        std::env::set_var("RUSTDESK_API_SECURITY_ALLOW_LEGACY_DEVICE_REPORTS", "false");
+        apply_env_overrides(&mut value, "RUSTDESK_API");
+        std::env::remove_var("RUSTDESK_API_SECURITY_ALLOW_LEGACY_DEVICE_REPORTS");
+        let cfg: Config = serde_json::from_value(value).unwrap();
+        assert!(!cfg.security.allow_legacy_device_reports);
+    }
 
     fn env_lock() -> MutexGuard<'static, ()> {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

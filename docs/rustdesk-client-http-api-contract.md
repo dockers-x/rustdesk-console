@@ -243,11 +243,13 @@ to mean unlimited use. Account/admin bearer-token requests do not consume deploy
 
 ## Security boundary update (2026-11-17)
 
-Stock client telemetry remains unauthenticated on the wire. The Console defaults
-now reject unauthenticated heartbeat, sysinfo and audit posts. Explicitly enabling
-`security.allow-legacy-device-reports` restores that wire compatibility, with no
-claim of device authentication. Sysinfo preset fields never assign users, groups,
-strategies or address books, and login UUIDs never enroll devices. Use an admin
+Stock client telemetry remains unauthenticated on the wire. Console v0.2.44
+restores the default acceptance of stock-client heartbeat, sysinfo and audit posts
+after v0.2.42 rejected them by default. `security.allow-legacy-device-reports`
+defaults to `true`; an explicit `false` still rejects anonymous reports and must
+be removed or changed to restore reporting in an existing deployment. This wire
+compatibility does not authenticate devices. Sysinfo preset fields never assign
+users, groups, strategies or address books, and login UUIDs never enroll devices. Use an admin
 or scoped deployment token to establish ownership.
 
 Paired hbbs mandatory-login mode calls `POST /api/server/authorize-connection`

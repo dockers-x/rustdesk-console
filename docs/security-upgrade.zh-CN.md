@@ -23,16 +23,18 @@
 
 当前客户端源码中，`src/hbbs_http/sync.rs` 的 heartbeat/sysinfo 和 `src/server/connection.rs` 的连接审计不带账号凭据。客户端 ID、UUID 和 nonce 也不是设备身份证明。
 
-Console 默认拒绝匿名 heartbeat、sysinfo 和审计写入。因此，原版客户端在默认配置下不会更新在线状态、同步集中策略或写入这类远控审计；账号登录、地址簿和 hbbs 连接授权是独立路径。
+Console v0.2.44 撤回 v0.2.42 引入的默认拦截，恢复接收原版客户端的匿名 heartbeat、sysinfo 和审计上报，在线状态与集中策略同步无需客户端额外提供账号凭据；账号登录、地址簿和 hbbs 连接授权仍是独立路径。
 
-需要保留原版上报功能时，可在可信网络或受控入口设置：
+以下为默认配置，建议仅通过可信网络或受控入口接收上报：
 
 ```yaml
 security:
   allow-legacy-device-reports: true
 ```
 
-对应环境变量为 `RUSTDESK_API_SECURITY_ALLOW_LEGACY_DEVICE_REPORTS=true`。此选项接受可伪造的客户端上报，不提供可信设备认证或不可抵赖审计。即使开启，sysinfo 预设字段也不能改变用户归属、设备分组、策略或地址簿；已有设备的 UUID 不匹配会被拒绝。新发现设备只能作为未归属库存。
+对应环境变量为 `RUSTDESK_API_SECURITY_ALLOW_LEGACY_DEVICE_REPORTS=true`。如旧部署的配置文件或环境变量显式设为 `false`，需删除该覆盖或改为 `true`，并重启 Console；升级不会覆盖管理员的显式设置。需要拒绝匿名上报的部署仍可显式设为 `false`，但原版客户端届时无法更新在线状态、同步策略或提交这些审计。
+
+此选项接受可伪造的客户端上报，不提供可信设备认证或不可抵赖审计。即使开启，sysinfo 预设字段也不能改变用户归属、设备分组、策略或地址簿；已有设备的 UUID 不匹配会被拒绝。新发现设备只能作为未归属库存。
 
 ## 注册与登录防护
 
