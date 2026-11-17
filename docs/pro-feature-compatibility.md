@@ -1,6 +1,6 @@
 # 现有客户端的管理能力与 Pro 功能边界
 
-核对日期：2026-10-29。客户端基线及 HTTP 细节见
+核对日期：2026-11-17。客户端基线及 HTTP 细节见
 [`rustdesk-client-http-api-contract.md`](rustdesk-client-http-api-contract.md)。
 
 本项目是独立实现，不是官方商业服务或授权的替代品。以下“已有”指代码链路
@@ -27,15 +27,15 @@
 | TOTP、邮件、登录设备验证 | 已有 | `services/login_security.rs`；此次加强禁用账户、封禁与密码重置挑战处理。 |
 | OIDC/SSO、GitHub/Google/LinuxDO | 已有代码，需真实身份源验收 | `services/oauth.rs`；issuer、audience、nonce、JWKS 校验存在。 |
 | LDAP | 已有代码，需真实目录验收 | `services/ldap.rs`；保留当前显式本地密码回退策略，不声称完全等价于任意企业目录部署。 |
-| 登录/连接/文件/告警审计 | 已有 | `services/audit*.rs`；重试事务去重，空成功响应，告警可查询。客户端上报不是不可抵赖、无遗漏的网络侧审计。 |
+| 登录/连接/文件/告警审计 | 已有 | `services/audit*.rs`；重试事务去重，空成功响应，告警可查询；原版匿名上报需显式开启兼容选项，不是可信网络侧审计。 |
 | 录制上传与存储 | 服务端接口及存储已有 | `services/record_storage.rs` 支持本地、S3、WebDAV；当前客户端 `record_upload.rs` 的上传开关默认关闭，不能据此声称自动上传可用，也不能主动取回控制端工具栏录在本地的文件。 |
 | 管理台操作审计 | 尚未实现 | `/api/audits/console` 仍是空结果兼容入口，不应和真实连接/文件/告警日志混为一谈。 |
 | 集中策略与安全设置同步 | 已有 | `services/strategy.rs` 和客户端 heartbeat。增量合并，不自动回滚原值；不是不可修改的客户端锁定。 |
 | 信任设备设置 | 已有设置分发 | `enable-trusted-devices` 使用客户端能力，与 Console 的登录设备验证不是同一信任体系。 |
-| 强制登录后连接 | 已加固，仍有边界 | 此 hbbs fork 在 `MUST_LOGIN` 开启时检查普通及切换的打洞、中继协调请求：验证共享密钥签发的 JWT，或接受有效的目标绑定切换授权。JWT 密钥为空时拒绝 token 路径；离线验签仍不能实时查询撤销和目标权限，直连 IP 不经过此门禁。 |
-| 强制退出、撤销 token | Console API 有效，连接侧不完整 | API 删除 token 后拒绝后续请求；hbbs 离线 JWT 在到期前仍可能有效，已建立会话也不会因此立即中断。 |
+| 强制登录后连接 | 已加固，仍有边界 | 此 hbbs fork 在 `MUST_LOGIN` 开启时检查普通及切换的打洞、中继协调请求：验证共享密钥签发的 JWT，或接受有效的目标绑定切换授权。JWT 密钥为空时拒绝 token 路径；普通请求还须通过 Console 实时授权，直连 IP 不经过此门禁。 |
+| 强制退出、撤销 token | Console API 有效，连接侧不完整 | API 删除 token 后拒绝后续请求；配套 hbbs 在新的普通协调请求中查询撤销状态；已建立会话不会因此立即中断。 |
 | 管理员断开连接 | 已有协作链路 | Console 排队 → heartbeat → 客户端断连；不是 HBBR 网络侧的即时强制切断。 |
-| 目标设备/用户组连接 ACL | 可实现，尚未实现 | 可利用现有客户端 token 与目标 ID，由 hbbs 向 Console 查询当前有效身份和目标授权；需先确定允许规则及 API 不可用时拒绝策略。直连 IP 不经过 hbbs。 |
+| 目标设备连接授权 | 配套实现 | 强制登录的 hbbs 实时向 Console 查询当前 token 和目标管理员/所有者权限；查询失败拒绝。地址簿共享不授予连接权限，IP 直连和已建立会话不覆盖。见安全升级说明。 |
 | Switch Sides 授权 | 新增配套实现 | Console 转发签名，hbbs 用登记公钥验证；10 秒目标绑定的可重试路由授权，客户端仍执行 UUID 一次性免密验证。见 HTTP 协议文档与 server `docs/switch-grants.md`。 |
 | 多中继、地理路由 | 已有此 fork 的联动实现 | Console `services/geo_relay`、server `src/geo_relay`；按规则与候选中继回退，不声称复制官方全部选路算法。 |
 | WebSocket / 自托管浏览器客户端 | 已有传输及资源托管 | server 提供 ID/Relay WS；Console 内嵌 v1，v2 取决于外部 `data/web.zip`。须配置 HTTPS/WSS 并实测会话；独立核对外部资源的来源和分发许可。 |

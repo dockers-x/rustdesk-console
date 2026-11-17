@@ -37,6 +37,7 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/api/login-options", get(api::login_options))
         .route("/api/login", post(api::login))
+        .route("/api/server/authorize-connection", post(super::security::authorize_connection))
         .route("/api/logout", post(api::logout))
         .route("/api/currentUser", post(api::user_info))
         .route("/api/user/info", get(api::user_info))

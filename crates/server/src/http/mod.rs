@@ -11,5 +11,6 @@ pub mod payloads;
 pub mod pro_api;
 pub mod response;
 pub mod router;
+pub mod security;
 pub mod static_files;
 pub mod switch_grant;

@@ -5,7 +5,7 @@
 //! - [`AdminUser`]: [`BackendUser`] + `is_admin` check.
 //! - [`ClientIp`] / [`AcceptLang`]: request metadata helpers.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use async_trait::async_trait;
 use axum::extract::{ConnectInfo, FromRequestParts};
@@ -43,35 +43,77 @@ impl FromRequestParts<AppState> for ClientIp {
     type Rejection = std::convert::Infallible;
     async fn from_request_parts(
         parts: &mut Parts,
-        _state: &AppState,
+        state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        Ok(ClientIp(extract_client_ip(parts)))
+        Ok(ClientIp(extract_client_ip(
+            parts,
+            &state.config.gin.trust_proxy,
+        )))
     }
 }
 
-pub fn extract_client_ip(parts: &Parts) -> String {
-    if let Some(xff) = parts
+pub fn extract_client_ip(parts: &Parts, trusted_proxies: &str) -> String {
+    let Some(peer) = parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip())
+    else {
+        return "unknown".to_string();
+    };
+    if !trusted_proxy(peer, trusted_proxies) {
+        return peer.to_string();
+    }
+    if let Some(value) = parts
         .headers
-        .get("X-Forwarded-For")
+        .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
     {
-        if let Some(first) = xff.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
+        let chain = value
+            .split(',')
+            .map(|v| v.trim().parse::<IpAddr>())
+            .collect::<Result<Vec<_>, _>>();
+        let Ok(chain) = chain else {
+            return peer.to_string();
+        };
+        for ip in chain.into_iter().rev() {
+            if !trusted_proxy(ip, trusted_proxies) {
                 return ip.to_string();
             }
         }
-    }
-    if let Some(xrip) = parts.headers.get("X-Real-IP").and_then(|v| v.to_str().ok()) {
-        if !xrip.is_empty() {
-            return xrip.to_string();
-        }
+        return peer.to_string();
     }
     parts
-        .extensions
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+        .headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<IpAddr>().ok())
+        .unwrap_or(peer)
+        .to_string()
+}
+
+fn trusted_proxy(ip: IpAddr, configured: &str) -> bool {
+    configured.split(',').any(|entry| {
+        let (network, prefix) = entry.trim().split_once('/').unwrap_or((entry.trim(), ""));
+        let Ok(network) = network.parse::<IpAddr>() else {
+            return false;
+        };
+        let (address, network, bits) = match (ip, network) {
+            (IpAddr::V4(ip), IpAddr::V4(network)) => {
+                (u32::from(ip) as u128, u32::from(network) as u128, 32)
+            }
+            (IpAddr::V6(ip), IpAddr::V6(network)) => (u128::from(ip), u128::from(network), 128),
+            _ => return false,
+        };
+        let prefix = if prefix.is_empty() {
+            bits
+        } else {
+            match prefix.parse::<u32>() {
+                Ok(prefix) if prefix <= bits => prefix,
+                _ => return false,
+            }
+        };
+        prefix == 0 || address >> (bits - prefix) == network >> (bits - prefix)
+    })
 }
 
 fn header(parts: &Parts, name: &str) -> Option<String> {
@@ -115,10 +157,11 @@ impl FromRequestParts<AppState> for DeploymentAuth {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let auth = header(parts, "Authorization").ok_or_else(response::unauthorized)?;
-        if auth.len() <= 7 {
-            return Err(response::unauthorized());
-        }
-        let token = auth[7..].to_string();
+        let token = auth
+            .strip_prefix("Bearer ")
+            .filter(|v| !v.is_empty())
+            .ok_or_else(response::unauthorized)?
+            .to_string();
         if let Ok(Some((user, _ut))) =
             crate::services::user::info_by_access_token(&state.db, &token).await
         {
@@ -157,10 +200,11 @@ impl FromRequestParts<AppState> for RustClientUser {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let auth = header(parts, "Authorization").ok_or_else(response::unauthorized)?;
-        if auth.len() <= 7 {
-            return Err(response::unauthorized());
-        }
-        let token = auth[7..].to_string();
+        let token = auth
+            .strip_prefix("Bearer ")
+            .filter(|v| !v.is_empty())
+            .ok_or_else(response::unauthorized)?
+            .to_string();
         match crate::services::user::info_by_access_token(&state.db, &token).await {
             Ok(Some((user, _ut))) => {
                 if user.must_change_password
@@ -275,6 +319,31 @@ mod tests {
     use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, DbBackend, Schema, Set};
     use serde_json::Value;
     use tower::ServiceExt;
+
+    #[test]
+    fn forwarded_addresses_require_trusted_peers_and_skip_trusted_hops() {
+        let request = Request::builder()
+            .header("x-forwarded-for", "198.51.100.9, 192.0.2.1")
+            .body(Body::empty())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+        parts
+            .extensions
+            .insert(ConnectInfo("127.0.0.1:9000".parse::<SocketAddr>().unwrap()));
+        assert_eq!(extract_client_ip(&parts, ""), "127.0.0.1");
+        assert_eq!(extract_client_ip(&parts, "127.0.0.1"), "192.0.2.1");
+        assert_eq!(
+            extract_client_ip(&parts, "127.0.0.1,192.0.2.0/24"),
+            "198.51.100.9"
+        );
+        assert_eq!(extract_client_ip(&parts, "192.0.2.0/24"), "127.0.0.1");
+        parts
+            .headers
+            .insert("x-forwarded-for", "invalid".parse().unwrap());
+        assert_eq!(extract_client_ip(&parts, "127.0.0.1"), "127.0.0.1");
+        assert!(trusted_proxy("::1".parse().unwrap(), "::1/128"));
+        assert!(!trusted_proxy("::2".parse().unwrap(), "::1/128"));
+    }
 
     #[tokio::test]
     async fn review_bearer_extractors_enforce_required_password_changes() {

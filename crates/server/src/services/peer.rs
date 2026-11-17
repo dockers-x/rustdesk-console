@@ -23,51 +23,11 @@ pub async fn find_by_uuid(
         .await
 }
 
-pub async fn find_by_user_id_and_uuid(
-    db: &DatabaseConnection,
-    uuid: &str,
-    user_id: i32,
-) -> Result<Option<peer::Model>, DbErr> {
-    peer::Entity::find()
-        .filter(peer::Column::Uuid.eq(uuid))
-        .filter(peer::Column::UserId.eq(user_id))
-        .one(db)
-        .await
-}
-
 pub async fn info_by_row_id(
     db: &DatabaseConnection,
     row_id: i32,
 ) -> Result<Option<peer::Model>, DbErr> {
     peer::Entity::find_by_id(row_id).one(db).await
-}
-
-/// Bind a uuid to a user id (updates an existing peer; does not create one).
-pub async fn uuid_bind_user_id(
-    db: &DatabaseConnection,
-    uuid: &str,
-    user_id: i32,
-) -> Result<(), DbErr> {
-    if let Some(p) = find_by_uuid(db, uuid).await? {
-        let mut am: peer::ActiveModel = p.into();
-        am.user_id = Set(user_id);
-        am.updated_at = Set(now());
-        am.update(db).await?;
-    }
-    Ok(())
-}
-
-pub async fn uuid_unbind_user_id(
-    db: &DatabaseConnection,
-    uuid: &str,
-    user_id: i32,
-) -> Result<(), DbErr> {
-    if let Some(p) = find_by_user_id_and_uuid(db, uuid, user_id).await? {
-        let mut am: peer::ActiveModel = p.into();
-        am.user_id = Set(0);
-        am.update(db).await?;
-    }
-    Ok(())
 }
 
 pub async fn erase_user_id(db: &DatabaseConnection, user_id: i32) -> Result<(), DbErr> {

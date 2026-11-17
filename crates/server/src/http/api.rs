@@ -125,7 +125,11 @@ struct HeartbeatStrategy {
     translate_mode: bool,
 }
 
-pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response {
+pub async fn heartbeat(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
     let info: HeartbeatForm = match serde_json::from_str(&body) {
         Ok(info) => info,
         Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
@@ -133,6 +137,11 @@ pub async fn heartbeat(State(state): State<AppState>, body: String) -> Response 
     let rustdesk_id = resolve_heartbeat_rustdesk_id(&info.id, &info.uuid);
     if rustdesk_id.is_empty() {
         return Json(json!({ "error": "missing id" })).into_response();
+    }
+    if let Err(response) =
+        super::security::authorize_report(&state, &headers, &rustdesk_id, &info.uuid).await
+    {
+        return response.into_response();
     }
     let peer = match services::peer::find_by_id(&state.db, &rustdesk_id).await {
         Ok(peer) => peer,
@@ -617,34 +626,30 @@ pub struct PeerForm {
 pub async fn sysinfo(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
+    headers: HeaderMap,
     Json(f): Json<PeerForm>,
 ) -> Response {
+    if let Err(response) = super::security::authorize_report(&state, &headers, &f.id, &f.uuid).await
+    {
+        return response.into_response();
+    }
     let existing = match services::peer::find_by_id(&state.db, &f.id).await {
         Ok(p) => p,
         Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     };
-    let preset_user_id = resolve_sysinfo_preset_user_id(&state, &f).await;
-    let preset_group_id = resolve_sysinfo_preset_device_group_id(&state, &f).await;
-    let saved_peer = match existing {
+    match existing {
         None => {
-            let user_id = match preset_user_id {
-                Some(user_id) => user_id,
-                None => services::user::find_latest_user_id_by_uuid(&state.db, &f.uuid, &f.id)
-                    .await
-                    .unwrap_or(0),
-            };
             let am = peer::ActiveModel {
                 id: Set(f.id.clone()),
                 cpu: Set(f.cpu.clone()),
-                hostname: Set(sysinfo_hostname(&f)),
+                hostname: Set(f.hostname.clone()),
                 memory: Set(f.memory.clone()),
                 os: Set(f.os.clone()),
-                username: Set(sysinfo_username(&f)),
+                username: Set(f.username.clone()),
                 uuid: Set(f.uuid.clone()),
                 version: Set(f.version.clone()),
-                user_id: Set(user_id),
-                group_id: Set(preset_group_id.unwrap_or(0)),
-                alias: Set(option_text(&f.preset_note).unwrap_or_default()),
+                user_id: Set(0),
+                group_id: Set(0),
                 ..Default::default()
             };
             match services::peer::create(&state.db, am).await {
@@ -655,34 +660,18 @@ pub async fn sysinfo(
             }
         }
         Some(p) => {
-            let user_id = if let Some(user_id) = preset_user_id {
-                user_id
-            } else if p.user_id == 0 {
-                services::user::find_latest_user_id_by_uuid(&state.db, &f.uuid, &f.id)
-                    .await
-                    .unwrap_or(0)
-            } else {
-                p.user_id
-            };
-            let mut am = peer::ActiveModel {
+            let am = peer::ActiveModel {
                 row_id: Set(p.row_id),
                 id: Set(f.id.clone()),
                 cpu: Set(f.cpu.clone()),
-                hostname: Set(sysinfo_hostname(&f)),
+                hostname: Set(f.hostname.clone()),
                 memory: Set(f.memory.clone()),
                 os: Set(f.os.clone()),
-                username: Set(sysinfo_username(&f)),
+                username: Set(f.username.clone()),
                 uuid: Set(f.uuid.clone()),
                 version: Set(f.version.clone()),
-                user_id: Set(user_id),
                 ..Default::default()
             };
-            if let Some(group_id) = preset_group_id {
-                am.group_id = Set(group_id);
-            }
-            if let Some(note) = option_text(&f.preset_note) {
-                am.alias = Set(note);
-            }
             if let Err(e) = services::peer::update(&state.db, am).await {
                 return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
             }
@@ -695,120 +684,7 @@ pub async fn sysinfo(
             }
         }
     };
-    apply_sysinfo_preset_assignment(&state, &f, &saved_peer).await;
     "SYSINFO_UPDATED".into_response()
-}
-
-fn sysinfo_hostname(f: &PeerForm) -> String {
-    option_text(&f.preset_device_name).unwrap_or_else(|| f.hostname.clone())
-}
-
-fn sysinfo_username(f: &PeerForm) -> String {
-    option_text(&f.preset_device_username).unwrap_or_else(|| f.username.clone())
-}
-
-async fn resolve_sysinfo_preset_user_id(state: &AppState, f: &PeerForm) -> Option<i32> {
-    let name = option_text(&f.preset_user_name)?;
-    match services::user::info_by_username(&state.db, &name).await {
-        Ok(Some(user)) => Some(user.id),
-        Ok(None) => {
-            tracing::warn!("sysinfo preset user not found: {name}");
-            None
-        }
-        Err(e) => {
-            tracing::warn!("failed to resolve sysinfo preset user {name}: {e}");
-            None
-        }
-    }
-}
-
-async fn resolve_sysinfo_preset_device_group_id(state: &AppState, f: &PeerForm) -> Option<i32> {
-    let name = option_text(&f.preset_device_group_name)?;
-    match services::group::device_group_info_by_name(&state.db, &name).await {
-        Ok(Some(group)) => Some(group.id),
-        Ok(None) => {
-            tracing::warn!("sysinfo preset device group not found: {name}");
-            None
-        }
-        Err(e) => {
-            tracing::warn!("failed to resolve sysinfo preset device group {name}: {e}");
-            None
-        }
-    }
-}
-
-async fn apply_sysinfo_preset_assignment(state: &AppState, f: &PeerForm, peer: &peer::Model) {
-    let target_user = resolve_sysinfo_target_user(state, f, peer).await;
-
-    if let Some(address_book_name) = option_text(&f.preset_address_book_name) {
-        match &target_user {
-            Some(user) => {
-                let cli = DeviceCliForm {
-                    id: f.id.clone(),
-                    uuid: f.uuid.clone(),
-                    address_book_name: Some(address_book_name.clone()),
-                    address_book_tag: f.preset_address_book_tag.clone(),
-                    address_book_alias: f.preset_address_book_alias.clone(),
-                    address_book_password: f.preset_address_book_password.clone(),
-                    address_book_note: f.preset_address_book_note.clone(),
-                    ..Default::default()
-                };
-                if let Err(e) =
-                    assign_peer_to_address_book(state, user, peer, &address_book_name, &cli).await
-                {
-                    tracing::warn!(
-                        "failed to apply sysinfo preset address book {} for {}: {}",
-                        address_book_name,
-                        peer.id,
-                        e
-                    );
-                }
-            }
-            None => tracing::warn!(
-                "skip sysinfo preset address book {} for {}: target user not resolved",
-                address_book_name,
-                peer.id
-            ),
-        }
-    }
-
-    if let Some(strategy_name) = option_text(&f.preset_strategy_name) {
-        if let Err(e) =
-            services::strategy::assign_peer_by_strategy_name(&state.db, &peer.id, &strategy_name)
-                .await
-        {
-            tracing::warn!(
-                "failed to apply sysinfo preset strategy {} for {}: {}",
-                strategy_name,
-                peer.id,
-                e
-            );
-        }
-    }
-}
-
-async fn resolve_sysinfo_target_user(
-    state: &AppState,
-    f: &PeerForm,
-    peer: &peer::Model,
-) -> Option<entity::user::Model> {
-    if let Some(name) = option_text(&f.preset_user_name) {
-        match services::user::info_by_username(&state.db, &name).await {
-            Ok(Some(user)) => return Some(user),
-            Ok(None) => tracing::warn!("sysinfo preset user not found: {name}"),
-            Err(e) => tracing::warn!("failed to resolve sysinfo preset user {name}: {e}"),
-        }
-    }
-    if peer.user_id <= 0 {
-        return None;
-    }
-    match services::user::info_by_id(&state.db, peer.user_id).await {
-        Ok(user) => user,
-        Err(e) => {
-            tracing::warn!("failed to resolve sysinfo peer user {}: {e}", peer.user_id);
-            None
-        }
-    }
 }
 
 pub async fn sysinfo_ver(State(state): State<AppState>) -> Response {
@@ -1457,7 +1333,7 @@ async fn upsert_deployed_peer(
             if auth
                 .user
                 .as_ref()
-                .is_some_and(|caller| !caller.is_admin() && p.user_id > 0 && p.user_id != caller.id)
+                .is_some_and(|caller| !caller.is_admin() && p.user_id != caller.id)
             {
                 return Err(DeviceDeployError::Other("UNAUTHORIZED".to_string()));
             }
@@ -1488,6 +1364,12 @@ async fn upsert_deployed_peer(
             Ok(p)
         }
         None => {
+            // Stock enrollment carries no proof that a normal account controls
+            // this RustDesk ID. Only an administrator or scoped deployment token
+            // may establish the ownership used by connection authorization.
+            if auth.user.as_ref().is_some_and(|caller| !caller.is_admin()) {
+                return Err(DeviceDeployError::Other("UNAUTHORIZED".to_string()));
+            }
             let p = peer::ActiveModel {
                 id: Set(id.to_string()),
                 uuid: Set(uuid.to_string()),
@@ -1665,12 +1547,26 @@ pub async fn shared_peer(State(state): State<AppState>, Json(body): Json<Value>)
         Ok(Some(sr)) => sr,
         _ => return resp::fail(101, "share not found"),
     };
+    let owner = services::user::info_by_id(&state.db, sr.user_id)
+        .await
+        .ok()
+        .flatten();
+    let device = services::peer::find_by_id(&state.db, &sr.peer_id)
+        .await
+        .ok()
+        .flatten();
+    if !matches!((&owner, &device), (Some(owner), Some(device))
+        if owner.is_enabled() && !owner.must_change_password
+            && device.status == entity::user::STATUS_ENABLE
+            && (owner.is_admin() || device.user_id == owner.id))
+    {
+        return resp::fail(101, "share is no longer authorized");
+    }
     if sr.expire != 0 {
-        if let Some(created) = sr.created_at {
-            let expires = created + Duration::seconds(sr.expire);
-            if expires < Utc::now().naive_utc() {
-                return resp::fail(101, "share expired");
-            }
+        let expires = Duration::try_seconds(sr.expire)
+            .and_then(|duration| sr.created_at?.checked_add_signed(duration));
+        if sr.expire < 0 || expires.is_none_or(|expires| expires < Utc::now().naive_utc()) {
+            return resp::fail(101, "share expired");
         }
     }
     let ab =
@@ -1695,7 +1591,21 @@ pub async fn shared_peer(State(state): State<AppState>, Json(body): Json<Value>)
 
 // ---------- audit ----------
 
-pub async fn audit_conn(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+pub async fn audit_conn(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(response) = super::security::authorize_report(
+        &state,
+        &headers,
+        body["id"].as_str().unwrap_or_default(),
+        body["uuid"].as_str().unwrap_or_default(),
+    )
+    .await
+    {
+        return response.into_response();
+    }
     let result = if services::audit_receipt::has_nonce(&body) {
         services::audit_receipt::record_event(
             &state.db,
@@ -1737,7 +1647,21 @@ pub async fn audit_conn_active(
     }
 }
 
-pub async fn audit_file(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+pub async fn audit_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(response) = super::security::authorize_report(
+        &state,
+        &headers,
+        body["id"].as_str().unwrap_or_default(),
+        body["uuid"].as_str().unwrap_or_default(),
+    )
+    .await
+    {
+        return response.into_response();
+    }
     let result = if services::audit_receipt::has_nonce(&body) {
         services::audit_receipt::record_event(
             &state.db,
@@ -1751,7 +1675,21 @@ pub async fn audit_file(State(state): State<AppState>, Json(body): Json<Value>) 
     audit_response(result)
 }
 
-pub async fn audit_alarm(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+pub async fn audit_alarm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(response) = super::security::authorize_report(
+        &state,
+        &headers,
+        body["id"].as_str().unwrap_or_default(),
+        body["uuid"].as_str().unwrap_or_default(),
+    )
+    .await
+    {
+        return response.into_response();
+    }
     let result = if services::audit_receipt::has_nonce(&body) {
         services::audit_receipt::record_event(
             &state.db,
@@ -1811,14 +1749,19 @@ pub struct AuditNoteForm {
 
 pub async fn audit_update(
     State(state): State<AppState>,
-    _user: RustClientUser,
+    user: RustClientUser,
     Json(form): Json<AuditNoteForm>,
 ) -> Response {
     if form.guid.is_empty() {
         return resp::error("missing guid");
     }
-    if let Err(e) =
-        services::audit::update_conn_note_by_guid(&state.db, &form.guid, &form.note).await
+    if let Err(e) = services::audit::update_conn_note_by_guid(
+        &state.db,
+        &form.guid,
+        &form.note,
+        (!user.user.is_admin()).then_some(user.user.id),
+    )
+    .await
     {
         tracing::warn!("failed to update audit note: {e}");
         return resp::error("failed to update audit note");
@@ -1842,9 +1785,15 @@ pub struct RecordQuery {
 
 pub async fn record(
     State(state): State<AppState>,
+    user: RustClientUser,
     Query(q): Query<RecordQuery>,
     body: Bytes,
 ) -> Response {
+    // Recording rows have no per-user ownership. A filename is not authority
+    // to overwrite or remove evidence, including in legacy report mode.
+    if !user.user.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let filename = match services::record_file::sanitize_filename(&q.file) {
         Ok(filename) => filename,
         Err(e) => return resp::error(e),
@@ -3376,9 +3325,12 @@ pub(crate) mod deployment_tests {
                 json!({"id":format!("review-{target}"),"uuid":"review-uuid","user_name":target}),
             )
             .unwrap();
-            assert!(apply_device_cli_assignment(&state, &auth, form)
-                .await
-                .is_ok());
+            let result = apply_device_cli_assignment(&state, &auth, form).await;
+            if is_admin {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err(), "UNAUTHORIZED");
+            }
         }
         let auth = DeploymentAuth {
             user: Some(current),

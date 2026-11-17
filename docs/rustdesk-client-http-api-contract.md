@@ -240,3 +240,22 @@ to mean unlimited use. Account/admin bearer-token requests do not consume deploy
    unless the client source proves the old shape cannot work.
 5. Add regression tests for any field mapping, persistence, or duplicate-handling
    behavior fixed during the recheck.
+
+## Security boundary update (2026-11-17)
+
+Stock client telemetry remains unauthenticated on the wire. The Console defaults
+now reject unauthenticated heartbeat, sysinfo and audit posts. Explicitly enabling
+`security.allow-legacy-device-reports` restores that wire compatibility, with no
+claim of device authentication. Sysinfo preset fields never assign users, groups,
+strategies or address books, and login UUIDs never enroll devices. Use an admin
+or scoped deployment token to establish ownership.
+
+Paired hbbs mandatory-login mode calls `POST /api/server/authorize-connection`
+with the existing client Bearer token and JSON `{"id":"<target-id>"}`. Only an
+explicit `{"allowed":true}` HTTP 200 response permits the ordinary token path.
+The Console checks the live session, enabled target, and admin/owner authority.
+Address-book visibility and sharing do not confer routing access. Stock clients
+need no new message fields. Remote device authentication remains independent.
+
+See [security upgrade notes](security-upgrade.zh-CN.md) for deployment requirements,
+IP-direct limitations, legacy reporting, and registration settings.

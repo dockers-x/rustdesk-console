@@ -40,6 +40,15 @@ pub struct Config {
     pub rustdesk: Rustdesk,
     pub proxy: Proxy,
     pub ldap: Ldap,
+    pub security: Security,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct Security {
+    /// Stock clients send unauthenticated telemetry. This weakens report integrity.
+    #[serde(rename = "allow-legacy-device-reports")]
+    pub allow_legacy_device_reports: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

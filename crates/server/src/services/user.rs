@@ -91,12 +91,12 @@ pub fn token_expire_timestamp(config: &Config) -> i64 {
     Utc::now().timestamp() + secs
 }
 
-/// Generate a token: JWT when a key is configured, else md5(username+now).
+/// Generate an independently random session token, including when JWT is disabled.
 pub fn generate_token(jwt: &Jwt, u: &user::Model) -> String {
     if jwt.has_key() {
         jwt.generate_token(u.id as u32)
     } else {
-        crate::support::password::md5_hex(&format!("{}{}", u.username, Utc::now()))
+        uuid::Uuid::new_v4().to_string()
     }
 }
 
@@ -110,7 +110,7 @@ pub struct LoginEvent {
     pub platform: String,
 }
 
-/// Create a token + login log and bind the device uuid (≈ `UserService.Login`).
+/// Create a token and login log. Client-reported identifiers never change ownership.
 pub async fn login(
     db: &DatabaseConnection,
     jwt: &Jwt,
@@ -147,31 +147,16 @@ pub async fn login(
     };
     llog.insert(db).await?;
 
-    if !event.uuid.is_empty() {
-        crate::services::peer::uuid_bind_user_id(db, &event.uuid, u.id).await?;
-    }
     Ok(ut)
 }
 
-/// Delete the token for (user, token) and unbind its uuid.
+/// Delete this session without changing durable device ownership.
 pub async fn logout(db: &DatabaseConnection, user_id: i32, token: &str) -> Result<(), DbErr> {
-    let ut = user_token::Entity::find()
-        .filter(user_token::Column::UserId.eq(user_id))
-        .filter(user_token::Column::Token.eq(token))
-        .one(db)
-        .await?;
-    let uuid = ut
-        .as_ref()
-        .map(|t| t.device_uuid.clone())
-        .unwrap_or_default();
     user_token::Entity::delete_many()
         .filter(user_token::Column::UserId.eq(user_id))
         .filter(user_token::Column::Token.eq(token))
         .exec(db)
         .await?;
-    if !uuid.is_empty() {
-        crate::services::peer::uuid_unbind_user_id(db, &uuid, user_id).await?;
-    }
     Ok(())
 }
 
@@ -188,20 +173,6 @@ pub async fn auto_refresh_access_token(
         am.update(db).await?;
     }
     Ok(())
-}
-
-pub async fn find_latest_user_id_by_uuid(
-    db: &DatabaseConnection,
-    uuid: &str,
-    device_id: &str,
-) -> Result<i32, DbErr> {
-    let llog = login_log::Entity::find()
-        .filter(login_log::Column::Uuid.eq(uuid))
-        .filter(login_log::Column::DeviceId.eq(device_id))
-        .order_by_desc(login_log::Column::Id)
-        .one(db)
-        .await?;
-    Ok(llog.map(|l| l.user_id).unwrap_or(0))
 }
 
 // --- admin CRUD ---

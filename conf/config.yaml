@@ -1,4 +1,6 @@
 lang: "zh-CN"
+security:
+  allow-legacy-device-reports: false # Stock clients report without credentials; opt in only on a trusted network.
 app:
   web-client: 1  # 1:启用 0:禁用
   register: false #是否开启注册

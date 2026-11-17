@@ -243,7 +243,7 @@ pub async fn login_options(
         .collect();
     resp::success(json!({
         "ops": ops,
-        "register": state.config.app.register,
+        "register": services::login_security::registration_enabled(&state.db, state.config.app.register).await.unwrap_or(false),
         "need_captcha": need_captcha,
         "disable_pwd": state.config.app.disable_pwd_login,
         "auto_oidc": state.config.app.disable_pwd_login && ops.len() == 1,
@@ -462,7 +462,7 @@ pub struct LoginSecurityConfigForm {
 }
 
 pub async fn login_security_config(State(state): State<AppState>, _user: AdminUser) -> Response {
-    match services::login_security::config_view(&state.db).await {
+    match services::login_security::config_view(&state.db, state.config.app.register).await {
         Ok(view) => resp::success(view),
         Err(e) => resp::fail(101, e.to_string()),
     }
@@ -477,7 +477,7 @@ pub async fn login_security_config_update(
     if let Err(e) = services::login_security::save_login_settings(&state.db, f.login).await {
         return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
-    match services::login_security::config_view(&state.db).await {
+    match services::login_security::config_view(&state.db, state.config.app.register).await {
         Ok(view) => resp::success(view),
         Err(e) => resp::fail(101, e.to_string()),
     }
@@ -4153,7 +4153,10 @@ pub async fn user_register(
     ClientIp(ip): ClientIp,
     Json(f): Json<RegisterForm>,
 ) -> Response {
-    if !state.config.app.register {
+    if !services::login_security::registration_enabled(&state.db, state.config.app.register)
+        .await
+        .unwrap_or(false)
+    {
         return resp::fail(101, state.tr(&lang, "RegisterClosed"));
     }
     if f.username.len() < 2 || f.password.len() < 4 {

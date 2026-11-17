@@ -1,6 +1,8 @@
 // Russian translation of the RustDesk Console admin UI.
 // Keys must match the English dictionary in ../i18n.ts.
 export const ru: Record<string, string> = {
+  allowRegistration: "Разрешить регистрацию",
+  allowRegistrationHint: "Разрешить создание аккаунтов, включая авторегистрацию OAuth. При отключении аккаунты создаёт администратор.",
   appTitle: "RustDesk Console",
   login: "Войти",
   register: "Регистрация",

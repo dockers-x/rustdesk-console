@@ -4,7 +4,7 @@ use sea_orm::sea_query::Expr;
 use sea_orm::*;
 use serde_json::Value as JsonValue;
 
-use ::entity::{audit_conn, audit_file};
+use ::entity::{audit_conn, audit_file, peer};
 
 use crate::services::paginate;
 
@@ -93,7 +93,7 @@ pub async fn record_conn_event(db: &impl ConnectionTrait, body: &JsonValue) -> R
     let event = ConnEvent::from_json(body);
 
     if let Some(note) = &event.note {
-        update_conn_note(db, &event.session_id, note).await?;
+        update_conn_note(db, &event.session_id, note, &event.peer_id).await?;
         return Ok(());
     }
 
@@ -133,20 +133,38 @@ pub async fn update_conn_note_by_guid(
     db: &DatabaseConnection,
     guid: &str,
     note: &str,
+    owner_id: Option<i32>,
 ) -> Result<(), DbErr> {
-    if let Ok(id) = guid.parse::<i32>() {
-        audit_conn::Entity::update_many()
-            .col_expr(audit_conn::Column::Note, Expr::value(note.to_string()))
-            .col_expr(
-                audit_conn::Column::UpdatedAt,
-                Expr::value(crate::services::now().unwrap()),
-            )
-            .filter(audit_conn::Column::Id.eq(id))
-            .exec(db)
+    let mut query = audit_conn::Entity::update_many()
+        .col_expr(audit_conn::Column::Note, Expr::value(note.to_string()))
+        .col_expr(
+            audit_conn::Column::UpdatedAt,
+            Expr::value(crate::services::now()),
+        );
+    query = match guid.parse::<i32>() {
+        Ok(id) => query.filter(audit_conn::Column::Id.eq(id)),
+        Err(_) => query.filter(audit_conn::Column::SessionId.eq(guid)),
+    };
+    if let Some(owner_id) = owner_id {
+        let devices = peer::Entity::find()
+            .select_only()
+            .column(peer::Column::Id)
+            .filter(peer::Column::UserId.eq(owner_id))
+            .into_tuple::<String>()
+            .all(db)
             .await?;
-        return Ok(());
+        query = query.filter(
+            Condition::any()
+                .add(audit_conn::Column::PeerId.is_in(devices.clone()))
+                .add(audit_conn::Column::FromPeer.is_in(devices)),
+        );
     }
-    update_conn_note(db, guid, note).await
+    if query.exec(db).await?.rows_affected == 0 {
+        return Err(DbErr::Custom(
+            "audit not found or not authorized".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 async fn insert_conn_event(db: &impl ConnectionTrait, event: &ConnEvent) -> Result<(), DbErr> {
@@ -175,6 +193,7 @@ async fn update_conn_note(
     db: &impl ConnectionTrait,
     session_id: &str,
     note: &str,
+    peer_id: &str,
 ) -> Result<(), DbErr> {
     audit_conn::Entity::update_many()
         .col_expr(audit_conn::Column::Note, Expr::value(note.to_string()))
@@ -183,6 +202,11 @@ async fn update_conn_note(
             Expr::value(crate::services::now().unwrap()),
         )
         .filter(audit_conn::Column::SessionId.eq(session_id))
+        .filter(
+            Condition::any()
+                .add(audit_conn::Column::PeerId.eq(peer_id))
+                .add(audit_conn::Column::FromPeer.eq(peer_id)),
+        )
         .exec(db)
         .await?;
     Ok(())
@@ -269,7 +293,7 @@ async fn update_conn_peer(db: &impl ConnectionTrait, event: &ConnEvent) -> Resul
 impl ConnEvent {
     fn from_json(body: &JsonValue) -> Self {
         let peer = parse_peer(body.get("peer"));
-        let peer_id = first_non_empty(&[string_field(body, "peer_id"), string_field(body, "id")]);
+        let peer_id = first_non_empty(&[string_field(body, "id"), string_field(body, "peer_id")]);
         let from_peer = first_non_empty(&[
             string_field(body, "from_peer"),
             peer.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
@@ -554,7 +578,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        update_conn_note_by_guid(&db, &guid, "operator note")
+        update_conn_note_by_guid(&db, &guid, "operator note", None)
             .await
             .unwrap();
 

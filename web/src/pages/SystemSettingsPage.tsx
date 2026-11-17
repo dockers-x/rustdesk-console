@@ -47,6 +47,7 @@ interface LoginSecuritySettings {
   require_email_verification: boolean;
   require_device_verification: boolean;
   allow_trusted_login_devices: boolean;
+  allow_registration: boolean;
 }
 interface EmailSettingsView {
   id: number;
@@ -88,6 +89,7 @@ const emptyLoginSecurity: LoginSecuritySettings = {
   require_email_verification: false,
   require_device_verification: false,
   allow_trusted_login_devices: true,
+  allow_registration: false,
 };
 const emptyEmailForm: EmailSettingsForm = {
   id: 0,
@@ -642,12 +644,10 @@ export function SystemSettingsPage() {
                     }
                   />
                   <SecuritySwitch
-                    title={t("allowTrustedLoginDevices")}
-                    description={t("allowTrustedLoginDevicesHint")}
-                    checked={loginForm.allow_trusted_login_devices}
-                    onCheckedChange={(value) =>
-                      updateLoginSecurity("allow_trusted_login_devices", value)
-                    }
+                    title={t("allowRegistration")}
+                    description={t("allowRegistrationHint")}
+                    checked={loginForm.allow_registration}
+                    onCheckedChange={(value) => updateLoginSecurity("allow_registration", value)}
                   />
                 </div>
               </section>

@@ -25,6 +25,8 @@ pub struct LoginSecuritySettings {
     pub require_email_verification: bool,
     pub require_device_verification: bool,
     pub allow_trusted_login_devices: bool,
+    #[serde(default)]
+    pub allow_registration: Option<bool>,
 }
 
 impl Default for LoginSecuritySettings {
@@ -34,6 +36,7 @@ impl Default for LoginSecuritySettings {
             require_email_verification: false,
             require_device_verification: false,
             allow_trusted_login_devices: true,
+            allow_registration: None,
         }
     }
 }
@@ -190,8 +193,12 @@ pub struct LoginChallenge {
     pub secret: String,
 }
 
-pub async fn config_view(db: &DatabaseConnection) -> Result<LoginSecurityConfigView, DbErr> {
-    let login = login_settings(db).await?;
+pub async fn config_view(
+    db: &DatabaseConnection,
+    registration_default: bool,
+) -> Result<LoginSecurityConfigView, DbErr> {
+    let mut login = login_settings(db).await?;
+    login.allow_registration = Some(login.allow_registration.unwrap_or(registration_default));
     Ok(LoginSecurityConfigView { login })
 }
 
@@ -199,6 +206,16 @@ pub async fn login_settings(db: &DatabaseConnection) -> Result<LoginSecuritySett
     load_json_setting(db, LOGIN_SECURITY_KEY)
         .await
         .map(|v| v.unwrap_or_default())
+}
+
+pub async fn registration_enabled(
+    db: &DatabaseConnection,
+    configured: bool,
+) -> Result<bool, DbErr> {
+    Ok(login_settings(db)
+        .await?
+        .allow_registration
+        .unwrap_or(configured))
 }
 
 pub async fn save_login_settings(
@@ -375,7 +392,7 @@ pub async fn send_test_email(
 pub async fn required_verification(
     db: &DatabaseConnection,
     u: &user::Model,
-    device: &DeviceLoginInfo,
+    _device: &DeviceLoginInfo,
 ) -> Result<Option<VerificationKind>, DbErr> {
     let settings = login_settings(db).await?;
     if u.tfa_enabled && (u.tfa_enforced || settings.require_totp) {
@@ -385,12 +402,8 @@ pub async fn required_verification(
         return Ok(Some(VerificationKind::Email));
     }
     if settings.require_device_verification || u.login_device_verification_enabled {
-        if !settings.allow_trusted_login_devices {
-            return Ok(Some(VerificationKind::Email));
-        }
-        if !is_trusted_device(db, u.id, &device.id, &device.uuid).await? {
-            return Ok(Some(VerificationKind::Email));
-        }
+        // Reported IDs/UUIDs are public identifiers, not proof of device possession.
+        return Ok(Some(VerificationKind::Email));
     }
     Ok(None)
 }
@@ -403,7 +416,7 @@ pub async fn create_login_challenge(
 ) -> Result<LoginChallenge, String> {
     let secret = crate::support::random::random_string(40);
     let mut code_hash = String::new();
-    if kind == VerificationKind::Email {
+    let email_message = if kind == VerificationKind::Email {
         if u.email.trim().is_empty() {
             return Err("EmailNotConfigured".to_string());
         }
@@ -416,13 +429,33 @@ pub async fn create_login_challenge(
         let body = format!(
             "Your RustDesk Console verification code is: {code}\n\nThis code expires in 10 minutes."
         );
-        send_email(
-            &email,
-            &u.email,
-            "RustDesk Console verification code",
-            &body,
-        )
-        .await?;
+        Some((email, body))
+    } else {
+        None
+    };
+
+    // Serialize issuance on the account row across workers and database backends.
+    // The quota counts consumed as well as outstanding challenges, so changing
+    // IP or requesting a fresh secret cannot reset the guessing budget.
+    let transaction = db.begin().await.map_err(|e| e.to_string())?;
+    user::Entity::update_many()
+        .col_expr(user::Column::Id, Expr::col(user::Column::Id).into())
+        .filter(user::Column::Id.eq(u.id))
+        .exec(&transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+    let recent = login_verification::Entity::find()
+        .filter(login_verification::Column::UserId.eq(u.id))
+        .filter(login_verification::Column::Kind.is_in([
+            login_verification::KIND_EMAIL,
+            login_verification::KIND_TOTP,
+        ]))
+        .filter(login_verification::Column::ExpiresAt.gt(Utc::now().timestamp()))
+        .count(&transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+    if recent >= 5 {
+        return Err("Too many verification attempts; try again in 10 minutes".to_string());
     }
 
     login_verification::ActiveModel {
@@ -442,10 +475,20 @@ pub async fn create_login_challenge(
         updated_at: Set(now()),
         ..Default::default()
     }
-    .insert(db)
+    .insert(&transaction)
     .await
     .map_err(|e| e.to_string())?;
 
+    transaction.commit().await.map_err(|e| e.to_string())?;
+    if let Some((email, body)) = email_message {
+        send_email(
+            &email,
+            &u.email,
+            "RustDesk Console verification code",
+            &body,
+        )
+        .await?;
+    }
     Ok(LoginChallenge { kind, secret })
 }
 
@@ -582,6 +625,20 @@ pub async fn verify_login_challenge(
     if challenge.expires_at < now_ts {
         return Err("The verification code is incorrect or has expired".to_string());
     }
+    let claimed = login_verification::Entity::update_many()
+        .col_expr(
+            login_verification::Column::VerifiedAt,
+            sea_orm::sea_query::Expr::value(now_ts),
+        )
+        .filter(login_verification::Column::Id.eq(challenge.id))
+        .filter(login_verification::Column::VerifiedAt.eq(0))
+        .exec(db)
+        .await
+        .map_err(|e| e.to_string())?;
+    if claimed.rows_affected != 1 {
+        return Err("The verification code is incorrect or has expired".to_string());
+    }
+
     let u = user::Entity::find_by_id(challenge.user_id)
         .one(db)
         .await
@@ -608,11 +665,6 @@ pub async fn verify_login_challenge(
         }
         _ => return Err("The verification code is incorrect or has expired".to_string()),
     }
-
-    let mut am: login_verification::ActiveModel = challenge.clone().into();
-    am.verified_at = Set(now_ts);
-    am.updated_at = Set(now());
-    am.update(db).await.map_err(|e| e.to_string())?;
 
     let device = DeviceLoginInfo {
         id: challenge.device_id,
@@ -742,19 +794,6 @@ pub async fn delete_trusted_device(
     }
     delete.exec(db).await?;
     Ok(())
-}
-
-async fn is_trusted_device(
-    db: &DatabaseConnection,
-    user_id: i32,
-    device_id: &str,
-    uuid: &str,
-) -> Result<bool, DbErr> {
-    let devices = trusted_devices_for_user(db, user_id).await?;
-    Ok(devices.into_iter().any(|device| {
-        (!uuid.is_empty() && device.device_uuid == uuid)
-            || (!device_id.is_empty() && device.device_id == device_id)
-    }))
 }
 
 async fn trust_device(
@@ -1018,6 +1057,96 @@ mod tests {
         .await
         .unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn login_challenges_are_single_attempt_even_when_code_is_wrong() {
+        let db = smtp_test_db().await;
+        let schema = Schema::new(db.get_database_backend());
+        for table in [
+            schema.create_table_from_entity(user::Entity),
+            schema.create_table_from_entity(login_verification::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&table))
+                .await
+                .unwrap();
+        }
+        let account = user::ActiveModel {
+            username: Set("mfa-user".into()),
+            status: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        login_verification::ActiveModel {
+            user_id: Set(account.id),
+            secret: Set("challenge".into()),
+            kind: Set(login_verification::KIND_EMAIL.into()),
+            code_hash: Set(hash_code("challenge", "123456")),
+            expires_at: Set(Utc::now().timestamp() + 60),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        assert!(
+            verify_login_challenge(&db, "challenge", Some("wrong"), None)
+                .await
+                .is_err()
+        );
+        assert!(
+            verify_login_challenge(&db, "challenge", Some("123456"), None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_login_challenges_share_a_persistent_account_quota() {
+        let db = smtp_test_db().await;
+        let schema = Schema::new(db.get_database_backend());
+        for table in [
+            schema.create_table_from_entity(user::Entity),
+            schema.create_table_from_entity(login_verification::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&table))
+                .await
+                .unwrap();
+        }
+        let account = user::ActiveModel {
+            username: Set("quota-user".into()),
+            status: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let mut device = DeviceLoginInfo {
+            id: "device".into(),
+            uuid: "uuid".into(),
+            name: String::new(),
+            os: String::new(),
+            client_type: "app".into(),
+            ip: "192.0.2.1".into(),
+            auto_login: false,
+        };
+        for index in 0..5 {
+            device.ip = format!("192.0.2.{index}");
+            let challenge = create_login_challenge(&db, &account, &device, VerificationKind::Totp)
+                .await
+                .unwrap();
+            assert!(
+                verify_login_challenge(&db, &challenge.secret, None, Some("invalid"))
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            create_login_challenge(&db, &account, &device, VerificationKind::Totp)
+                .await
+                .is_err()
+        );
     }
 
     #[test]

@@ -271,7 +271,19 @@ pub async fn oauth_callback(
                     return Redirect::to(&format!("/_admin/#/oauth/bind/{}", q.state))
                         .into_response();
                 }
-                match services::oauth::register_or_login(&state.db, &oauth_user, &cache.op).await {
+                match services::oauth::register_or_login(
+                    &state.db,
+                    &oauth_user,
+                    &cache.op,
+                    services::login_security::registration_enabled(
+                        &state.db,
+                        state.config.app.register,
+                    )
+                    .await
+                    .unwrap_or(false),
+                )
+                .await
+                {
                     Ok(u) => u,
                     Err(e) => return render_template(&state, "oauth_fail.html", &e, ""),
                 }

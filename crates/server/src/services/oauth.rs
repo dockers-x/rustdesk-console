@@ -776,6 +776,7 @@ pub async fn register_or_login(
     db: &DatabaseConnection,
     ou: &OauthUser,
     op: &str,
+    allow_registration: bool,
 ) -> Result<user::Model, String> {
     let oauth_type = info_by_op(db, op)
         .await
@@ -802,6 +803,9 @@ pub async fn register_or_login(
                 .map_err(|e| e.to_string())?;
             return Ok(u);
         }
+    }
+    if !allow_registration {
+        return Err("RegisterClosed".to_string());
     }
     // create a fresh user + binding
     let username = generate_unique_username(db, &ou.username).await;

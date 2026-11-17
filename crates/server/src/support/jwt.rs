@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 struct Claims {
     user_id: u32,
     exp: usize,
+    #[serde(default)]
+    jti: String,
 }
 
 #[derive(Clone)]
@@ -44,7 +46,11 @@ impl Jwt {
             return String::new();
         }
         let exp = (chrono::Utc::now() + self.expire).timestamp() as usize;
-        let claims = Claims { user_id, exp };
+        let claims = Claims {
+            user_id,
+            exp,
+            jti: uuid::Uuid::new_v4().to_string(),
+        };
         encode(
             &Header::new(Algorithm::HS256),
             &claims,
@@ -80,6 +86,7 @@ mod tests {
         let token = jwt.generate_token(999);
         assert!(!token.is_empty());
         assert_eq!(jwt.parse_token(&token).unwrap(), 999);
+        assert_ne!(jwt.generate_token(999), token);
     }
 
     #[test]
