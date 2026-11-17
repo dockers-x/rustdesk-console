@@ -176,8 +176,11 @@ To override the embedded WebClient, put a single `web.zip` at `./data/web.zip` a
 restart the service. The server extracts it into a temporary directory at startup,
 serves it as `/webclient2/`. The built-in `/webclient/` remains the embedded v1
 client. If `web.zip` is missing or invalid, `/webclient2/` is unavailable and the
-admin UI falls back to v1 links. The zip must contain a root `index.html`; it is
-not unpacked into the persistent `data` directory.
+admin UI falls back to v1 links. The zip can contain either `index.html` and its
+assets at the root, or a `web/` directory containing `index.html` and its assets.
+If both exist, the root `index.html` takes precedence. Either layout is served at
+`/webclient2/` without an extra `web/` URL prefix. The zip is not unpacked into the
+persistent `data` directory.
 
 ## OAuth and OIDC
 

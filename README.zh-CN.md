@@ -160,9 +160,11 @@ Relay 池。Console 仅在下发配置时创建短期 `.geo-config-*.json` 临�
   `rustdesk.ws-host`。
 
 如需覆盖内置 WebClient，在 `./data/web.zip` 放一个 zip 文件并重启服务即可。
-服务启动时会把它解压到临时目录，`/webclient/` 和 `/webclient2/` 会优先读取该目录；
-文件不存在或无效时自动回退到内置资源。zip 根目录必须包含 `index.html`，服务不会把它
-解压到持久化的 `data` 目录。
+服务启动时会把它解压到临时目录，通过 `/webclient2/` 提供访问；`/webclient/` 仍使用
+内置 v1 客户端。文件不存在或无效时，`/webclient2/` 不可用，管理界面回退到 v1 链接。
+zip 支持两种结构：根目录直接包含 `index.html` 及其资源，或包含 `web/` 目录，里面放
+`index.html` 及其资源。两者同时存在时优先使用根目录。两种结构都通过 `/webclient2/`
+访问，URL 无需额外添加 `web/`。服务不会将其解压到持久化的 `data` 目录。
 
 ## OAuth 与 OIDC
 

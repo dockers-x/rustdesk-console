@@ -13,6 +13,7 @@ const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Debug)]
 pub struct ExternalWebClient {
     root: PathBuf,
+    extraction_root: PathBuf,
 }
 
 impl ExternalWebClient {
@@ -64,21 +65,20 @@ impl ExternalWebClient {
         }
 
         let root = default_temp_root();
-        let extract_root = root.clone();
-        tokio::task::spawn_blocking(move || extract_zip(&zip_path, &extract_root))
+        let client = tokio::task::spawn_blocking(move || extract_zip(&zip_path, &root))
             .await
             .context("external WebClient extraction task failed")??;
 
-        Ok(Some(Self { root }))
+        Ok(Some(client))
     }
 }
 
 impl Drop for ExternalWebClient {
     fn drop(&mut self) {
-        if let Err(err) = fs::remove_dir_all(&self.root) {
+        if let Err(err) = fs::remove_dir_all(&self.extraction_root) {
             if err.kind() != io::ErrorKind::NotFound {
                 tracing::debug!(
-                    root = %self.root.display(),
+                    root = %self.extraction_root.display(),
                     error = %err,
                     "failed to remove external WebClient temp directory"
                 );
@@ -91,7 +91,7 @@ fn default_temp_root() -> PathBuf {
     std::env::temp_dir().join(format!("rustdesk-console-webclient-{}", std::process::id()))
 }
 
-fn extract_zip(zip_path: &Path, root: &Path) -> anyhow::Result<()> {
+fn extract_zip(zip_path: &Path, root: &Path) -> anyhow::Result<ExternalWebClient> {
     if root.exists() {
         fs::remove_dir_all(root)
             .with_context(|| format!("remove previous temp dir {}", root.display()))?;
@@ -102,10 +102,13 @@ fn extract_zip(zip_path: &Path, root: &Path) -> anyhow::Result<()> {
     if result.is_err() {
         let _ = fs::remove_dir_all(root);
     }
-    result
+    result.map(|content_root| ExternalWebClient {
+        root: content_root,
+        extraction_root: root.to_path_buf(),
+    })
 }
 
-fn extract_zip_inner(zip_path: &Path, root: &Path) -> anyhow::Result<()> {
+fn extract_zip_inner(zip_path: &Path, root: &Path) -> anyhow::Result<PathBuf> {
     let file =
         fs::File::open(zip_path).with_context(|| format!("open zip {}", zip_path.display()))?;
     let mut archive = ZipArchive::new(file).context("open zip archive")?;
@@ -164,12 +167,15 @@ fn extract_zip_inner(zip_path: &Path, root: &Path) -> anyhow::Result<()> {
             .with_context(|| format!("extract zip entry {raw_name}"))?;
     }
 
-    let index = root.join("index.html");
-    if !index.is_file() {
-        bail!("external WebClient zip must contain root index.html");
+    // Preserve the flat layout's precedence when both entry points are present.
+    if root.join("index.html").is_file() {
+        return Ok(root.to_path_buf());
     }
-
-    Ok(())
+    let web_root = root.join("web");
+    if web_root.join("index.html").is_file() {
+        return Ok(web_root);
+    }
+    bail!("external WebClient zip must contain index.html or web/index.html");
 }
 
 fn safe_zip_entry_path(raw_name: &str) -> anyhow::Result<Option<PathBuf>> {
@@ -261,8 +267,9 @@ mod tests {
         );
         let root = dir.join("out");
 
-        extract_zip(&zip_path, &root).unwrap();
+        let client = extract_zip(&zip_path, &root).unwrap();
 
+        assert_eq!(client.root(), root);
         assert_eq!(
             fs::read_to_string(root.join("index.html")).unwrap(),
             "<html>ok</html>"
@@ -271,6 +278,178 @@ mod tests {
             fs::read_to_string(root.join("assets/app.js")).unwrap(),
             "console.log('ok')"
         );
+        drop(client);
+        assert!(!root.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn extracts_web_directory_and_cleans_entire_extraction_root() {
+        let dir = test_dir("web-directory");
+        let zip_path = dir.join("web.zip");
+        write_zip(
+            &zip_path,
+            &[
+                (
+                    "web/index.html",
+                    b"<html>wrapped</html>".as_slice(),
+                    0o100644,
+                ),
+                (
+                    "web/assets/app.js",
+                    b"console.log('wrapped')".as_slice(),
+                    0o100644,
+                ),
+                ("README.txt", b"outside web".as_slice(), 0o100644),
+            ],
+        );
+        let root = dir.join("out");
+
+        let client = extract_zip(&zip_path, &root).unwrap();
+
+        assert_eq!(client.root(), root.join("web"));
+        assert_eq!(
+            fs::read_to_string(client.root().join("index.html")).unwrap(),
+            "<html>wrapped</html>"
+        );
+        assert_eq!(
+            fs::read_to_string(client.root().join("assets/app.js")).unwrap(),
+            "console.log('wrapped')"
+        );
+        assert!(root.join("README.txt").is_file());
+        drop(client);
+        assert!(!root.exists());
+        assert!(zip_path.is_file());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prefers_root_index_when_both_layouts_are_present() {
+        let dir = test_dir("both-layouts");
+        let zip_path = dir.join("web.zip");
+        write_zip(
+            &zip_path,
+            &[
+                ("web/index.html", b"wrapped".as_slice(), 0o100644),
+                ("index.html", b"flat".as_slice(), 0o100644),
+            ],
+        );
+        let root = dir.join("out");
+
+        let client = extract_zip(&zip_path, &root).unwrap();
+
+        assert_eq!(client.root(), root);
+        assert_eq!(
+            fs::read_to_string(client.root().join("index.html")).unwrap(),
+            "flat"
+        );
+        drop(client);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn serves_both_layouts_at_the_same_webclient_routes() {
+        use std::sync::Arc;
+
+        use axum::body::{to_bytes, Body};
+        use axum::http::{Request, StatusCode};
+        use sea_orm::DatabaseConnection;
+        use tower::ServiceExt as _;
+
+        for prefix in ["", "web/"] {
+            let dir = test_dir("routes");
+            let zip_path = dir.join("web.zip");
+            write_zip(
+                &zip_path,
+                &[
+                    (&format!("{prefix}index.html"), br#"<html><head><base href="/webclient/"></head><body>external fixture</body></html>"#, 0o100644),
+                    (&format!("{prefix}assets/app.js"), b"console.log('external fixture')", 0o100644),
+                ],
+            );
+            let root = dir.join("out");
+            let client = extract_zip(&zip_path, &root).unwrap();
+            let mut state =
+                crate::http::api::deployment_tests::test_state(DatabaseConnection::Disconnected);
+            Arc::make_mut(&mut state.config).app.web_client = 1;
+            state.external_webclient = Some(Arc::new(client));
+            let app = crate::http::router::build(state);
+
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/webclient2/")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let html = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            let html = std::str::from_utf8(&html).unwrap();
+            assert!(html.contains("external fixture"));
+            assert!(html.contains(r#"<base href="/webclient2/">"#));
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/webclient2/assets/app.js")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(bytes.as_ref(), b"console.log('external fixture')");
+            assert!(!root.exists());
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_entries_even_with_a_web_directory() {
+        for unsafe_path in [
+            "web/../../escape.txt",
+            "web/../escape.txt",
+            "../escape.txt",
+            "web\\assets\\app.js",
+            "/escape.txt",
+            "C:/escape.txt",
+        ] {
+            let dir = test_dir("unsafe-web-directory");
+            let zip_path = dir.join("web.zip");
+            write_zip(
+                &zip_path,
+                &[
+                    ("web/index.html", b"ok".as_slice(), 0o100644),
+                    (unsafe_path, b"no".as_slice(), 0o100644),
+                ],
+            );
+            let root = dir.join("out");
+
+            assert!(extract_zip(&zip_path, &root).is_err());
+
+            assert!(!root.exists());
+            assert!(!dir.join("escape.txt").exists());
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn rejects_unrecognized_wrapper_directory() {
+        let dir = test_dir("other-wrapper");
+        let zip_path = dir.join("web.zip");
+        write_zip(
+            &zip_path,
+            &[("other/index.html", b"ok".as_slice(), 0o100644)],
+        );
+        let root = dir.join("out");
+
+        let err = extract_zip(&zip_path, &root).unwrap_err();
+
+        assert!(err.to_string().contains("index.html or web/index.html"));
+        assert!(!root.exists());
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -330,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn requires_root_index_html() {
+    fn requires_index_html_in_a_supported_location() {
         let dir = test_dir("missing-index");
         let zip_path = dir.join("web.zip");
         write_zip(&zip_path, &[("assets/app.js", b"ok".as_slice(), 0o100644)]);
