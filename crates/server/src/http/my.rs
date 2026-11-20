@@ -668,6 +668,7 @@ pub async fn peer_list(
         user_id: Some(user.user.id),
         time_ago: q.time_ago,
         id: q.id,
+        exact_id: q.exact_id,
         hostname: q.hostname,
         username: q.username,
         ip: q.ip,

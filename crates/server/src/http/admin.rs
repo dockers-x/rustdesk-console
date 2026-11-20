@@ -2350,6 +2350,8 @@ pub struct PeerQuery {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
+    pub exact_id: bool,
+    #[serde(default)]
     pub hostname: Option<String>,
     #[serde(default)]
     pub username: Option<String>,
@@ -2368,6 +2370,7 @@ pub async fn peer_list(
         user_id: None,
         time_ago: q.time_ago,
         id: q.id,
+        exact_id: q.exact_id,
         hostname: q.hostname,
         username: q.username,
         ip: q.ip,

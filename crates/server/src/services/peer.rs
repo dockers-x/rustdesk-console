@@ -145,6 +145,7 @@ pub struct PeerFilters {
     pub user_id: Option<i32>,
     pub time_ago: i64,
     pub id: Option<String>,
+    pub exact_id: bool,
     pub hostname: Option<String>,
     pub username: Option<String>,
     pub ip: Option<String>,
@@ -170,7 +171,11 @@ pub async fn list_filtered(
         q = q.filter(peer::Column::LastOnlineTime.gt(gt));
     }
     if let Some(v) = f.id.filter(|s| !s.is_empty()) {
-        q = q.filter(peer::Column::Id.contains(&v));
+        q = q.filter(if f.exact_id {
+            peer::Column::Id.eq(v)
+        } else {
+            peer::Column::Id.contains(&v)
+        });
     }
     if let Some(v) = f.hostname.filter(|s| !s.is_empty()) {
         q = q.filter(peer::Column::Hostname.contains(&v));

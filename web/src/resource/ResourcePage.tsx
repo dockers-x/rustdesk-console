@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo/components/button";
@@ -144,19 +145,26 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
   const adminConfig = usePublicAdminConfig();
   const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
 
+  const [searchParams] = useSearchParams();
+  const linkedDeviceId = cfg.name === "peers" ? searchParams.get("id") : null;
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [filters, setFilters] = useState((): Record<string, string> =>
+    linkedDeviceId ? { id: linkedDeviceId } : {},
+  );
+  const exactDeviceId = Boolean(linkedDeviceId && filters.id === linkedDeviceId);
 
   const queryKey = useMemo(
-    () => [cfg.name, page, filters],
-    [cfg.name, page, filters],
+    () => [cfg.name, page, filters, exactDeviceId],
+    [cfg.name, page, filters, exactDeviceId],
   );
   const { data, error, isLoading } = useQuery({
     queryKey,
+    refetchInterval: cfg.name === "active_connection" ? 15_000 : undefined,
     queryFn: () =>
       apiGet<ListResult>(`${cfg.api}/list`, {
         page,
         page_size: PAGE_SIZE,
+        exact_id: exactDeviceId || undefined,
         ...Object.fromEntries(
           Object.entries(filters).filter(([, v]) => v !== ""),
         ),

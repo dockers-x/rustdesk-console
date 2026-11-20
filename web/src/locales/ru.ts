@@ -229,6 +229,7 @@ export const ru: Record<string, string> = {
   userTokens: "Токены",
   loginLogs: "Журналы входа",
   activeConnections: "Активные подключения",
+  openDeviceInList: "Найти устройство в списке устройств",
   auditConn: "Аудит подключений",
   auditFile: "Аудит файлов",
   recordFiles: "Записи сессий",

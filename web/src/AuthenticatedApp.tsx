@@ -103,7 +103,12 @@ export default function AuthenticatedApp() {
           <Route
             key={resource.name}
             path={resourcePath(resource)}
-            element={<ResourcePage cfg={resource} />}
+            element={
+              <ResourcePage
+                key={resource.name === "peers" ? `peers${location.search}` : resource.name}
+                cfg={resource}
+              />
+            }
           />
         ))}
       </Route>

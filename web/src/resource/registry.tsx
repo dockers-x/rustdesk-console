@@ -1,4 +1,6 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
+import { Link } from "@cloudflare/kumo/components/link";
+import { Link as RouterLink } from "react-router-dom";
 import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
 import { DeploymentTokenActions } from "../components/DeploymentTokenActions";
 import { OAuthProviderActions } from "../components/OAuthProviderActions";
@@ -12,6 +14,7 @@ import { renderStrategyOptionsSummary } from "./strategyOptions";
 import type { ResourceConfig } from "./types";
 
 const PEER_ONLINE_WINDOW_SECONDS = 90;
+const DEVICES_PATH = "/peers";
 
 const statusCol = {
   key: "status",
@@ -234,6 +237,24 @@ const activeConnectionActionsCol = {
       uuid={String(r.uuid ?? "")}
     />
   ),
+};
+const activeConnectionDeviceCol = {
+  key: "peer_id",
+  label: "deviceId",
+  render: (row: Record<string, unknown>, t: (k: string) => string) => {
+    const id = String(row.peer_id ?? "");
+    if (!id) return "—";
+    const search = new URLSearchParams({ id }).toString();
+    return (
+      <Link
+        render={<RouterLink to={{ pathname: DEVICES_PATH, search }} />}
+        className="font-mono text-xs tabular-nums"
+        title={t("openDeviceInList")}
+      >
+        {id}
+      </Link>
+    );
+  },
 };
 const colorCol = {
   key: "color",
@@ -644,6 +665,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
   },
   {
     name: "peers",
+    path: DEVICES_PATH,
     titleKey: "devices",
     api: "/api/admin/peer",
     idField: "row_id",
@@ -988,7 +1010,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "id", label: "id" },
       monoCol("conn_id", "connId", "max-w-24"),
       activeConnectionActionsCol,
-      monoCol("peer_id", "deviceId", "max-w-28"),
+      activeConnectionDeviceCol,
       monoCol("uuid", "uuid", "max-w-48"),
       { key: "updated_at", label: "updatedAt" },
     ],

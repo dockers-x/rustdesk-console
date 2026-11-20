@@ -162,17 +162,16 @@ pub async fn heartbeat(
         services::webhook::spawn_device_seen(state.db.clone(), p.clone());
     }
     let disconnect_key = heartbeat_disconnect_key(&info.uuid, &rustdesk_id);
-    if let Some(conns) = &info.conns {
-        if let Err(e) =
-            services::active_connection::sync_for_device(&state.db, &rustdesk_id, &info.uuid, conns)
-                .await
-        {
-            tracing::warn!("failed to sync active connections: {e}");
-        }
-        state
-            .disconnect_store
-            .remove_disconnected(&disconnect_key, conns);
+    // Stock RustDesk omits `conns` when the last session ends.
+    let conns = info.conns.as_deref().unwrap_or_default();
+    if let Err(e) =
+        services::active_connection::sync_for_device(&state.db, &rustdesk_id, &info.uuid, conns).await
+    {
+        tracing::warn!("failed to sync active connections: {e}");
     }
+    state
+        .disconnect_store
+        .remove_disconnected(&disconnect_key, conns);
 
     let mut modified_at = info.modified_at;
     let mut strategy = resolve_capability(&normalize_reported_version(&info.version, info.ver));
@@ -280,6 +279,40 @@ fn parse_version(version: &str) -> [i64; 3] {
 #[cfg(test)]
 mod heartbeat_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stock_heartbeat_without_conns_clears_the_device_snapshot() {
+        use sea_orm::{ConnectionTrait, Database, Schema};
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let backend = db.get_database_backend();
+        let schema = Schema::new(backend);
+        for table in [
+            schema.create_table_from_entity(peer::Entity),
+            schema.create_table_from_entity(entity::active_connection::Entity),
+        ] {
+            db.execute(backend.build(&table)).await.unwrap();
+        }
+        let state = super::deployment_tests::test_state(db.clone());
+        let response = heartbeat(
+            State(state.clone()),
+            HeaderMap::new(),
+            json!({"id":"peer-1","uuid":"uuid-1","conns":[42]}).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(services::active_connection::count(&db).await.unwrap(), 1);
+        state.disconnect_store.add_pending("uuid-1", &[42]);
+        let response = heartbeat(
+            State(state.clone()),
+            HeaderMap::new(),
+            json!({"id":"peer-1","uuid":"uuid-1"}).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(services::active_connection::count(&db).await.unwrap(), 0);
+        assert!(state.disconnect_store.pending("uuid-1").is_empty());
+    }
 
     #[test]
     fn heartbeat_id_prefers_id_and_falls_back_to_uuid() {

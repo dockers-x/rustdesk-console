@@ -10,8 +10,10 @@ use sea_orm::{
 use serde::Serialize;
 
 use entity::{
-    active_connection, address_book, audit_conn, audit_file, login_log, peer, share_record, user,
+    address_book, audit_conn, audit_file, login_log, peer, share_record, user,
 };
+
+use super::active_connection;
 
 const ONLINE_WINDOW_SECONDS: i64 = 90;
 const RECENT_LIMIT: u64 = 6;
@@ -129,7 +131,7 @@ pub async fn load(
                 .iter()
                 .filter(|p| p.last_online_time >= online_since)
                 .count() as u64,
-            active_connections: active_connection::Entity::find().count(db).await?,
+            active_connections: active_connection::count(db).await?,
             address_books: address_book::Entity::find().count(db).await?,
             share_records: share_record::Entity::find().count(db).await?,
             login_logs: login_log::Entity::find().count(db).await?,

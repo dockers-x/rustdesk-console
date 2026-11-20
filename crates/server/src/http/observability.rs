@@ -8,8 +8,9 @@ use chrono::Utc;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde::Serialize;
 
-use entity::{active_connection, audit_conn, audit_file, login_log, peer, user};
+use entity::{audit_conn, audit_file, login_log, peer, user};
 
+use crate::services::active_connection;
 use crate::state::AppState;
 
 const ONLINE_WINDOW_SECONDS: i64 = 90;
@@ -103,7 +104,7 @@ async fn collect_metrics(state: &AppState) -> Result<MetricsSnapshot, sea_orm::D
             .filter(peer::Column::LastOnlineTime.gte(online_since))
             .count(&state.db)
             .await?,
-        active_connections_total: active_connection::Entity::find().count(&state.db).await?,
+        active_connections_total: active_connection::count(&state.db).await?,
         audit_conns_total: audit_conn::Entity::find().count(&state.db).await?,
         audit_files_total: audit_file::Entity::find().count(&state.db).await?,
         login_logs_total: login_log::Entity::find().count(&state.db).await?,
