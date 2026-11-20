@@ -24,8 +24,8 @@ pub async fn favicon(State(state): State<AppState>) -> Response {
     let (mime, bytes) = match state.admin_config.logo_bytes().await {
         Some(logo) => ("image/png", logo),
         None => (
-            "image/svg+xml",
-            Resources::read("web/favicon.svg").unwrap_or_default(),
+            "image/vnd.microsoft.icon",
+            Resources::read("console/favicon.ico").unwrap_or_default(),
         ),
     };
     (

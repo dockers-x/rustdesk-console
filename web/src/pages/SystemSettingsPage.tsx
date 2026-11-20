@@ -12,7 +12,6 @@ import {
   EnvelopeSimple,
   Eye,
   GearSix,
-  ImageSquare,
   Info,
   NotePencil,
   PaperPlaneTilt,
@@ -20,6 +19,7 @@ import {
   ShieldCheck,
   Trash,
 } from "@phosphor-icons/react";
+import defaultLogo from "../assets/console-logo-128.png";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   DialogBody,
@@ -520,11 +520,11 @@ export function SystemSettingsPage() {
 
               <div className="flex flex-wrap items-center gap-4 rounded-lg border border-kumo-line bg-kumo-base p-3">
                 <div className="flex size-16 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-elevated p-2 text-kumo-subtle">
-                  {form.logo ? (
-                    <img src={`data:image/png;base64,${form.logo}`} alt={t("siteLogo")} className="size-full object-contain" />
-                  ) : (
-                    <ImageSquare size={24} aria-hidden />
-                  )}
+                  <img
+                    src={form.logo ? `data:image/png;base64,${form.logo}` : defaultLogo}
+                    alt={t("siteLogo")}
+                    className="size-full object-contain"
+                  />
                 </div>
                 <div className="min-w-0 flex-1 basis-48">
                   <p className="text-sm font-medium">{t("siteLogo")}</p>

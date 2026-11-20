@@ -405,13 +405,7 @@ export function AppShell({
             navCompact && "justify-center px-0",
           )}
         >
-          {logoUrl ? (
-            <img src={logoUrl} alt="" className="size-8 shrink-0 object-contain" />
-          ) : (
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-kumo-tint text-kumo-brand">
-              <Monitor size={20} />
-            </span>
-          )}
+          <img src={logoUrl} alt="" className="size-8 shrink-0 object-contain" />
           {!navCompact && (
             <span className="truncate" title={appTitle}>
               {appTitle}

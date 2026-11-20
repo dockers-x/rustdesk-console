@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
-import { Key, ShieldCheck, SignOut } from "@phosphor-icons/react";
+import { Key, SignOut } from "@phosphor-icons/react";
 import { InlineMessage } from "../components/InlineMessage";
 import { useAppBranding } from "../lib/adminTitle";
 import { apiGet, apiPost, ApiError } from "../lib/api";
@@ -100,7 +100,7 @@ export function ForceChangePasswordPage() {
             <div className="flex h-full min-h-[220px] flex-col justify-between gap-8">
               <div>
                 <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 text-xs font-semibold uppercase text-kumo-subtle">
-                  {logoUrl ? <img src={logoUrl} alt="" className="size-5 object-contain" /> : <ShieldCheck size={16} aria-hidden />}
+                  <img src={logoUrl} alt="" className="size-5 object-contain" />
                   <span>{appTitle}</span>
                 </div>
                 <h1 className="mt-6 max-w-[16ch] break-words text-3xl font-semibold leading-tight sm:text-4xl">

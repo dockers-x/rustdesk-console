@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import defaultLogo from "../assets/console-logo-64.png";
+import defaultLargeLogo from "../assets/console-logo-128.png";
 import { apiGet } from "./api";
 
 interface PublicAdminConfig {
@@ -23,14 +25,17 @@ export function usePublicAdminConfig() {
 export function useAppBranding() {
   const { t } = useTranslation();
   const config = usePublicAdminConfig();
+  const customLogo = config.data?.logo_url;
   return {
     title: normalizeTitle(config.data?.title) || t("appTitle"),
-    logoUrl: config.data?.logo_url,
+    logoUrl: customLogo || defaultLogo,
+    largeLogoUrl: customLogo || defaultLargeLogo,
+    faviconUrl: customLogo || defaultFavicon,
   };
 }
 
 export function AppTitleController() {
-  const { title, logoUrl } = useAppBranding();
+  const { title, faviconUrl } = useAppBranding();
 
   useEffect(() => {
     document.title = title;
@@ -38,8 +43,8 @@ export function AppTitleController() {
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>("#console-favicon");
-    if (favicon) favicon.href = logoUrl || defaultFavicon;
-  }, [logoUrl]);
+    if (favicon) favicon.href = faviconUrl;
+  }, [faviconUrl]);
 
   return null;
 }
