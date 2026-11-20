@@ -6,14 +6,18 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ArrowClockwise, ArrowLeft, DownloadSimple, Plus, Trash } from "@phosphor-icons/react";
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
+import { Checkbox } from "@cloudflare/kumo/components/checkbox";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
-import { Select } from "@cloudflare/kumo/components/select";
+import { LayerDialog } from "@cloudflare/kumo/components/layer-dialog";
+import { Radio } from "@cloudflare/kumo/components/radio";
 import { Table } from "@cloudflare/kumo/components/table";
 import { Tabs } from "@cloudflare/kumo/components/tabs";
+import { useKumoToastManager } from "@cloudflare/kumo/components/toast";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { DialogBody, DialogFooter, DialogHeader, dialogPanelClass } from "../components/DialogLayout";
+import { DialogBody, DialogFooter, DialogHeader, dialogPanelClass, resourceFormDialogPanelClass } from "../components/DialogLayout";
 import { TableState } from "../components/TableState";
+import { TagPicker } from "../components/TagPicker";
 import { WebClientActions } from "../components/WebClientActions";
 import { apiGet, apiPatch, apiPost, apiPut, http } from "../lib/api";
 import { formatDateTime } from "../lib/dateFormat";
@@ -48,6 +52,7 @@ interface BookPeer {
 }
 
 interface BookTag {
+  id: number;
   name: string;
   color: number;
 }
@@ -290,7 +295,6 @@ function BookDevices({ book }: { book: Book }) {
   const [editing, setEditing] = useState<BookPeer | "new" | null>(null);
   const [tagEditor, setTagEditor] = useState<BookTag | "new" | null>(null);
   const [deleteTag, setDeleteTag] = useState<BookTag>();
-  const [importOpen, setImportOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [deletePeer, setDeletePeer] = useState<BookPeer>();
   const writable = book.rule >= 2;
@@ -302,7 +306,11 @@ function BookDevices({ book }: { book: Book }) {
   });
   const tags = useQuery({
     queryKey: [...bookKey, book.guid, "tags"],
-    queryFn: () => apiGet<BookTag[]>(`/api/ab/tags/${guid}`),
+    queryFn: async () => {
+      const data = await apiGet<BookTag[]>(`/api/ab/tags/${guid}`);
+      if (!Array.isArray(data)) throw new Error(t("operationFailed"));
+      return data;
+    },
   });
   const deleteDevice = useMutation({
     mutationFn: (peer: BookPeer) => remove(`/api/ab/peer/${guid}`, [peer.id]),
@@ -312,7 +320,8 @@ function BookDevices({ book }: { book: Book }) {
     },
   });
 
-  const selectedTag = tags.data?.find((tag) => tag.name === tagFilter);
+  const selectedTag = tags.data?.find((tag) => tag.id > 0 && tag.name === tagFilter);
+  const selectTagFilter = (tag?: string) => { setTagFilter(tag); setPage(1); };
   const deleteBookTag = useMutation({
     mutationFn: (tag: BookTag) => remove(`/api/ab/tag/${guid}`, [tag.name]),
     onSuccess: () => {
@@ -332,15 +341,24 @@ function BookDevices({ book }: { book: Book }) {
           <span className="text-sm text-kumo-subtle">{book.owner}</span>
         </div>
       )}
-      <section className={`${surface} flex flex-wrap items-center gap-2 p-4`} aria-label={t("tags")}>
-        <span className="mr-2 text-sm font-medium">{t("tags")}</span>
-        {[undefined, "", ...(tags.data ?? []).map((tag) => tag.name)].map((tag) => (
-          <Button key={tag === undefined ? "all-tags" : `tag-${tag}`} size="sm"
+      <section className={`${surface} grid gap-3 p-4`} aria-label={t("tags")}>
+        <div className="max-w-2xl">
+          <TagPicker label={t("tags")} value={tagFilter ? [tagFilter] : []}
+            options={(tags.data ?? []).map((tag) => tag.name)} maxValues={1}
+            disabled={tags.isPending || tags.isError}
+            onChange={([tag]) => {
+              if (tag !== tagFilter && (tag !== undefined || tagFilter !== "")) selectTagFilter(tag);
+            }} />
+        </div>
+        {tags.error && <TableState tone="error">{t("operationFailed")}</TableState>}
+        <div className="flex flex-wrap gap-2">
+          {[undefined, ""].map((tag) => (
+          <Button key={tag === undefined ? "all-tags" : "no-tags"} size="sm"
             variant={tagFilter === tag ? "primary" : "secondary"} aria-pressed={tagFilter === tag}
-            onClick={() => { setTagFilter(tag); setPage(1); }}>
-            {tag === undefined ? t("bookAllTags") : tag || t("bookNoTags")}
+            onClick={() => selectTagFilter(tag)}>
+            {t(tag === undefined ? "bookAllTags" : "bookNoTags")}
           </Button>
-        ))}
+          ))}
         {writable && <Button size="sm" variant="ghost" onClick={() => setTagEditor("new")}>
           <Plus size={16} />{t("bookAddTag")}
         </Button>}
@@ -348,6 +366,7 @@ function BookDevices({ book }: { book: Book }) {
         {fullControl && selectedTag && <Button size="sm" variant="ghost" onClick={() => {
           deleteBookTag.reset(); setDeleteTag(selectedTag);
         }}>{t("delete")}</Button>}
+        </div>
       </section>
       <form className={`${surface} grid items-end gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3`}
         onSubmit={(event) => { event.preventDefault(); setPage(1); setApplied(filters); }}>
@@ -368,9 +387,7 @@ function BookDevices({ book }: { book: Book }) {
           <div className="flex flex-wrap gap-2">
             {writable && <>
               <Button size="sm" onClick={() => setEditing("new")}><Plus size={16} />{t("create")}</Button>
-              <Button size="sm" variant="secondary" onClick={() => setImportOpen(true)}>
-                <DownloadSimple size={16} />{t("bookImport")}
-              </Button>
+              <ImportDialog book={book} />
             </>}
             {fullControl && <Button size="sm" variant="secondary" onClick={() => setTrashOpen(true)}>
               <Trash size={16} />{t("bookTrash")}
@@ -405,7 +422,6 @@ function BookDevices({ book }: { book: Book }) {
         error={deleteBookTag.error ? message(deleteBookTag.error, t("operationFailed")) : undefined}
         onOpenChange={(open) => { if (!open) setDeleteTag(undefined); }}
         onConfirm={() => deleteBookTag.mutate(deleteTag)} />}
-      {importOpen && <ImportDialog book={book} onClose={() => setImportOpen(false)} />}
       {trashOpen && <TrashDialog book={book} onClose={() => setTrashOpen(false)} />}
       {deletePeer && (
         <ConfirmDialog open title={t("bookMoveToTrash")} description={t("bookMoveDescription", { id: deletePeer.id })}
@@ -426,7 +442,7 @@ function DeviceTable({ rows, actions, trash = false }: {
   const { t } = useTranslation();
   const headers = ["deviceId", "devices", "alias", "tags", "note", ...(trash ? ["bookDeletedAt"] : []), "actions"];
   return (
-    <div className="overflow-x-auto">
+    <div className="min-w-0 overflow-x-auto">
     <Table>
       <Table.Header>
         <Table.Row>{headers.map((key) => <Table.Head key={key}>{t(key)}</Table.Head>)}</Table.Row>
@@ -487,9 +503,9 @@ function PeerDialog({ book, peer, tags, onClose }: {
         onChange={(event) => setForm({ ...form, alias: event.target.value })} />
       <Input label={t("note")} value={form.note} maxLength={1000}
         onChange={(event) => setForm({ ...form, note: event.target.value })} />
-      <Select<string, true> multiple label={t("tags")} value={form.tags}
-        items={Array.from(new Set([...tags.map((tag) => tag.name), ...form.tags])).map((name) => ({ value: name, label: name }))}
-        onValueChange={(value) => setForm({ ...form, tags: value })} />
+      <TagPicker label={t("tags")} value={form.tags}
+        options={tags.map((tag) => tag.name)}
+        onChange={(value) => setForm({ ...form, tags: value })} />
     </BookDialog>
   );
 }
@@ -528,38 +544,77 @@ function TagDialog({ book, tag, onSaved, onClose }: {
   );
 }
 
-function ImportDialog({ book, onClose }: { book: Book; onClose: () => void }) {
+function ImportDialog({ book }: { book: Book }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const toasts = useKumoToastManager();
+  const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
   const peers = useQuery({
     queryKey: [...bookKey, "import-devices", search],
+    enabled: open,
     queryFn: () => apiGet<{ list: BookPeer[] }>("/api/admin/my/peer/list", { id: search, page_size: 100 }),
   });
-  const options = (peers.data?.list ?? []).map((peer) => ({
-    value: peer.row_id,
-    label: peer.hostname ? `${peer.hostname} · ${peer.id}` : peer.id,
-  }));
   const save = useMutation({
     mutationFn: () => apiPost(`/api/ab/peer/import/${encodeURIComponent(book.guid)}`, { peer_ids: selected }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: [...bookKey, book.guid] }); onClose(); },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...bookKey, book.guid] });
+      setOpen(false);
+      toasts.add({ title: t("bookImportDone"), variant: "success" });
+    },
   });
   return (
-    <BookDialog title={t("bookImport")} pending={save.isPending} action={t("bookImport")}
-      error={save.error ? message(save.error, t("operationFailed")) : undefined}
-      onClose={onClose} onSubmit={(event) => { event.preventDefault(); if (selected.length) save.mutate(); }}>
-      <Input label={t("deviceId")} value={search} onChange={(event) => { setSearch(event.target.value); setSelected([]); }} />
-      <Select<number, true> multiple label={t("devices")} items={options} loading={peers.isFetching}
-        value={selected} onValueChange={setSelected} />
-      {peers.error && <TableState tone="error">{message(peers.error, t("operationFailed"))}</TableState>}
-    </BookDialog>
+    <LayerDialog open={open} dismissDisabled={save.isPending} onOpenChange={(next) => {
+      if (next) {
+        setSearch("");
+        setSelected([]);
+        save.reset();
+      }
+      setOpen(next);
+    }}>
+      <LayerDialog.Trigger render={<Button size="sm" variant="secondary" icon={DownloadSimple} />}>
+        {t("bookImport")}
+      </LayerDialog.Trigger>
+      <LayerDialog.Content>
+        <LayerDialog.Title>{t("bookImport")}</LayerDialog.Title>
+        <LayerDialog.Body>
+          <div className="grid gap-4">
+            <Input className="w-full" label={t("deviceId")} value={search} onChange={(event) => setSearch(event.target.value)} />
+            <fieldset className="min-w-0">
+              <legend className="mb-2 text-sm font-medium">{t("devices")}</legend>
+              <p className="mb-2 text-sm text-kumo-subtle" role="status">{t("bookImportSelected", { count: selected.length })}</p>
+              {peers.isPending && <TableState tone="loading">{t("loading")}</TableState>}
+              {peers.data?.list.length === 0 && <TableState tone="empty">{t("noData")}</TableState>}
+              {peers.data?.list.length ? (
+                <div className="grid max-h-64 gap-1 overflow-y-auto rounded-md border border-kumo-line p-2">
+                  {peers.data.list.map((peer) => (
+                    <Checkbox key={peer.row_id} checked={selected.includes(peer.row_id)}
+                      label={<span className="break-all text-sm">{peer.hostname ? `${peer.hostname} · ${peer.id}` : peer.id}</span>}
+                      onCheckedChange={(checked) => setSelected((ids) =>
+                        checked ? [...ids, peer.row_id] : ids.filter((id) => id !== peer.row_id))} />
+                  ))}
+                </div>
+              ) : null}
+            </fieldset>
+            {peers.error && <TableState tone="error">{message(peers.error, t("operationFailed"))}</TableState>}
+            {save.error && <p role="alert" className="text-sm text-kumo-danger">{message(save.error, t("operationFailed"))}</p>}
+          </div>
+        </LayerDialog.Body>
+        <LayerDialog.Actions dismissLabel={t("cancel")}>
+          <LayerDialog.Action disabled={!selected.length} loading={save.isPending} onClick={() => save.mutate()}>
+            {t("bookImport")}
+          </LayerDialog.Action>
+        </LayerDialog.Actions>
+      </LayerDialog.Content>
+    </LayerDialog>
   );
 }
 
 function TrashDialog({ book, onClose }: { book: Book; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const toasts = useKumoToastManager();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState<Record<string, string>>({});
   const [permanent, setPermanent] = useState<BookPeer | "all" | null>(null);
@@ -574,7 +629,10 @@ function TrashDialog({ book, onClose }: { book: Book; onClose: () => void }) {
   };
   const restore = useMutation({
     mutationFn: (peer: BookPeer) => apiPost(`/api/ab/trash/restore/${encodeURIComponent(book.guid)}`, { id: peer.row_id }),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      toasts.add({ title: t("operationSuccess"), variant: "success" });
+    },
   });
   const purge = useMutation({
     mutationFn: (target: BookPeer | "all") => remove(base, { id: target === "all" ? null : target.row_id }),
@@ -583,27 +641,29 @@ function TrashDialog({ book, onClose }: { book: Book; onClose: () => void }) {
   return (
     <>
       <Dialog.Root open onOpenChange={(open) => { if (!open && !permanent) onClose(); }}>
-        <Dialog size="lg" className={dialogPanelClass}>
+        <Dialog size="lg" className={resourceFormDialogPanelClass}>
           <DialogHeader title={t("bookTrash")} description={book.owner ? book.name : t("myAddressBook")} />
           <DialogBody>
-            <div className="grid gap-4">
-              <div className="grid gap-2 sm:grid-cols-3">
+            <div className="@container grid min-w-0 gap-4">
+              <div className="grid gap-3 @lg:grid-cols-3">
                 {peerFields.slice(0, 3).map(([field, key]) => (
-                  <Input key={field} label={t(key)} value={search[field] ?? ""}
-                    onChange={(event) => { setSearch({ ...search, [field]: event.target.value }); setPage(1); }} />
+                  <div key={field} className="min-w-0">
+                    <Input className="w-full min-w-0" label={t(key)} value={search[field] ?? ""}
+                      onChange={(event) => { setSearch({ ...search, [field]: event.target.value }); setPage(1); }} />
+                  </div>
                 ))}
               </div>
-              <DeviceTable trash rows={list.data?.data ?? []} actions={(peer) => (
+              {list.data?.data.length ? <DeviceTable trash rows={list.data.data} actions={(peer) => (
                 <div className="flex gap-1">
                   <Button size="xs" variant="secondary" loading={restore.isPending && restore.variables?.row_id === peer.row_id}
                     disabled={restore.isPending} onClick={() => restore.mutate(peer)}>{t("bookRestore")}</Button>
                   <Button size="xs" variant="ghost" onClick={() => { purge.reset(); setPermanent(peer); }}>{t("delete")}</Button>
                 </div>
-              )} />
+              )} /> : null}
               {list.isPending && <TableState tone="loading">{t("loading")}</TableState>}
               {list.error && <TableState tone="error">{message(list.error, t("operationFailed"))}</TableState>}
               {list.data?.total === 0 && <TableState tone="empty">{t("noData")}</TableState>}
-              {list.data && <Pager page={page} total={list.data.total} setPage={setPage} />}
+              {list.data && (page > 1 || list.data.total > pageSize) && <Pager page={page} total={list.data.total} setPage={setPage} />}
             </div>
           </DialogBody>
           <DialogFooter error={restore.error ? message(restore.error, t("operationFailed")) : undefined}>
@@ -686,19 +746,20 @@ function GrantDialog({ book, onClose }: { book: Book; onClose: () => void }) {
             {rules.data && <Pager page={page} total={rules.data.total} setPage={setPage} />}
             <form className="mt-4 grid items-end gap-3 border-t border-kumo-line pt-4 sm:grid-cols-2"
               onSubmit={(event) => { event.preventDefault(); if (editing || target.trim() || type === "everyone") save.mutate(); }}>
-              <Select<Grant["type"]> label={t("type")} value={type} disabled={Boolean(editing)}
-                items={[
-                  { value: "user", label: t("rulePersonal") },
-                  { value: "group", label: t("ruleGroup") },
-                  { value: "everyone", label: t("bookEveryone") },
-                ]}
-                onValueChange={(value) => { if (value) { setType(value); setTarget(""); } }} />
+              <Radio.Group<Grant["type"]> legend={t("type")} value={type} disabled={Boolean(editing)}
+                orientation="horizontal" className="sm:col-span-2"
+                onValueChange={(value) => { setType(value); setTarget(""); }}>
+                <Radio.Item label={t("rulePersonal")} value="user" />
+                <Radio.Item label={t("ruleGroup")} value="group" />
+                <Radio.Item label={t("bookEveryone")} value="everyone" />
+              </Radio.Group>
               {type !== "everyone" && <Input label={t(type === "user" ? "username" : "bookGroupName")}
                 value={target} disabled={Boolean(editing)} required maxLength={120} onChange={(event) => setTarget(event.target.value)} />}
-              <Select<number> label={t("rule")} value={level}
-                items={[1, 2, 3].map((rule) => ({ value: rule, label: t(permissionLabels[rule]) }))}
-                onValueChange={(value) => { if (value) setLevel(value); }} />
-              <div className="flex justify-end gap-2">
+              <Radio.Group<number> legend={t("rule")} value={level} orientation="horizontal"
+                className="sm:col-span-2" onValueChange={setLevel}>
+                {[1, 2, 3].map((rule) => <Radio.Item<number> key={rule} value={rule} label={t(permissionLabels[rule])} />)}
+              </Radio.Group>
+              <div className="flex justify-end gap-2 sm:col-span-2">
                 {editing && <Button type="button" variant="secondary" onClick={() => {
                   setEditing(undefined); setType("user"); setTarget(""); setLevel(1);
                 }}>{t("cancel")}</Button>}

@@ -1,15 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input } from "@cloudflare/kumo/components/input";
 import { Switch } from "@cloudflare/kumo/components/switch";
+import { Tabs } from "@cloudflare/kumo/components/tabs";
+import { useKumoToastManager } from "@cloudflare/kumo/components/toast";
 import {
   CheckCircle,
   EnvelopeSimple,
   Eye,
   GearSix,
+  ImageSquare,
   Info,
   NotePencil,
   PaperPlaneTilt,
@@ -33,6 +36,7 @@ import { LdapSettingsPanel } from "./LdapSettingsPanel";
 
 interface AdminConfigView {
   title: string;
+  logo?: string;
   hello: string;
   hello_raw: string;
   hello_file: string;
@@ -41,6 +45,7 @@ interface AdminConfigView {
 
 interface AdminConfigForm {
   title: string;
+  logo?: string;
   hello: string;
   hello_file: string;
 }
@@ -85,6 +90,7 @@ type SettingsTab = "site" | "security" | "ldap" | "features";
 
 const emptyForm: AdminConfigForm = {
   title: "",
+  logo: "",
   hello: "",
   hello_file: "",
 };
@@ -113,6 +119,7 @@ const emptyEmailForm: EmailSettingsForm = {
 function normalizeConfig(config: Partial<AdminConfigView>): AdminConfigForm {
   return {
     title: config.title ?? "",
+    logo: config.logo ?? "",
     hello: config.hello_raw ?? "",
     hello_file: config.hello_file ?? "",
   };
@@ -151,10 +158,12 @@ export function SystemSettingsPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [form, setForm] = useState<AdminConfigForm>(emptyForm);
+  const logoInput = useRef<HTMLInputElement>(null);
+  const [readingLogo, setReadingLogo] = useState(false);
   const [loginForm, setLoginForm] =
     useState<LoginSecuritySettings>(emptyLoginSecurity);
   const [emailForm, setEmailForm] = useState<EmailSettingsForm>(emptyEmailForm);
-  const [message, setMessage] = useState("");
+  const toasts = useKumoToastManager();
   const [error, setError] = useState("");
   const [securityMessage, setSecurityMessage] = useState("");
   const [securityError, setSecurityError] = useState("");
@@ -221,7 +230,7 @@ export function SystemSettingsPage() {
       apiPatch<AdminConfigView>("/api/admin/config/admin/manage", payload),
     onSuccess: (saved) => {
       setForm(normalizeConfig(saved));
-      setMessage(t("siteWelcomeSaved"));
+      toasts.add({ title: t("siteWelcomeSaved"), variant: "success" });
       setError("");
       void qc.invalidateQueries({ queryKey: ["admin-panel-config"] });
       void qc.invalidateQueries({ queryKey: ["public-admin-config"] });
@@ -229,7 +238,6 @@ export function SystemSettingsPage() {
     onError: (err) => {
       const ae = err as ApiError;
       setError(ae.message || t("operationFailed"));
-      setMessage("");
     },
   });
   const saveSecurity = useMutation({
@@ -329,8 +337,23 @@ export function SystemSettingsPage() {
 
   const updateField = (field: keyof AdminConfigForm, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
-    setMessage("");
     setError("");
+  };
+  const loadLogo = (file: File) => {
+    if ((file.type && file.type !== "image/png") || file.size > 256 * 1024) {
+      setError(t("siteLogoInvalid"));
+      return;
+    }
+    setReadingLogo(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const encoded = String(reader.result).split(",")[1];
+      if (encoded) updateField("logo", encoded);
+      else setError(t("siteLogoInvalid"));
+    };
+    reader.onerror = () => setError(t("siteLogoInvalid"));
+    reader.onloadend = () => setReadingLogo(false);
+    reader.readAsDataURL(file);
   };
   const updateLoginSecurity = <K extends keyof LoginSecuritySettings>(
     field: K,
@@ -378,6 +401,7 @@ export function SystemSettingsPage() {
   const saveSiteSettings = () =>
     save.mutate({
       title: form.title.trim(),
+      logo: form.logo === (config.data?.logo ?? "") ? undefined : form.logo,
       hello: form.hello.trim(),
       hello_file: form.hello_file.trim(),
     });
@@ -400,27 +424,11 @@ export function SystemSettingsPage() {
     setSecurityMessage("");
     setSecurityError("");
   };
-  const tabs: Array<{ key: SettingsTab; label: string; hint: string }> = [
-    {
-      key: "site",
-      label: t("settingsTabSiteIdentity"),
-      hint: t("settingsTabSiteIdentityHint"),
-    },
-    {
-      key: "security",
-      label: t("settingsTabLoginSecurity"),
-      hint: t("settingsTabLoginSecurityHint"),
-    },
-    {
-      key: "ldap",
-      label: t("ldapSettingsTab"),
-      hint: t("ldapSettingsTabHint"),
-    },
-    {
-      key: "features",
-      label: t("selfSignedFeatureTab"),
-      hint: t("selfSignedFeatureTabHint"),
-    },
+  const tabs: Array<{ value: SettingsTab; label: string }> = [
+    { value: "site", label: t("settingsTabSiteIdentity") },
+    { value: "security", label: t("settingsTabLoginSecurity") },
+    { value: "ldap", label: t("ldapSettingsTab") },
+    { value: "features", label: t("selfSignedFeatureTab") },
   ];
 
   return (
@@ -433,44 +441,22 @@ export function SystemSettingsPage() {
           </p>
         </div>
         {activeTab === "site" && (
-          <Button loading={save.isPending} onClick={saveSiteSettings}>
+          <Button loading={save.isPending} disabled={readingLogo || !config.data || config.isError} onClick={saveSiteSettings}>
             <GearSix size={16} />
             {t("writeSystemSettings")}
           </Button>
         )}
       </div>
 
-      <div
-        role="tablist"
-        aria-label={t("systemSettings")}
-        className="grid gap-1 rounded-lg border border-kumo-line bg-kumo-elevated p-1 sm:grid-cols-2 xl:grid-cols-4"
-      >
-        {tabs.map((tab) => {
-          const selected = activeTab === tab.key;
-          return (
-            <button
-              key={tab.key}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              className={[
-                "min-h-11 rounded-md px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand",
-                selected
-                  ? "bg-kumo-base text-kumo-default shadow-sm"
-                  : "text-kumo-subtle hover:bg-kumo-tint/60 hover:text-kumo-default",
-              ].join(" ")}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              <span className="block text-sm font-semibold">{tab.label}</span>
-              <span className="mt-0.5 block text-xs leading-5">{tab.hint}</span>
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        tabs={tabs}
+        value={activeTab}
+        onValueChange={(value) => {
+          const tab = tabs.find((item) => item.value === value);
+          if (tab) setActiveTab(tab.value);
+        }}
+      />
 
-      {activeTab === "site" && message && (
-        <InlineMessage tone="success">{message}</InlineMessage>
-      )}
       {activeTab === "ldap" && <LdapSettingsPanel />}
       {activeTab === "features" && <SelfSignedClientFeatureToggle />}
       {activeTab === "site" && error && (
@@ -531,6 +517,34 @@ export function SystemSettingsPage() {
                   {t("siteTitleHint")}
                 </span>
               </label>
+
+              <div className="flex flex-wrap items-center gap-4 rounded-lg border border-kumo-line bg-kumo-base p-3">
+                <div className="flex size-16 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-elevated p-2 text-kumo-subtle">
+                  {form.logo ? (
+                    <img src={`data:image/png;base64,${form.logo}`} alt={t("siteLogo")} className="size-full object-contain" />
+                  ) : (
+                    <ImageSquare size={24} aria-hidden />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 basis-48">
+                  <p className="text-sm font-medium">{t("siteLogo")}</p>
+                  <p className="mt-1 text-xs leading-5 text-kumo-subtle">{t("siteLogoHint")}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <input hidden ref={logoInput} type="file" accept="image/png,.png" aria-label={t("siteLogoUpload")}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        if (file) loadLogo(file);
+                      }} />
+                    <Button size="sm" variant="secondary" loading={readingLogo} disabled={save.isPending} onClick={() => logoInput.current?.click()}>
+                      {t("siteLogoUpload")}
+                    </Button>
+                    {form.logo && <Button size="sm" variant="ghost" disabled={readingLogo || save.isPending} onClick={() => updateField("logo", "")}>
+                      {t("siteLogoRemove")}
+                    </Button>}
+                  </div>
+                </div>
+              </div>
 
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium">

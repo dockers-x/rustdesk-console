@@ -1,3 +1,4 @@
+InvalidSiteLogo = "请选择不超过 512 × 512 像素和 256 KB 的有效静态 PNG。"
 ResetCodeInvalid = "重置口令不正确或已过期。"
 DirectoryPasswordManaged = "此账号的密码由目录服务管理。"
 ResetMailSmtpRequired = "请先配置并启用 SMTP，再发送密码重置邮件。"

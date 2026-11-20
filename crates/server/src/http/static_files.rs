@@ -20,6 +20,25 @@ pub async fn index() -> Response {
     Redirect::temporary("/_admin/").into_response()
 }
 
+pub async fn favicon(State(state): State<AppState>) -> Response {
+    let (mime, bytes) = match state.admin_config.logo_bytes().await {
+        Some(logo) => ("image/png", logo),
+        None => (
+            "image/svg+xml",
+            Resources::read("web/favicon.svg").unwrap_or_default(),
+        ),
+    };
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, "no-cache"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 /// `GET /webclient-config/index.js` -> bootstraps the web client's defaults.
 pub async fn config_js(State(state): State<AppState>) -> Response {
     let cfg = state.webclient_config.get().await;

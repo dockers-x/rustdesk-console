@@ -17,7 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cloudflare/kumo": "^2.19.0",
+    "@cloudflare/kumo": "2.19.0",
     "@phosphor-icons/react": "^2.1.10",
     "@tanstack/react-query": "^5.59.0",
     "@tanstack/react-table": "^8.20.5",

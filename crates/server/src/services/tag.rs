@@ -49,6 +49,45 @@ pub async fn list_by_user_id(
         .await
 }
 
+pub async fn list_address_book_tags(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+) -> Result<Vec<tag::Model>, DbErr> {
+    let mut tags = list_by_user_and_collection(db, user_id, collection_id).await?;
+    let mut names: HashSet<String> = tags.iter().map(|tag| tag.name.clone()).collect();
+    // Older entries can carry tag names without rows in the tag catalogue.
+    let assigned = address_book::Entity::find()
+        .select_only()
+        .column(address_book::Column::Tags)
+        .filter(address_book::Column::UserId.eq(user_id))
+        .filter(address_book::Column::CollectionId.eq(collection_id))
+        .distinct()
+        .into_tuple::<serde_json::Value>()
+        .all(db)
+        .await?;
+    for name in assigned
+        .iter()
+        .filter_map(serde_json::Value::as_array)
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+    {
+        if !name.trim().is_empty() && names.insert(name.to_owned()) {
+            tags.push(tag::Model {
+                id: 0,
+                name: name.to_owned(),
+                color: 0,
+                user_id,
+                collection_id,
+                created_at: None,
+                updated_at: None,
+            });
+        }
+    }
+    tags.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(tags)
+}
+
 pub struct TagListResult {
     pub list: Vec<tag::Model>,
     pub page: i64,
@@ -367,6 +406,27 @@ mod tests {
             .unwrap();
         }
         db
+    }
+
+    #[tokio::test]
+    async fn address_book_catalogue_includes_scoped_legacy_tags() {
+        let db = setup_peer_tags_db().await;
+        address_book::ActiveModel {
+            user_id: Set(2),
+            collection_id: Set(2),
+            tags: Set(serde_json::json!(["private"])),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let tags = list_address_book_tags(&db, 1, 2).await.unwrap();
+        assert_eq!(
+            tags.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>(),
+            ["keep", "old", "older"]
+        );
+        assert!(tags[1].id > 0);
+        assert_eq!(tags[2].id, 0);
     }
 
     #[tokio::test]

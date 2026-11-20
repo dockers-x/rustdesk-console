@@ -24,6 +24,11 @@ pub fn build(state: AppState) -> Router {
         .merge(crate::http::developer::routes())
         // web index + config
         .route("/", get(static_files::index))
+        .route("/favicon.ico", get(static_files::favicon))
+        .route(
+            crate::support::admin_config::FAVICON_PATH,
+            get(static_files::favicon),
+        )
         .route("/health", get(observability::health))
         .route("/metrics", get(observability::metrics))
         // ---- client API (/api) ----

@@ -495,7 +495,22 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     columns: [
       { key: "id", label: "id" },
       { key: "name", label: "name" },
-      monoCol("scopes", "scopes", "max-w-64"),
+      {
+        key: "scopes",
+        label: "scopes",
+        render: (row) => {
+          let scopes = row.scopes;
+          if (typeof scopes === "string" && scopes.trimStart().startsWith("[")) {
+            try { scopes = JSON.parse(scopes) as unknown; } catch { return String(scopes); }
+          }
+          const names = tagNamesFromValue(scopes);
+          return names.length ? (
+            <div className="flex max-w-64 flex-wrap gap-1">
+              {names.map((name) => <Badge key={name}>{name}</Badge>)}
+            </div>
+          ) : "—";
+        },
+      },
       { key: "default_user_id", label: "defaultUserId" },
       { key: "default_device_group_id", label: "defaultDeviceGroupId" },
       { key: "default_strategy_id", label: "defaultStrategyId" },
@@ -510,8 +525,9 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       {
         name: "scopes",
         label: "scopes",
-        type: "textarea",
-        defaultValue: "deploy,assign,strategy_assign,address_book_assign",
+        type: "scope_tags",
+        options: ["deploy", "assign", "strategy_assign", "address_book_assign"].map((value) => ({ value, label: value })),
+        defaultValue: ["deploy", "assign", "strategy_assign", "address_book_assign"],
         hint: "deploymentTokenScopesHint",
       },
       {

@@ -11,6 +11,7 @@ import {
   ClockCounterClockwise,
   Desktop,
   FileText,
+  FlowArrow,
   Folders,
   GearSix,
   GlobeHemisphereWest,
@@ -41,7 +42,7 @@ import {
 } from "@phosphor-icons/react";
 import { clearToken, getAuthSessionId } from "../lib/auth";
 import { canAccessConsolePath, type RestrictedConsoleRole } from "../lib/access";
-import { useAppTitle } from "../lib/adminTitle";
+import { useAppBranding } from "../lib/adminTitle";
 import { getMode, setMode } from "../lib/theme";
 import { selfSignedEnabled, useFeatures } from "../features/self-signed-client/api";
 import {
@@ -59,7 +60,7 @@ const NAV_ICONS: Record<string, IconType> = {
   overview: ChartBar,
   myInfo: User,
   messageCenter: Bell,
-  notificationRouting: Bell,
+  notificationRouting: FlowArrow,
   myPeers: Desktop,
   myAddressBook: AddressBook,
   myCollections: BookBookmark,
@@ -223,7 +224,7 @@ export function AppShell({
   const { t } = useTranslation();
   const features = useFeatures(isAdmin);
   const showSelfSignedClients = selfSignedEnabled(features.data);
-  const appTitle = useAppTitle();
+  const { title: appTitle, logoUrl } = useAppBranding();
   const navigate = useNavigate();
   const location = useLocation();
   const authSession = getAuthSessionId();
@@ -404,9 +405,13 @@ export function AppShell({
             navCompact && "justify-center px-0",
           )}
         >
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-kumo-tint text-kumo-brand">
-            <Monitor size={20} />
-          </span>
+          {logoUrl ? (
+            <img src={logoUrl} alt="" className="size-8 shrink-0 object-contain" />
+          ) : (
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-kumo-tint text-kumo-brand">
+              <Monitor size={20} />
+            </span>
+          )}
           {!navCompact && (
             <span className="truncate" title={appTitle}>
               {appTitle}

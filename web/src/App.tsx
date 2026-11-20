@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "@cloudflare/kumo/components/button";
+import { Toasty } from "@cloudflare/kumo/components/toast";
 import {
   HashRouter,
   Navigate,
@@ -139,7 +140,9 @@ export default function App() {
             <RequireAuth>
               <AuthenticatedRouteBoundary>
                 <Suspense fallback={<RouteLoading />}>
-                  <AuthenticatedApp />
+                  <Toasty container={document.getElementById("console-toast-layer") ?? undefined}>
+                    <AuthenticatedApp />
+                  </Toasty>
                 </Suspense>
               </AuthenticatedRouteBoundary>
             </RequireAuth>

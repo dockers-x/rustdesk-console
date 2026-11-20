@@ -15,6 +15,7 @@ export type FieldType =
   | "expiration"
   | "strategy_options"
   | "tag_names"
+  | "scope_tags"
   | "textarea";
 
 export interface SelectOption {

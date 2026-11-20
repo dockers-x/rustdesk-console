@@ -1,3 +1,4 @@
+InvalidSiteLogo = "Choose a valid static PNG up to 512 × 512 pixels and 256 KB."
 ResetCodeInvalid = "The reset code is incorrect or has expired."
 DirectoryPasswordManaged = "This password is managed by the directory."
 ResetMailSmtpRequired = "Configure and enable SMTP before sending password reset emails."

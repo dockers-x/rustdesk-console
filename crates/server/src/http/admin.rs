@@ -23,7 +23,7 @@ use crate::services::console_roles::ConsoleRole;
 use crate::services::login_security::{ChallengeSources, VerificationKind};
 use crate::services::user::{LoginProof, AUTH_ENROLLMENT, AUTH_TOTP};
 use crate::state::AppState;
-use crate::support::admin_config::AdminPanelConfig;
+use crate::support::admin_config::{AdminPanelConfig, logo_is_valid};
 use crate::support::record_storage_config::RecordStorageConfigForm;
 use crate::support::webclient_config::WebClientConfig;
 
@@ -542,6 +542,7 @@ pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUse
         return resp::success(json!({
             "title": cfg.title,
             "timezone": timezone,
+            "logo_url": cfg.logo_url,
         }));
     };
     let cfg = state.admin_config.view(Some(&user.user.username)).await;
@@ -549,6 +550,7 @@ pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUse
         "title": cfg.title,
         "hello": cfg.hello,
         "timezone": timezone,
+        "logo_url": cfg.logo_url,
     }))
 }
 
@@ -561,6 +563,7 @@ pub async fn config_admin_manage(State(state): State<AppState>, user: AdminUser)
         "hello_raw": cfg.hello_raw,
         "hello_file": cfg.hello_file,
         "timezone": timezone,
+        "logo": cfg.logo,
     }))
 }
 
@@ -575,6 +578,9 @@ pub async fn config_admin_update(
         || f.hello.chars().count() > 5000
     {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    if f.logo.as_deref().is_some_and(|logo| !logo_is_valid(logo)) {
+        return resp::fail(101, state.tr(&lang, "InvalidSiteLogo"));
     }
 
     match state.admin_config.update(f).await {

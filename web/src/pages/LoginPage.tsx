@@ -16,7 +16,7 @@ import {
   canAccessConsolePath,
   hasAdminAccess,
 } from "../lib/access";
-import { useAppTitle } from "../lib/adminTitle";
+import { useAppBranding } from "../lib/adminTitle";
 import { apiGet, apiPost, ApiError } from "../lib/api";
 import { clearOidcCode, getOidcCode, setOidcCode, setToken } from "../lib/auth";
 
@@ -125,7 +125,7 @@ function browserName() {
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const appTitle = useAppTitle();
+  const { title: appTitle, logoUrl } = useAppBranding();
   const navigate = useNavigate();
   const location = useLocation();
   const locationState = location.state as {
@@ -520,10 +520,14 @@ export function LoginPage() {
           <section className="relative overflow-hidden p-6 sm:p-8 lg:p-10">
             <div className="relative flex h-full min-h-[180px] flex-col justify-between gap-6 sm:min-h-[240px] lg:min-h-[280px] lg:gap-10">
               <div>
-                <div className="inline-flex items-center gap-2 text-xs font-medium text-kumo-subtle">
-                  <Monitor size={16} aria-hidden />
-                  <span>{t("loginSurfaceTag")}</span>
-                </div>
+                {logoUrl ? (
+                  <img src={logoUrl} alt="" className="size-14 object-contain" />
+                ) : (
+                  <div className="inline-flex items-center gap-2 text-xs font-medium text-kumo-subtle">
+                    <Monitor size={16} aria-hidden />
+                    <span>{t("loginSurfaceTag")}</span>
+                  </div>
+                )}
                 <h1 className="mt-5 max-w-xl break-words text-3xl font-semibold leading-tight sm:text-4xl lg:text-4xl">
                   {appTitle}
                 </h1>

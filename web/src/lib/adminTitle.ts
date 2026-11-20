@@ -6,9 +6,11 @@ import { apiGet } from "./api";
 interface PublicAdminConfig {
   title?: string;
   timezone?: string;
+  logo_url?: string | null;
 }
 
 const normalizeTitle = (title?: string | null) => title?.trim() ?? "";
+const defaultFavicon = "/api/admin/config/favicon";
 
 export function usePublicAdminConfig() {
   return useQuery({
@@ -18,18 +20,26 @@ export function usePublicAdminConfig() {
   });
 }
 
-export function useAppTitle() {
+export function useAppBranding() {
   const { t } = useTranslation();
   const config = usePublicAdminConfig();
-  return normalizeTitle(config.data?.title) || t("appTitle");
+  return {
+    title: normalizeTitle(config.data?.title) || t("appTitle"),
+    logoUrl: config.data?.logo_url,
+  };
 }
 
 export function AppTitleController() {
-  const appTitle = useAppTitle();
+  const { title, logoUrl } = useAppBranding();
 
   useEffect(() => {
-    document.title = appTitle;
-  }, [appTitle]);
+    document.title = title;
+  }, [title]);
+
+  useEffect(() => {
+    const favicon = document.querySelector<HTMLLinkElement>("#console-favicon");
+    if (favicon) favicon.href = logoUrl || defaultFavicon;
+  }, [logoUrl]);
 
   return null;
 }

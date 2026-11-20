@@ -1,16 +1,25 @@
 use std::fmt::Write as _;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::config::Admin;
+
+const MAX_LOGO_BYTES: usize = 256 * 1024;
+const MAX_LOGO_DIMENSION: u32 = 512;
+pub const FAVICON_PATH: &str = "/api/admin/config/favicon";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AdminPanelConfig {
     pub title: String,
     pub hello: String,
     pub hello_file: String,
+    #[serde(default)]
+    pub logo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -19,6 +28,8 @@ pub struct AdminPanelConfigView {
     pub hello: String,
     pub hello_raw: String,
     pub hello_file: String,
+    pub logo: String,
+    pub logo_url: Option<String>,
 }
 
 impl From<&Admin> for AdminPanelConfig {
@@ -27,6 +38,8 @@ impl From<&Admin> for AdminPanelConfig {
             title: value.title.clone(),
             hello: value.hello.clone(),
             hello_file: value.hello_file.clone(),
+            logo: (!value.logo.is_empty() && logo_is_valid(&value.logo))
+                .then(|| value.logo.clone()),
         }
     }
 }
@@ -37,8 +50,42 @@ impl AdminPanelConfig {
             title: self.title.trim().to_string(),
             hello: self.hello.trim().to_string(),
             hello_file: self.hello_file.trim().to_string(),
+            logo: self.logo,
         }
     }
+}
+
+pub fn logo_is_valid(logo: &str) -> bool {
+    if logo.is_empty() {
+        return true;
+    }
+    if logo.len() > MAX_LOGO_BYTES.div_ceil(3) * 4 {
+        return false;
+    }
+    let Ok(bytes) = STANDARD.decode(logo) else {
+        return false;
+    };
+    if bytes.len() > MAX_LOGO_BYTES {
+        return false;
+    }
+    let decoder = png::Decoder::new_with_limits(
+        Cursor::new(bytes),
+        png::Limits {
+            bytes: 4 * 1024 * 1024,
+        },
+    );
+    let Ok(mut reader) = decoder.read_info() else {
+        return false;
+    };
+    let info = reader.info();
+    if info.width > MAX_LOGO_DIMENSION
+        || info.height > MAX_LOGO_DIMENSION
+        || info.animation_control.is_some()
+    {
+        return false;
+    }
+    let mut output = vec![0; reader.output_buffer_size()];
+    reader.next_frame(&mut output).is_ok() && reader.finish().is_ok()
 }
 
 #[derive(Debug)]
@@ -66,12 +113,23 @@ impl AdminConfigStore {
         if let Some(username) = username {
             hello = hello.replace("{{username}}", username);
         }
+        let logo = current.logo.unwrap_or_default();
+        let logo_url =
+            (!logo.is_empty()).then(|| format!("{FAVICON_PATH}?v={:x}", Sha256::digest(&logo)));
         AdminPanelConfigView {
             title: current.title,
             hello,
             hello_raw: current.hello,
             hello_file: current.hello_file,
+            logo,
+            logo_url,
         }
+    }
+
+    pub async fn logo_bytes(&self) -> Option<Vec<u8>> {
+        let current = self.current.read().await;
+        let encoded = current.logo.as_deref().filter(|logo| !logo.is_empty())?;
+        STANDARD.decode(encoded).ok()
     }
 
     pub async fn update(&self, next: AdminPanelConfig) -> anyhow::Result<AdminPanelConfig> {
@@ -80,6 +138,9 @@ impl AdminConfigStore {
             next.title = "RustDesk Console".to_string();
         }
         let mut current = self.current.write().await;
+        if next.logo.is_none() {
+            next.logo.clone_from(&current.logo);
+        }
         persist_to_config_file(&self.config_path, &next)?;
         *current = next.clone();
         Ok(next)
@@ -106,6 +167,7 @@ fn patch_admin_section(raw: &str, cfg: &AdminPanelConfig) -> String {
         ("title", cfg.title.as_str()),
         ("hello-file", cfg.hello_file.as_str()),
         ("hello", cfg.hello.as_str()),
+        ("logo", cfg.logo.as_deref().unwrap_or_default()),
     ];
 
     let Some(start) = section_start else {
@@ -231,4 +293,74 @@ fn yaml_double_quoted(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png_logo(width: u32) -> String {
+        let mut bytes = Vec::new();
+        let mut png = png::Encoder::new(&mut bytes, width, 1);
+        png.set_color(png::ColorType::Rgba);
+        png.set_depth(png::BitDepth::Eight);
+        png.write_header()
+            .unwrap()
+            .write_image_data(&vec![0; width as usize * 4])
+            .unwrap();
+        STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn accepts_only_bounded_decodable_png_logos() {
+        assert!(logo_is_valid(&png_logo(512)));
+        assert!(!logo_is_valid(&png_logo(513)));
+        assert!(!logo_is_valid(&STANDARD.encode("<svg></svg>")));
+        assert!(!logo_is_valid(
+            &STANDARD.encode(vec![0; MAX_LOGO_BYTES + 1])
+        ));
+        let mut truncated = STANDARD.decode(png_logo(1)).unwrap();
+        truncated.truncate(20);
+        assert!(!logo_is_valid(&STANDARD.encode(truncated)));
+    }
+
+    #[tokio::test]
+    async fn legacy_update_preserves_logo_and_empty_logo_clears_it() {
+        let path = std::env::temp_dir().join(format!("console-logo-{}.yaml", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "admin:\n  title: Original\n").unwrap();
+        let store = AdminConfigStore::new(path.clone(), AdminPanelConfig::default());
+        let logo = png_logo(1);
+        store
+            .update(AdminPanelConfig {
+                logo: Some(logo.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        store
+            .update(AdminPanelConfig {
+                title: "Renamed".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(store.view(None).await.logo, logo);
+        assert_eq!(
+            store.logo_bytes().await,
+            Some(STANDARD.decode(&logo).unwrap())
+        );
+        assert!(std::fs::read_to_string(&path).unwrap().contains(&logo));
+
+        store
+            .update(AdminPanelConfig {
+                logo: Some(String::new()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(store.logo_bytes().await.is_none());
+        assert!(store.view(None).await.logo_url.is_none());
+        assert!(!std::fs::read_to_string(&path).unwrap().contains(&logo));
+        std::fs::remove_file(path).unwrap();
+    }
 }

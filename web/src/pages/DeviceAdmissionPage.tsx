@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { Info } from "@phosphor-icons/react";
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { Banner } from "@cloudflare/kumo/components/banner";
-import { Button } from "@cloudflare/kumo/components/button";
+import { Button, LinkButton } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
+import { LayerDialog } from "@cloudflare/kumo/components/layer-dialog";
 import { Switch } from "@cloudflare/kumo/components/switch";
 import { Table } from "@cloudflare/kumo/components/table";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
+import { useKumoToastManager } from "@cloudflare/kumo/components/toast";
 import { TableState } from "../components/TableState";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DialogBody, DialogFooter, DialogHeader, dialogPanelClass } from "../components/DialogLayout";
@@ -30,10 +33,52 @@ interface DeviceReview {
 const admissionKey = ["device-admission"];
 const base = "/api/admin/device-admission";
 const pageSize = 20;
+const deploymentCommand = 'rustdesk --deploy --token "DEPLOYMENT_TOKEN"';
+
+function AdmissionHelp() {
+  const { t } = useTranslation();
+  return (
+    <LayerDialog>
+      <LayerDialog.Trigger render={<Button shape="square" className="max-sm:size-11" variant="ghost" aria-label={t("admissionHelp")} />}>
+        <Info size={20} aria-hidden />
+      </LayerDialog.Trigger>
+      <LayerDialog.Content size="lg" closeLabel={t("close")}>
+        <LayerDialog.Title>{t("admissionHelp")}</LayerDialog.Title>
+        <LayerDialog.Description>{t("requireDeviceDeploymentHint")}</LayerDialog.Description>
+        <LayerDialog.Body>
+          <div className="grid gap-5 text-sm leading-6 [overflow-wrap:anywhere]">
+            <section>
+              <h3 className="mb-2 font-semibold">{t("admissionHelpServer")}</h3>
+              <ol className="list-decimal space-y-2 pl-5 marker:text-kumo-subtle">
+                <li>{t("admissionHelpPair", { token: "RUSTDESK_API_SECURITY_HBBS_ADMISSION_TOKEN" })}</li>
+                <li>{t("admissionHelpApi", { address: "RUSTDESK_API_RUSTDESK_API_SERVER" })}</li>
+                <li>{t("admissionHelpEnable")}</li>
+              </ol>
+            </section>
+            <section className="border-t border-kumo-line pt-4">
+              <h3 className="mb-2 font-semibold">{t("admissionHelpClient")}</h3>
+              <ol className="list-decimal space-y-2 pl-5 marker:text-kumo-subtle">
+                <li>{t("admissionHelpNetwork")}</li>
+                <li>{t("admissionHelpManual")}</li>
+                <li>
+                  {t("admissionHelpToken")}
+                  <code className="my-2 block whitespace-normal break-words rounded-md bg-kumo-recessed px-3 py-2">{deploymentCommand}</code>
+                  {t("admissionHelpAndroid")}
+                </li>
+              </ol>
+            </section>
+            <p className="rounded-md bg-kumo-recessed px-3 py-2 text-kumo-subtle">{t("admissionHelpLimits")}</p>
+          </div>
+        </LayerDialog.Body>
+      </LayerDialog.Content>
+    </LayerDialog>
+  );
+}
 
 export function DeviceAdmissionPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const toasts = useKumoToastManager();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [enable, setEnable] = useState<boolean | null>(null);
@@ -50,7 +95,11 @@ export function DeviceAdmissionPage() {
   });
   const saveSetting = useMutation({
     mutationFn: (value: boolean) => apiPut(`${base}/settings`, { require_deployment: value }),
-    onSuccess: () => { setEnable(null); void qc.invalidateQueries({ queryKey: admissionKey }); },
+    onSuccess: () => {
+      setEnable(null);
+      void qc.invalidateQueries({ queryKey: admissionKey });
+      toasts.add({ title: t("operationSuccess"), variant: "success" });
+    },
   });
   const submitReview = useMutation({
     mutationFn: ({ device, approved }: NonNullable<typeof review>) => apiPost(`${base}/review`, {
@@ -58,12 +107,24 @@ export function DeviceAdmissionPage() {
       fingerprint: device.fingerprint,
       approved,
     }),
-    onSuccess: () => { setReview(undefined); void qc.invalidateQueries({ queryKey: admissionKey }); },
+    onSuccess: () => {
+      setReview(undefined);
+      void qc.invalidateQueries({ queryKey: admissionKey });
+      toasts.add({ title: t("operationSuccess"), variant: "success" });
+    },
   });
 
   return (
     <div className="mx-auto grid max-w-[96rem] gap-5">
-      <h1 className="text-2xl font-semibold">{t("deviceAdmission")}</h1>
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="text-2xl font-semibold">{t("deviceAdmission")}</h1>
+          <AdmissionHelp />
+        </div>
+        <LinkButton variant="secondary" href="#/deployment_tokens">
+          {t("deploymentTokens")}
+        </LinkButton>
+      </header>
       <section className="grid gap-3 rounded-lg border border-kumo-line bg-kumo-elevated p-4">
         <Switch
           label={t("requireDeviceDeployment")}
@@ -74,10 +135,10 @@ export function DeviceAdmissionPage() {
         />
         <p id="device-deployment-hint" className="text-sm text-kumo-subtle">{t("requireDeviceDeploymentHint")}</p>
         {settings.data && !settings.data.paired_token_configured && (
-          <Banner variant="alert" title={t("admissionPairingRequired")} description={t("admissionPairingHint")} />
+          <Banner variant="alert" title={t("admissionPairingRequired")} description={<span className="[overflow-wrap:anywhere]">{t("admissionPairingHint")}</span>} />
         )}
         {settings.data?.paired_token_configured && !settings.data.hbbs_connected && (
-          <Banner variant="alert" title={t("admissionPairingWaiting")} description={t("admissionPairingHint")} />
+          <Banner variant="alert" title={t("admissionPairingWaiting")} description={<span className="[overflow-wrap:anywhere]">{t("admissionPairingHint")}</span>} />
         )}
         {settings.error && <TableState tone="error">{settings.error.message}</TableState>}
       </section>

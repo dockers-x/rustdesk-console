@@ -103,6 +103,7 @@ impl App {
 #[serde(default)]
 pub struct Admin {
     pub title: String,
+    pub logo: String,
     pub username: String,
     pub password: String,
     #[serde(rename = "force-change-password")]

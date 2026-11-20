@@ -2715,10 +2715,18 @@ pub async fn ab_tags(
         Ok(true) => {}
         _ => return resp::error("NoAccess"),
     }
-    let tags = services::tag::list_by_user_and_collection(&state.db, uid, cid)
-        .await
-        .unwrap_or_default();
-    Json(tags).into_response()
+    let tags = if user.console {
+        services::tag::list_address_book_tags(&state.db, uid, cid).await
+    } else {
+        services::tag::list_by_user_and_collection(&state.db, uid, cid).await
+    };
+    match tags {
+        Ok(tags) => Json(tags).into_response(),
+        Err(_) if user.console => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "OperationFailed").into_response()
+        }
+        Err(_) => Json(Vec::<entity::tag::Model>::new()).into_response(),
+    }
 }
 
 pub async fn ab_peer_add(
