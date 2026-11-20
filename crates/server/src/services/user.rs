@@ -78,7 +78,7 @@ pub async fn info_by_access_token(
         return Ok(None);
     };
     if session.auth_level != AUTH_TOTP
-        && (session.auth_level == AUTH_ENROLLMENT || requires_totp(db, &account).await?)
+        && (session.auth_level != 0 || requires_totp(db, &account).await?)
     {
         return Ok(None);
     }
@@ -86,7 +86,17 @@ pub async fn info_by_access_token(
 }
 
 pub async fn requires_totp(db: &impl ConnectionTrait, user: &user::Model) -> Result<bool, DbErr> {
-    if user.is_admin() || user.tfa_enabled || user.tfa_enforced {
+    if user.is_admin() {
+        return Ok(true);
+    }
+    console_requires_totp(db, user).await
+}
+
+pub async fn console_requires_totp(
+    db: &impl ConnectionTrait,
+    user: &user::Model,
+) -> Result<bool, DbErr> {
+    if user.tfa_enabled || user.tfa_enforced {
         return Ok(true);
     }
     Ok(login_security::login_settings(db).await?.require_totp)
@@ -94,6 +104,7 @@ pub async fn requires_totp(db: &impl ConnectionTrait, user: &user::Model) -> Res
 
 pub const AUTH_TOTP: i32 = 1;
 pub const AUTH_ENROLLMENT: i32 = 2;
+pub const AUTH_CONSOLE_ADMIN: i32 = 3;
 const ADMIN_SESSION_SECONDS: i64 = 12 * 60 * 60;
 const ENROLLMENT_SECONDS: i64 = 10 * 60;
 
@@ -116,6 +127,7 @@ pub async fn session_by_token(
         return Ok(None);
     };
     if !u.is_enabled()
+        || (ut.auth_level == AUTH_CONSOLE_ADMIN && (!u.is_admin() || u.tfa_enabled))
         || (ut.auth_level == AUTH_TOTP && !u.tfa_enabled)
         || (ut.auth_level == AUTH_ENROLLMENT && u.tfa_enabled)
         || (u.is_admin()
@@ -145,6 +157,7 @@ pub fn generate_token(jwt: &Jwt, u: &user::Model) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoginProof {
     SingleFactor,
+    ConsoleAdministrator,
     Totp,
     Enrollment,
     WebSso { session_id: i32 },
@@ -207,7 +220,7 @@ pub(super) async fn lock_full_session(
         .await?
         .filter(|session| {
             session.user_id == account.id
-                && session.auth_level != AUTH_ENROLLMENT
+                && matches!(session.auth_level, 0 | AUTH_TOTP)
                 && session.expired_at > Utc::now().timestamp()
         })
         .ok_or_else(|| DbErr::Custom("authorizing session expired".into()))?;
@@ -255,6 +268,13 @@ pub async fn login(
         LoginProof::Totp if current.tfa_enabled => (AUTH_TOTP, None),
         LoginProof::Enrollment if !current.tfa_enabled => (AUTH_ENROLLMENT, None),
         LoginProof::SingleFactor if !requires_totp(&transaction, &current).await? => (0, None),
+        LoginProof::ConsoleAdministrator
+            if current.is_admin()
+                && event.client == login_log::CLIENT_WEB_ADMIN
+                && !console_requires_totp(&transaction, &current).await? =>
+        {
+            (AUTH_CONSOLE_ADMIN, None)
+        }
         LoginProof::WebSso { session_id } => {
             let (auth_level, expires) =
                 lock_full_session(&transaction, &current, session_id).await?;
@@ -272,7 +292,12 @@ pub async fn login(
     if let Some(source_expiry) = source_expiry {
         expires = expires.min(source_expiry);
     }
-    let token = generate_token(jwt, &current);
+    let token = if auth_level == AUTH_CONSOLE_ADMIN {
+        // Only the Console accepts this token. Do not emit a native JWT.
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        generate_token(jwt, &current)
+    };
     let ut = user_token::ActiveModel {
         user_id: Set(u.id),
         token: Set(token),
@@ -491,7 +516,9 @@ pub async fn create(
         updated_at: Set(now()),
         ..Default::default()
     };
-    am.insert(db).await.map_err(|e| e.to_string())
+    login_security::insert_user_with_enrollment_policy(db, am)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), String> {

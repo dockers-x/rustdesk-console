@@ -179,6 +179,7 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(system_setting::Entity);
     create!(address_book_collection::Entity);
     create!(address_book_collection_rule::Entity);
+    create!(entity::address_book_trash::Entity);
     create!(server_cmd::Entity);
     create!(device_group::Entity);
     create!(active_connection::Entity);
@@ -738,7 +739,7 @@ async fn seed(
         updated_at: Set(services::now()),
         ..Default::default()
     };
-    admin.insert(db).await?;
+    services::login_security::insert_user_with_enrollment_policy(db, admin).await?;
     Ok(())
 }
 

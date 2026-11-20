@@ -490,7 +490,7 @@ async fn create_user(
     .await
     .map_err(|_| ApiError::internal())?
     .map_err(|_| ApiError::internal())?;
-    let row = user::ActiveModel {
+    let account = user::ActiveModel {
         username: Set(username),
         password: Set(password),
         email: Set(body.email),
@@ -501,9 +501,8 @@ async fn create_user(
         created_at: Set(services::now()),
         updated_at: Set(services::now()),
         ..Default::default()
-    }
-    .insert(&state.db)
-    .await?;
+    };
+    let row = services::login_security::insert_user_with_enrollment_policy(&state.db, account).await?;
     Ok((StatusCode::CREATED, Json(json!({"data":user_json(&row)}))).into_response())
 }
 

@@ -44,6 +44,8 @@ interface AdminConfigForm {
 }
 interface LoginSecuritySettings {
   require_totp: boolean;
+  new_user_require_totp: boolean;
+  totp_issuer: string;
   require_email_verification: boolean;
   require_device_verification: boolean;
   allow_trusted_login_devices: boolean;
@@ -86,6 +88,8 @@ const emptyForm: AdminConfigForm = {
 };
 const emptyLoginSecurity: LoginSecuritySettings = {
   require_totp: false,
+  new_user_require_totp: false,
+  totp_issuer: "",
   require_email_verification: false,
   require_device_verification: false,
   allow_trusted_login_devices: true,
@@ -326,9 +330,9 @@ export function SystemSettingsPage() {
     setMessage("");
     setError("");
   };
-  const updateLoginSecurity = (
-    field: keyof LoginSecuritySettings,
-    value: boolean,
+  const updateLoginSecurity = <K extends keyof LoginSecuritySettings>(
+    field: K,
+    value: LoginSecuritySettings[K],
   ) => {
     setLoginForm((current) => ({
       ...current,
@@ -628,6 +632,12 @@ export function SystemSettingsPage() {
                     }
                   />
                   <SecuritySwitch
+                    title={t("requireTotpForNewUsers")}
+                    description={t("requireTotpForNewUsersHint")}
+                    checked={loginForm.new_user_require_totp}
+                    onCheckedChange={(value) => updateLoginSecurity("new_user_require_totp", value)}
+                  />
+                  <SecuritySwitch
                     title={t("requireEmailVerification")}
                     description={t("requireEmailVerificationHint")}
                     checked={loginForm.require_email_verification}
@@ -649,6 +659,17 @@ export function SystemSettingsPage() {
                     checked={loginForm.allow_registration}
                     onCheckedChange={(value) => updateLoginSecurity("allow_registration", value)}
                   />
+                  <label className="grid content-start gap-2 rounded-md border border-kumo-line p-3 text-sm">
+                    <span className="font-medium">{t("totpIssuer")}</span>
+                    <Input
+                      value={loginForm.totp_issuer}
+                      maxLength={80}
+                      placeholder="RustDesk Console"
+                      aria-describedby="totp-issuer-hint"
+                      onChange={(event) => updateLoginSecurity("totp_issuer", event.target.value)}
+                    />
+                    <span id="totp-issuer-hint" className="text-kumo-subtle">{t("totpIssuerHint")}</span>
+                  </label>
                 </div>
               </section>
 

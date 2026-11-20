@@ -11,6 +11,7 @@ pub mod active_connection;
 pub mod address_book;
 pub mod address_book_collection;
 pub mod address_book_collection_rule;
+pub mod address_book_trash;
 pub mod audit_conn;
 pub mod audit_file;
 pub mod audit_alarm;

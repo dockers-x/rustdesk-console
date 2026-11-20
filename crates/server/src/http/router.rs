@@ -140,6 +140,7 @@ pub fn build(state: AppState) -> Router {
             "/api/ab/shared/profiles",
             get(api::ab_shared_profiles).post(api::ab_shared_profiles),
         )
+        .route("/api/ab/shared/profile", get(api::ab_shared_profile))
         .route("/api/ab/shared/add", post(api::ab_shared_add))
         .route(
             "/api/ab/shared/update/profile",
@@ -149,6 +150,9 @@ pub fn build(state: AppState) -> Router {
         .route("/api/ab/peers", get(api::ab_peers).post(api::ab_peers))
         .route("/api/ab/tags/:guid", get(api::ab_tags).post(api::ab_tags))
         .route("/api/ab/peer/add/:guid", post(api::ab_peer_add))
+        .route("/api/ab/peer/import/:guid", post(api::ab_peer_import))
+        .route("/api/ab/trash/:guid", get(api::ab_trash_list).delete(api::ab_trash_purge))
+        .route("/api/ab/trash/restore/:guid", post(api::ab_trash_restore))
         .route("/api/ab/peer/:guid", delete(api::ab_peer_del))
         .route("/api/ab/peer/update/:guid", put(api::ab_peer_update))
         .route("/api/ab/tag/add/:guid", post(api::ab_tag_add))

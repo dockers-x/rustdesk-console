@@ -20,7 +20,7 @@ use crate::http::response as resp;
 use crate::http::security_audit::AuditContext;
 use crate::services;
 use crate::services::login_security::{ChallengeSources, VerificationKind};
-use crate::services::user::{LoginProof, AUTH_ENROLLMENT};
+use crate::services::user::{LoginProof, AUTH_ENROLLMENT, AUTH_TOTP};
 use crate::state::AppState;
 use crate::support::admin_config::AdminPanelConfig;
 use crate::support::record_storage_config::RecordStorageConfigForm;
@@ -272,8 +272,9 @@ pub(super) async fn console_login_proof(
     state: &AppState,
     user: &user::Model,
 ) -> Result<LoginProof, &'static str> {
-    match services::user::requires_totp(&state.db, user).await {
+    match services::user::console_requires_totp(&state.db, user).await {
         Ok(true) if !user.tfa_enabled => Ok(LoginProof::Enrollment),
+        Ok(false) if user.is_admin() => Ok(LoginProof::ConsoleAdministrator),
         Ok(false) => Ok(LoginProof::SingleFactor),
         Ok(true) => Err("TOTP verification required"),
         Err(_) => Err("Login policy unavailable"),
@@ -502,13 +503,17 @@ pub async fn setup_initialize(
         Ok(user) => user,
         Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     };
+    let proof = match console_login_proof(&state, &user).await {
+        Ok(proof) => proof,
+        Err(message) => return resp::fail(101, message),
+    };
     let ut = match services::user::login(
         &state.db,
         &state.jwt,
         &state.config,
         &user,
         services::user::LoginEvent {
-            proof: LoginProof::Enrollment,
+            proof,
             client: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
             device_id: String::new(),
             uuid: String::new(),
@@ -1227,7 +1232,7 @@ pub struct UserPasswordForm {
 pub async fn user_change_pwd(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    _user: AdminUser,
+    user: AdminUser,
     audit: AuditContext,
     Json(f): Json<UserPasswordForm>,
 ) -> Response {
@@ -1236,6 +1241,9 @@ pub async fn user_change_pwd(
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
     match services::user::info_by_id(&state.db, f.id).await {
+        Ok(Some(target)) if target.is_admin() && user.auth_level != AUTH_TOTP => {
+            resp::fail(resp::CODE_NO_ACCESS, state.tr(&lang, "NoAccess"))
+        }
         Ok(Some(u)) => match services::user::update_password(&state.db, &u, &f.password).await {
             Ok(_) => resp::success(Value::Null),
             Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
@@ -1315,15 +1323,16 @@ pub async fn my_security(
     }))
 }
 
-pub async fn my_tfa_setup(State(_state): State<AppState>, user: BackendUser) -> Response {
-    let secret = services::login_security::generate_totp_secret();
+pub async fn my_tfa_setup(State(state): State<AppState>, user: BackendUser) -> Response {
     if user.user.tfa_enabled {
         return resp::fail(101, "TOTP is already configured");
     }
-    resp::no_store(resp::success(json!({
-        "secret": secret,
-        "uri": services::login_security::totp_uri(&user.user.username, &secret),
-    })))
+    let Ok(settings) = services::login_security::login_settings(&state.db).await else {
+        return resp::fail(101, "Login policy unavailable");
+    };
+    let secret = services::login_security::generate_totp_secret();
+    let uri = services::login_security::totp_uri(&user.user.username, &secret, &settings.totp_issuer);
+    resp::no_store(resp::success(json!({ "secret": secret, "uri": uri })))
 }
 
 #[derive(Deserialize, Default)]
@@ -1444,7 +1453,7 @@ pub async fn user_security_update(
 pub async fn user_tfa_reset(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    _user: AdminUser,
+    user: AdminUser,
     audit: AuditContext,
     Json(f): Json<IdForm>,
 ) -> Response {
@@ -1453,6 +1462,9 @@ pub async fn user_tfa_reset(
         Ok(Some(user)) => user,
         _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
     };
+    if target.is_admin() && user.auth_level != AUTH_TOTP {
+        return resp::fail(resp::CODE_NO_ACCESS, state.tr(&lang, "NoAccess"));
+    }
     match services::login_security::reset_user_totp(&state.db, &target).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, e),
@@ -4483,6 +4495,7 @@ mod tests {
     async fn address_book_batch_handlers_report_failed_inserts() {
         let (state, user, token) = failed_write_state().await;
         let admin = || AdminUser {
+            auth_level: AUTH_TOTP,
             user: user.clone(),
             token: token.token.clone(),
         };

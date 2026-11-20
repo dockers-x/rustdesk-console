@@ -242,6 +242,29 @@ impl FromRequestParts<AppState> for RustClientUser {
     }
 }
 
+/// Address books are available to authenticated clients and the Console.
+pub struct AddressBookUser {
+    pub user: user::Model,
+    pub console: bool,
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for AddressBookUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        if parts.headers.contains_key("api-token") && !parts.headers.contains_key("authorization") {
+            let backend = BackendUser::from_request_parts(parts, state).await?;
+            return Ok(Self { user: backend.user, console: true });
+        }
+        let native = RustClientUser::from_request_parts(parts, state).await?;
+        Ok(Self { user: native.user, console: false })
+    }
+}
+
 /// Admin-panel auth: `api-token` header -> user_tokens lookup + token refresh.
 pub struct BackendUser {
     pub user: user::Model,
@@ -263,7 +286,7 @@ impl FromRequestParts<AppState> for BackendUser {
             .ok_or_else(|| {
                 response::fail(response::CODE_NEED_LOGIN, state.tr(&lang, "NeedLogin"))
             })?;
-        use crate::services::user::{self, SessionLifetime, AUTH_ENROLLMENT, AUTH_TOTP};
+        use crate::services::user::{self, SessionLifetime, AUTH_CONSOLE_ADMIN, AUTH_ENROLLMENT, AUTH_TOTP};
 
         let need_login = || response::fail(response::CODE_NEED_LOGIN, state.tr(&lang, "NeedLogin"));
         let (user, ut) = user::session_by_token(&state.db, &token)
@@ -283,9 +306,15 @@ impl FromRequestParts<AppState> for BackendUser {
                 return Err(response::fail(114, "TOTP enrollment required"));
             }
         } else {
-            if ut.auth_level != AUTH_TOTP
-                && user::requires_totp(&state.db, &user).await.unwrap_or(true)
-            {
+            let permitted = match ut.auth_level {
+                AUTH_TOTP => true,
+                AUTH_CONSOLE_ADMIN => !user::console_requires_totp(&state.db, &user)
+                    .await
+                    .unwrap_or(true),
+                0 => !user::requires_totp(&state.db, &user).await.unwrap_or(true),
+                _ => false,
+            };
+            if !permitted {
                 return Err(need_login());
             }
             let lifetime = if user.is_admin() {
@@ -327,6 +356,7 @@ fn enrollment_allowed_path(path: &str) -> bool {
 
 /// Admin-only: a [`BackendUser`] that is also an admin.
 pub struct AdminUser {
+    pub auth_level: i32,
     pub user: user::Model,
     pub token: String,
 }
@@ -340,8 +370,9 @@ impl FromRequestParts<AppState> for AdminUser {
     ) -> Result<Self, Self::Rejection> {
         let lang = header(parts, "Accept-Language").unwrap_or_default();
         let backend = BackendUser::from_request_parts(parts, state).await?;
+        use crate::services::user::{AUTH_CONSOLE_ADMIN, AUTH_TOTP};
         if !backend.user.is_admin()
-            || backend.user_token.auth_level != crate::services::user::AUTH_TOTP
+            || !matches!(backend.user_token.auth_level, AUTH_TOTP | AUTH_CONSOLE_ADMIN)
         {
             return Err(response::fail(
                 response::CODE_NO_ACCESS,
@@ -355,6 +386,7 @@ impl FromRequestParts<AppState> for AdminUser {
             audit.admin_access();
         }
         Ok(AdminUser {
+            auth_level: backend.user_token.auth_level,
             user: backend.user,
             token: backend.token,
         })

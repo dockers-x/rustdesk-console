@@ -14,6 +14,7 @@ use ::entity::{login_verification, smtp_email_config, system_setting, trusted_lo
 use crate::services::now;
 
 const LOGIN_SECURITY_KEY: &str = "login_security";
+const DEFAULT_TOTP_ISSUER: &str = "RustDesk Console";
 const TOTP_PERIOD: i64 = 30;
 const TOTP_DIGITS: u32 = 6;
 const CHALLENGE_TTL_SECS: i64 = 10 * 60;
@@ -22,6 +23,10 @@ const PASSWORD_RESET_TTL_SECS: i64 = 15 * 60;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoginSecuritySettings {
     pub require_totp: bool,
+    #[serde(default)]
+    pub new_user_require_totp: bool,
+    #[serde(default)]
+    pub totp_issuer: String,
     pub require_email_verification: bool,
     pub require_device_verification: bool,
     pub allow_trusted_login_devices: bool,
@@ -33,6 +38,8 @@ impl Default for LoginSecuritySettings {
     fn default() -> Self {
         Self {
             require_totp: false,
+            new_user_require_totp: false,
+            totp_issuer: String::new(),
             require_email_verification: false,
             require_device_verification: false,
             allow_trusted_login_devices: true,
@@ -220,9 +227,26 @@ pub async fn registration_enabled(
 
 pub async fn save_login_settings(
     db: &DatabaseConnection,
-    settings: LoginSecuritySettings,
+    mut settings: LoginSecuritySettings,
 ) -> Result<(), DbErr> {
+    let issuer = settings.totp_issuer.trim();
+    if issuer.chars().count() > 80 || issuer.contains(':') || issuer.chars().any(char::is_control) {
+        return Err(DbErr::Custom(
+            "The TOTP issuer must be at most 80 characters, without a colon or control characters".into(),
+        ));
+    }
+    settings.totp_issuer = issuer.to_owned();
     save_json_setting(db, LOGIN_SECURITY_KEY, &settings).await
+}
+
+pub async fn insert_user_with_enrollment_policy(
+    db: &impl ConnectionTrait,
+    mut account: user::ActiveModel,
+) -> Result<user::Model, DbErr> {
+    if login_settings(db).await?.new_user_require_totp {
+        account.tfa_enforced = Set(true);
+    }
+    account.insert(db).await
 }
 
 pub async fn list_smtp_email_configs(
@@ -778,10 +802,11 @@ pub fn generate_totp_secret() -> String {
     base32_encode(&bytes)
 }
 
-pub fn totp_uri(username: &str, secret: &str) -> String {
-    let label_raw = format!("RustDesk Console:{username}");
+pub fn totp_uri(username: &str, secret: &str, issuer: &str) -> String {
+    let issuer = if issuer.is_empty() { DEFAULT_TOTP_ISSUER } else { issuer };
+    let label_raw = format!("{issuer}:{username}");
     let label = urlencoding::encode(&label_raw);
-    let issuer = urlencoding::encode("RustDesk Console");
+    let issuer = urlencoding::encode(issuer);
     format!("otpauth://totp/{label}?secret={secret}&issuer={issuer}&digits=6&period=30")
 }
 

@@ -19,7 +19,7 @@ use entity::{
     deployment_token, group, login_log, peer, user,
 };
 
-use crate::http::middleware::{AcceptLang, ClientIp, DeploymentAuth, RustClientUser};
+use crate::http::middleware::{AcceptLang, AddressBookUser, ClientIp, DeploymentAuth, RustClientUser};
 use crate::http::payloads::*;
 use crate::http::response as resp;
 use crate::services;
@@ -2296,8 +2296,8 @@ fn parse_i32(value: &str) -> Option<i32> {
     value.trim().parse::<i32>().ok()
 }
 
-pub async fn ab_personal(State(state): State<AppState>, user: RustClientUser) -> Response {
-    if state.config.rustdesk.personal != 1 {
+pub async fn ab_personal(State(state): State<AppState>, user: AddressBookUser) -> Response {
+    if !user.console && state.config.rustdesk.personal != 1 {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -2322,7 +2322,7 @@ pub struct AbProfilesQuery {
 
 pub async fn ab_shared_profiles(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
     Query(q): Query<AbProfilesQuery>,
 ) -> Response {
     let mut res: Vec<SharedProfilesPayload> = vec![];
@@ -2389,6 +2389,39 @@ pub async fn ab_shared_profiles(
     Json(json!({ "total": total, "data": res })).into_response()
 }
 
+pub async fn ab_shared_profile(
+    State(state): State<AppState>,
+    user: AddressBookUser,
+    Query(q): Query<AbQuery>,
+) -> Response {
+    let (uid, cid) = match check_guid(&state, &user.user, &q.ab).await {
+        Ok((uid, cid)) if cid > 0 => (uid, cid),
+        _ => return resp::error("ItemNotFound"),
+    };
+    let rule = match services::address_book::user_max_rule(
+        &state.db, user.user.id, user.user.group_id, uid, cid,
+    )
+    .await
+    {
+        Ok(rule) if rule >= address_book_collection_rule::RULE_READ => rule,
+        _ => return resp::error("NoAccess"),
+    };
+    let Ok(Some(book)) = services::address_book::collection_info_by_id(&state.db, cid).await else {
+        return resp::error("ItemNotFound");
+    };
+    let Ok(Some(owner)) = services::user::info_by_id(&state.db, uid).await else {
+        return resp::error("ItemNotFound");
+    };
+    Json(SharedProfilesPayload {
+        guid: q.ab,
+        name: book.name,
+        owner: owner.username,
+        note: String::new(),
+        rule,
+    })
+    .into_response()
+}
+
 #[derive(Deserialize, Default)]
 pub struct SharedAbForm {
     #[serde(default)]
@@ -2405,7 +2438,7 @@ pub struct SharedAbForm {
 
 pub async fn ab_shared_add(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
     Json(f): Json<SharedAbForm>,
 ) -> Response {
     let name = f.name.trim();
@@ -2425,7 +2458,7 @@ pub async fn ab_shared_add(
 
 pub async fn ab_shared_update_profile(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
     Json(f): Json<SharedAbForm>,
 ) -> Response {
     let (owner, collection) = match full_control_collection(&state, &user.user, &f.guid).await {
@@ -2474,7 +2507,7 @@ pub async fn ab_shared_update_profile(
 
 pub async fn ab_shared_delete(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
     Json(guids): Json<Vec<String>>,
 ) -> Response {
     for guid in guids {
@@ -2508,11 +2541,15 @@ pub struct AbPeersQuery {
     pub id: Option<String>,
     #[serde(default)]
     pub alias: Option<String>,
+    pub hostname: Option<String>,
+    pub username: Option<String>,
+    pub note: Option<String>,
+    pub tag: Option<String>,
 }
 
 pub async fn ab_peers(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
     Query(q): Query<AbPeersQuery>,
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &q.ab).await {
@@ -2532,6 +2569,13 @@ pub async fn ab_peers(
     abs.retain(|ab| {
         matches_ab_filter(&ab.id, q.id.as_deref())
             && matches_ab_filter(&ab.alias, q.alias.as_deref())
+            && matches_ab_filter(&ab.hostname, q.hostname.as_deref())
+            && matches_ab_filter(&ab.username, q.username.as_deref())
+            && matches_ab_filter(&ab.note, q.note.as_deref())
+            && q.tag.as_deref().is_none_or(|name| match ab.tags.as_array() {
+                Some(tags) => tags.iter().any(|tag| tag.as_str() == Some(name)) || tags.is_empty() && name.is_empty(),
+                None => name.is_empty(),
+            })
     });
     let total = abs.len() as i64;
     let (page, page_size) = script_page(q.page, q.page_size);
@@ -2540,6 +2584,13 @@ pub async fn ab_peers(
         .into_iter()
         .skip(start)
         .take(usize::try_from(page_size).unwrap_or(usize::MAX))
+        .map(|mut peer| {
+            if user.console {
+                peer.password.clear();
+                peer.hash.clear();
+            }
+            peer
+        })
         .collect();
     Json(json!({
         "total": total,
@@ -2643,7 +2694,7 @@ fn dedup_address_book_peers(abs: Vec<address_book::Model>) -> Vec<address_book::
 
 pub async fn ab_tags(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
@@ -2665,7 +2716,7 @@ pub async fn ab_tags(
 pub async fn ab_peer_add(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
@@ -2689,6 +2740,10 @@ pub async fn ab_peer_add(
     let mut username = g("username");
     let mut hostname = g("hostname");
     let id = g("id");
+    let id = id.trim().to_owned();
+    if id.is_empty() || id.len() > 128 {
+        return resp::error(state.tr(&lang, "ParamsError"));
+    }
     if platform.is_empty() || username.is_empty() || hostname.is_empty() {
         if let Ok(Some(peer)) = services::peer::find_by_id(&state.db, &id).await {
             platform = services::address_book::platform_from_os(&peer.os);
@@ -2733,7 +2788,7 @@ pub async fn ab_peer_add(
 pub async fn ab_peer_del(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
     Json(ids): Json<Vec<String>>,
 ) -> Response {
@@ -2753,20 +2808,23 @@ pub async fn ab_peer_del(
         Ok(true) => {}
         _ => return resp::error("NoAccess"),
     }
-    for id in ids {
-        match services::address_book::delete_by_identity(&state.db, uid, &id, cid).await {
-            Ok(n) if n > 0 => {}
-            Ok(_) => return resp::error(state.tr(&lang, "ItemNotFound")),
-            Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
-        }
+    if ids.is_empty() || ids.len() > 250 {
+        return resp::error(state.tr(&lang, "ParamsError"));
     }
-    "".into_response()
+    let mut ids = ids;
+    ids.sort_unstable();
+    ids.dedup();
+    match services::address_book::move_to_trash(&state.db, uid, cid, &ids).await {
+        Ok(()) => "".into_response(),
+        Err(DbErr::RecordNotFound(_)) => resp::error(state.tr(&lang, "ItemNotFound")),
+        Err(_) => resp::error(state.tr(&lang, "OperationFailed")),
+    }
 }
 
 pub async fn ab_peer_update(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
@@ -2804,7 +2862,7 @@ pub struct TagAddForm {
 pub async fn ab_tag_add(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
     Json(t): Json<TagAddForm>,
 ) -> Response {
@@ -2838,7 +2896,7 @@ pub struct TagRenameForm {
 pub async fn ab_tag_rename(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
     Json(t): Json<TagRenameForm>,
 ) -> Response {
@@ -2878,7 +2936,7 @@ pub struct TagColorForm {
 pub async fn ab_tag_update(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
     Json(t): Json<TagColorForm>,
 ) -> Response {
@@ -2907,7 +2965,7 @@ pub async fn ab_tag_update(
 pub async fn ab_tag_del(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: RustClientUser,
+    user: AddressBookUser,
     Path(guid): Path<String>,
     Json(names): Json<Vec<String>>,
 ) -> Response {
@@ -2963,7 +3021,7 @@ struct AbRulePayload {
 
 pub async fn ab_rules(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
     Query(q): Query<AbRulesQuery>,
 ) -> Response {
     let (_, collection) = match full_control_collection(&state, &user.user, &q.ab).await {
@@ -3049,7 +3107,8 @@ pub struct AbRuleForm {
 
 pub async fn ab_rule_add(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
+    audit: super::security_audit::AuditContext,
     Json(f): Json<AbRuleForm>,
 ) -> Response {
     let (owner, collection) = match full_control_collection(&state, &user.user, &f.guid).await {
@@ -3094,14 +3153,21 @@ pub async fn ab_rule_add(
             Err(e) => return resp::error(e.to_string()),
         }
     };
+    audit.decision("address_book_grant", "accepted", "grant_saved");
     Json(json!({ "guid": saved.id.to_string(), "rule": saved.rule })).into_response()
 }
 
 pub async fn ab_rule_update(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
+    audit: super::security_audit::AuditContext,
     Json(f): Json<AbRuleForm>,
 ) -> Response {
+    if !(address_book_collection_rule::RULE_READ..=address_book_collection_rule::RULE_FULL_CONTROL)
+        .contains(&f.rule)
+    {
+        return resp::error("ParamsError");
+    }
     let Some(rule_id) = parse_i32(&f.guid) else {
         return resp::error("ParamsError");
     };
@@ -3114,14 +3180,18 @@ pub async fn ab_rule_update(
     }
     rule.rule = f.rule;
     match services::address_book::update_rule(&state.db, &rule).await {
-        Ok(_) => "".into_response(),
+        Ok(_) => {
+            audit.decision("address_book_grant", "accepted", "grant_updated");
+            "".into_response()
+        }
         Err(e) => resp::error(e.to_string()),
     }
 }
 
 pub async fn ab_rules_delete(
     State(state): State<AppState>,
-    user: RustClientUser,
+    user: AddressBookUser,
+    audit: super::security_audit::AuditContext,
     Json(guids): Json<Vec<String>>,
 ) -> Response {
     for guid in guids {
@@ -3139,7 +3209,153 @@ pub async fn ab_rules_delete(
             return resp::error(e.to_string());
         }
     }
+    audit.decision("address_book_grant", "accepted", "grant_revoked");
     "".into_response()
+}
+
+async fn trash_book_scope(
+    state: &AppState,
+    caller: &entity::user::Model,
+    guid: &str,
+) -> Result<(i32, i32), Response> {
+    let (uid, cid) = check_guid(state, caller, guid).await?;
+    if services::address_book::can_full_control(&state.db, caller.id, caller.group_id, uid, cid)
+        .await
+        .unwrap_or(false)
+    {
+        Ok((uid, cid))
+    } else {
+        Err(resp::error("NoAccess"))
+    }
+}
+
+pub async fn ab_trash_list(
+    State(state): State<AppState>,
+    user: AddressBookUser,
+    Path(guid): Path<String>,
+    Query(q): Query<AbPeersQuery>,
+) -> Response {
+    let (uid, cid) = match trash_book_scope(&state, &user.user, &guid).await {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    let entries = match services::address_book::trash_entries(&state.db, uid, cid).await {
+        Ok(entries) => entries,
+        Err(_) => return resp::error("OperationFailed"),
+    };
+    let matches: Vec<_> = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let book: address_book::Model = serde_json::from_value(entry.snapshot).ok()?;
+            if !matches_ab_filter(&book.id, q.id.as_deref())
+                || !matches_ab_filter(&book.hostname, q.hostname.as_deref())
+                || !matches_ab_filter(&book.username, q.username.as_deref())
+            {
+                return None;
+            }
+            Some(json!({
+                "row_id": entry.id,
+                "id": book.id,
+                "hostname": book.hostname,
+                "username": book.username,
+                "alias": book.alias,
+                "note": book.note,
+                "tags": book.tags,
+                "deleted_at": entry.deleted_at.and_utc(),
+            }))
+        })
+        .collect();
+    let total = matches.len() as i64;
+    let (page, size) = services::paginate(q.page.unwrap_or(1), q.page_size.unwrap_or(30));
+    let start = (page - 1).saturating_mul(size);
+    resp::data_response(total, matches.into_iter().skip(start as usize).take(size as usize).collect::<Vec<_>>())
+}
+
+#[derive(Deserialize)]
+pub struct TrashEntryForm {
+    pub id: Option<i32>,
+}
+
+pub async fn ab_trash_restore(
+    State(state): State<AppState>,
+    user: AddressBookUser,
+    Path(guid): Path<String>,
+    Json(form): Json<TrashEntryForm>,
+) -> Response {
+    let (uid, cid) = match trash_book_scope(&state, &user.user, &guid).await {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    let Some(id) = form.id.filter(|id| *id > 0) else {
+        return resp::error("ParamsError");
+    };
+    match services::address_book::restore_from_trash(&state.db, uid, cid, id).await {
+        Ok(()) => resp::success(Value::Null),
+        Err(DbErr::RecordNotFound(_)) => resp::error("ItemNotFound"),
+        Err(DbErr::Custom(message)) => resp::error(message),
+        Err(_) => resp::error("OperationFailed"),
+    }
+}
+
+pub async fn ab_trash_purge(
+    State(state): State<AppState>,
+    user: AddressBookUser,
+    Path(guid): Path<String>,
+    Json(form): Json<TrashEntryForm>,
+) -> Response {
+    let (uid, cid) = match trash_book_scope(&state, &user.user, &guid).await {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    if form.id.is_some_and(|id| id <= 0) {
+        return resp::error("ParamsError");
+    }
+    match services::address_book::purge_trash(&state.db, uid, cid, form.id).await {
+        Ok(()) => resp::success(Value::Null),
+        Err(_) => resp::error("OperationFailed"),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AbImportForm {
+    pub peer_ids: Vec<i32>,
+}
+
+pub async fn ab_peer_import(
+    State(state): State<AppState>,
+    user: AddressBookUser,
+    Path(guid): Path<String>,
+    Json(form): Json<AbImportForm>,
+) -> Response {
+    let (owner_id, collection_id) = match check_guid(&state, &user.user, &guid).await {
+        Ok(scope) => scope,
+        Err(response) => return response,
+    };
+    if !services::address_book::can_write(
+        &state.db, user.user.id, user.user.group_id, owner_id, collection_id,
+    )
+    .await
+    .unwrap_or(false)
+    {
+        return resp::error("NoAccess");
+    }
+    if form.peer_ids.is_empty() || form.peer_ids.len() > 250 {
+        return resp::error("ParamsError");
+    }
+    let mut ids = form.peer_ids;
+    ids.sort_unstable();
+    ids.dedup();
+    let peers = match services::peer::list_by_row_ids(&state.db, &ids).await {
+        Ok(peers) => peers,
+        Err(_) => return resp::error("OperationFailed"),
+    };
+    if peers.len() != ids.len() || peers.iter().any(|peer| peer.user_id != user.user.id) {
+        return resp::error("NoAccess");
+    }
+    match services::address_book::import_peers(&state.db, owner_id, collection_id, &peers).await {
+        Ok(added) => resp::success(json!({ "added": added })),
+        Err(_) => resp::error("OperationFailed"),
+    }
 }
 
 #[cfg(test)]
@@ -3822,6 +4038,7 @@ pub(crate) mod deployment_tests {
                 State(state),
                 AcceptLang("en".into()),
                 crate::http::middleware::AdminUser {
+                    auth_level: crate::services::user::AUTH_TOTP,
                     user: services::user::info_by_id(&db, 7).await.unwrap().unwrap(),
                     token: String::new(),
                 },

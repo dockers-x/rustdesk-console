@@ -3,6 +3,7 @@ import { Button } from "@cloudflare/kumo/components/button";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AppShell } from "./components/AppShell";
+import { AddressBookPage } from "./pages/AddressBookPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GeoRoutingPage } from "./pages/GeoRoutingPage";
 import { MessageCenterPage } from "./pages/MessageCenterPage";
@@ -29,6 +30,7 @@ import {
 interface CurrentUserAccess {
   route_names?: string[];
   must_enroll_totp?: boolean;
+  tfa_enabled?: boolean;
 }
 
 export default function AuthenticatedApp() {
@@ -73,11 +75,17 @@ export default function AuthenticatedApp() {
 
   return (
     <Routes>
-      <Route element={<AppShell isAdmin={isAdmin} />}>
+      <Route element={
+        <AppShell
+          isAdmin={isAdmin}
+          showTotpReminder={isAdmin && currentUser.data.tfa_enabled === false}
+        />
+      }>
         <Route path="/" element={<Navigate to={home} replace />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/my" element={<MyProfilePage />} />
+        <Route path="/my/address_book" element={<AddressBookPage />} />
         <Route path="/messages" element={<MessageCenterPage />} />
         <Route
           path="/notification-routing"
@@ -99,7 +107,7 @@ export default function AuthenticatedApp() {
           path="/oauth/bind/:code"
           element={<OAuthActionPage mode="bind" />}
         />
-        {ALL_RESOURCES.map((resource) => (
+        {ALL_RESOURCES.filter((resource) => resource.name !== "my_address_book").map((resource) => (
           <Route
             key={resource.name}
             path={resourcePath(resource)}

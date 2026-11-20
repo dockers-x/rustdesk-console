@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as QRCode from "qrcode";
@@ -109,6 +109,13 @@ interface TrustedLoginDevice {
 export function MyProfilePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { hash, key } = useLocation();
+
+  useEffect(() => {
+    if (hash === "#account-security") {
+      document.getElementById("account-security")?.scrollIntoView({ block: "start" });
+    }
+  }, [hash, key]);
   const qc = useQueryClient();
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [oldPassword, setOldPassword] = useState("");
@@ -508,7 +515,7 @@ export function MyProfilePage() {
           </dl>
         </section>
 
-        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+        <section id="account-security" className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-3">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">

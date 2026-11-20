@@ -827,8 +827,7 @@ pub async fn register_or_login(
         updated_at: Set(now()),
         ..Default::default()
     };
-    let created = am
-        .insert(db)
+    let created = super::login_security::insert_user_with_enrollment_policy(db, am)
         .await
         .map_err(|e| format!("OauthRegisterFailed: {e}"))?;
     bind_user(db, created.id, ou, &oauth_type, op)

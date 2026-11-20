@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { Banner } from "@cloudflare/kumo/components/banner";
 import { Button } from "@cloudflare/kumo/components/button";
 import { cn } from "@cloudflare/kumo/utils";
 import {
@@ -127,10 +128,7 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
     items: [
       { to: "/my", key: "myInfo", end: true },
       myItem("myPeers"),
-      myItem("myCollections"),
       myItem("myAddressBook"),
-      myItem("myTags"),
-      myItem("myShareRules"),
       myItem("myShareRecords"),
       myItem("myLoginLogs"),
     ],
@@ -208,7 +206,13 @@ const isItemActive = (pathname: string, item: NavItem) => {
 
 const MOBILE_QUERY = "(max-width: 767px)";
 
-export function AppShell({ isAdmin }: { isAdmin: boolean }) {
+export function AppShell({
+  isAdmin,
+  showTotpReminder,
+}: {
+  isAdmin: boolean;
+  showTotpReminder: boolean;
+}) {
   const { t } = useTranslation();
   const features = useFeatures(isAdmin);
   const showSelfSignedClients = selfSignedEnabled(features.data);
@@ -545,6 +549,19 @@ export function AppShell({ isAdmin }: { isAdmin: boolean }) {
           </div>
         </header>
         <main id="main-content" className="admin-workspace min-h-0 flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
+          {showTotpReminder && (
+            <Banner
+              className="mb-4"
+              variant="alert"
+              icon={<ShieldCheck size={18} />}
+              title={t("adminTotpReminder")}
+              action={
+                <Banner.Action onClick={() => navigate("/my#account-security")}>
+                  {t("accountSecurity")}
+                </Banner.Action>
+              }
+            />
+          )}
           <div key={location.pathname} className="admin-page-enter min-h-full">
             <Outlet />
           </div>

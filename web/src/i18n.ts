@@ -2,6 +2,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { selfSignedMessages } from "./features/self-signed-client/messages";
 import { developerMessages } from "./features/developer/messages";
+import { addressBookMessages } from "./locales/addressBook";
 import { ru } from "./locales/ru";
 
 const en: Record<string, string> = {
@@ -788,7 +789,12 @@ const en: Record<string, string> = {
   loginSecurityPolicy: "Verification policy",
   loginSecurityPolicyHint: "Choose which extra checks are required during sign-in. User self-service setup remains available in their profile.",
   requireTotp: "Require TOTP for all accounts",
-  requireTotpHint: "Users must enroll in TOTP before using their account. Administrators always require TOTP.",
+  requireTotpHint: "Users must set up an authenticator app before using the Console.",
+  requireTotpForNewUsers: "Require TOTP for new accounts",
+  requireTotpForNewUsersHint: "New accounts must set up an authenticator app before using the Console.",
+  totpIssuer: "TOTP issuer",
+  totpIssuerHint: "The name shown in authenticator apps when an account sets up TOTP.",
+  adminTotpReminder: "Two-factor authentication is off for your administrator account.",
   requireEmailVerification: "Require email verification",
   requireEmailVerificationHint: "Send a one-time code to the user's email address during sign-in.",
   requireDeviceVerification: "Verify new login devices",
@@ -1745,7 +1751,12 @@ const zhCN: Record<string, string> = {
   loginSecurityPolicy: "验证策略",
   loginSecurityPolicyHint: "选择登录时需要额外验证的检查项。用户自己的安全设置仍在个人中心管理。",
   requireTotp: "要求所有账号使用 TOTP",
-  requireTotpHint: "用户须先绑定 TOTP 才能使用账号。管理员始终需要 TOTP。",
+  requireTotpHint: "用户须先绑定验证器才能使用控制台。",
+  requireTotpForNewUsers: "对新账号强制启用 TOTP",
+  requireTotpForNewUsersHint: "新建账号须先绑定验证器才能使用控制台。",
+  totpIssuer: "TOTP 发行者",
+  totpIssuerHint: "绑定时显示在验证器应用中的名称。",
+  adminTotpReminder: "你的管理员账号尚未启用二次验证。",
   requireEmailVerification: "要求邮箱验证",
   requireEmailVerificationHint: "登录时向用户邮箱发送一次性验证码。",
   requireDeviceVerification: "验证新的登录设备",
@@ -1947,9 +1958,9 @@ i18n.on("languageChanged", (language) => {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { translation: en },
-    ru: { translation: { ...developerMessages.ru, ...ru } },
-    "zh-CN": { translation: zhCN },
+    en: { translation: { ...en, ...addressBookMessages.en } },
+    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru } },
+    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"] } },
   },
   lng: detectLang(),
   fallbackLng: "en",

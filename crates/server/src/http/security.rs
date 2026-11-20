@@ -841,6 +841,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unbound_admin_receives_a_console_only_session() {
+        let state = fixture().await;
+        user::ActiveModel {
+            id: Set(3),
+            password: Set(crate::support::password::md5_hex(
+                "local-passwordrustdesk-api",
+            )),
+            tfa_enabled: Set(false),
+            ..Default::default()
+        }
+        .update(&state.db)
+        .await
+        .unwrap();
+        user_token::Entity::update_many()
+            .col_expr(user_token::Column::AuthLevel, sea_orm::sea_query::Expr::value(0))
+            .filter(user_token::Column::UserId.eq(3))
+            .exec(&state.db)
+            .await
+            .unwrap();
+
+        let (_, legacy) = json_request(
+            &state, "GET", "/api/admin/user/list", json!(null), Some("token-3"),
+        )
+        .await;
+        assert_ne!(legacy["code"], 0, "{legacy}");
+
+        let (_, login) = json_request(
+            &state, "POST", "/api/admin/login",
+            json!({"username":"user-3", "password":"local-password"}), None,
+        )
+        .await;
+        assert_eq!(login["data"]["must_enroll_totp"], false, "{login}");
+        assert_eq!(login["data"]["tfa_enabled"], false);
+        let token = login["data"]["token"].as_str().unwrap();
+        let (_, users) = json_request(
+            &state, "GET", "/api/admin/user/list", json!(null), Some(token),
+        )
+        .await;
+        assert_eq!(users["code"], 0, "{users}");
+        let (native, _) =
+            json_request(&state, "GET", "/api/user/info", json!(null), Some(token)).await;
+        assert_eq!(native, StatusCode::UNAUTHORIZED);
+        let (_, reset) = json_request(
+            &state, "POST", "/api/admin/user/tfa/reset", json!({"id": 3}), Some(token),
+        )
+        .await;
+        assert_eq!(reset["code"], crate::http::response::CODE_NO_ACCESS, "{reset}");
+
+        services::login_security::save_login_settings(
+            &state.db,
+            services::login_security::LoginSecuritySettings {
+                require_totp: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let (_, denied) = json_request(
+            &state, "GET", "/api/admin/user/list", json!(null), Some(token),
+        )
+        .await;
+        assert_ne!(denied["code"], 0, "{denied}");
+    }
+
+    #[tokio::test]
     async fn administrator_enrollment_and_totp_are_enforced_across_session_entry_points() {
         let state = fixture().await;
         user::ActiveModel {
@@ -852,6 +917,16 @@ mod tests {
             ..Default::default()
         }
         .update(&state.db)
+        .await
+        .unwrap();
+        services::login_security::save_login_settings(
+            &state.db,
+            services::login_security::LoginSecuritySettings {
+                require_totp: true,
+                totp_issuer: "Example IT".into(),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
         let credentials = json!({"username":"user-3", "password":"local-password"});
@@ -891,6 +966,7 @@ mod tests {
             Some(limited),
         )
         .await;
+        assert!(setup["data"]["uri"].as_str().unwrap().contains("issuer=Example%20IT"));
         let secret = setup["data"]["secret"].as_str().unwrap();
         let code = services::login_security::test_totp_code(secret);
         let (_, enrolled) = json_request(
