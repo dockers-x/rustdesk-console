@@ -7,6 +7,8 @@ pub mod address_book;
 pub mod audit;
 pub mod audit_alarm;
 pub mod audit_receipt;
+pub(crate) mod console_audit;
+pub(crate) mod console_roles;
 pub mod deployment;
 pub mod device_admission;
 pub mod developer;

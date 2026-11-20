@@ -40,7 +40,7 @@ import {
   VideoCamera,
 } from "@phosphor-icons/react";
 import { clearToken } from "../lib/auth";
-import { canAccessConsolePath } from "../lib/access";
+import { canAccessConsolePath, type RestrictedConsoleRole } from "../lib/access";
 import { useAppTitle } from "../lib/adminTitle";
 import { getMode, setMode } from "../lib/theme";
 import { selfSignedEnabled, useFeatures } from "../features/self-signed-client/api";
@@ -86,6 +86,7 @@ const NAV_ICONS: Record<string, IconType> = {
   activeConnections: PlugsConnected,
   auditConn: PlugsConnected,
   auditFile: FileText,
+  consoleAudit: ShieldCheck,
   recordFiles: VideoCamera,
   serverCommands: Terminal,
   geoRouting: GlobeHemisphereWest,
@@ -170,12 +171,13 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
       adminItem("groups"),
       adminItem("oauth"),
       adminItem("userTokens"),
-      adminItem("loginLogs"),
     ],
   },
   {
     key: "auditRecords",
     items: [
+      adminItem("consoleAudit"),
+      adminItem("loginLogs"),
       adminItem("auditConn"),
       adminItem("auditFile"),
       adminItem("recordFiles"),
@@ -210,9 +212,11 @@ const MOBILE_QUERY = "(max-width: 767px)";
 
 export function AppShell({
   isAdmin,
+  role,
   showTotpReminder,
 }: {
   isAdmin: boolean;
+  role?: RestrictedConsoleRole;
   showTotpReminder: boolean;
 }) {
   const { t } = useTranslation();
@@ -237,10 +241,10 @@ export function AppShell({
       NAV_SECTIONS.map((section) => ({
         ...section,
         items: section.items.filter((item) =>
-          canAccessConsolePath(item.to, isAdmin) && (!item.feature || showSelfSignedClients),
+          canAccessConsolePath(item.to, isAdmin, role) && (!item.feature || showSelfSignedClients),
         ),
       })).filter((section) => section.items.length > 0),
-    [isAdmin, showSelfSignedClients],
+    [isAdmin, role, showSelfSignedClients],
   );
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(
     () =>

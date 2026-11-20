@@ -540,14 +540,13 @@ pub async fn create(
 }
 
 pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), String> {
-    let current = info_by_id(db, model.id).await.map_err(|e| e.to_string())?;
-    if let Some(current) = &current {
-        if current.is_admin() {
-            let count = admin_user_count(db).await.map_err(|e| e.to_string())?;
-            if count <= 1 && (!model.is_admin() || model.status == user::STATUS_DISABLED) {
-                return Err("The last admin user cannot be disabled or demoted".to_string());
-            }
-        }
+    let transaction = super::console_roles::authority_transaction(db)
+        .await
+        .map_err(|e| e.to_string())?;
+    if (!model.is_admin() || !model.is_enabled())
+        && is_last_enabled_admin(&transaction, model.id).await?
+    {
+        return Err("The last admin user cannot be disabled or demoted".to_owned());
     }
     let am = user::ActiveModel {
         id: Set(model.id),
@@ -562,7 +561,33 @@ pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), 
         updated_at: Set(now()),
         ..Default::default()
     };
-    am.update(db).await.map(|_| ()).map_err(|e| e.to_string())
+    am.update(&transaction).await.map_err(|e| e.to_string())?;
+    if model.is_admin() {
+        super::console_roles::clear(&transaction, model.id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    transaction.commit().await.map_err(|e| e.to_string())
+}
+
+async fn is_last_enabled_admin(db: &DatabaseTransaction, id: i32) -> Result<bool, String> {
+    let admins = user::Entity::find()
+        .filter(user::Column::IsAdmin.eq(true))
+        .filter(user::Column::Status.eq(user::STATUS_ENABLE));
+    let target_is_enabled_admin = admins
+        .clone()
+        .filter(user::Column::Id.eq(id))
+        .one(db)
+        .await
+        .map_err(|err| err.to_string())?
+        .is_some();
+    Ok(target_is_enabled_admin
+        && admins
+            .filter(user::Column::Id.ne(id))
+            .one(db)
+            .await
+            .map_err(|err| err.to_string())?
+            .is_none())
 }
 
 pub async fn update_avatar(db: &DatabaseConnection, id: i32, avatar: &str) -> Result<(), String> {
@@ -576,14 +601,20 @@ pub async fn update_avatar(db: &DatabaseConnection, id: i32, avatar: &str) -> Re
 }
 
 pub async fn delete(db: &DatabaseConnection, u: &user::Model) -> Result<(), String> {
-    let count = admin_user_count(db).await.map_err(|e| e.to_string())?;
-    if count <= 1 && u.is_admin() {
-        return Err("The last admin user cannot be deleted".to_string());
-    }
-    user::Entity::delete_by_id(u.id)
-        .exec(db)
+    let transaction = super::console_roles::authority_transaction(db)
         .await
         .map_err(|e| e.to_string())?;
+    if is_last_enabled_admin(&transaction, u.id).await? {
+        return Err("The last admin user cannot be deleted".to_owned());
+    }
+    user::Entity::delete_by_id(u.id)
+        .exec(&transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+    super::console_roles::clear(&transaction, u.id)
+        .await
+        .map_err(|e| e.to_string())?;
+    transaction.commit().await.map_err(|e| e.to_string())?;
     // Unlink related peers (best-effort).
     let _ = crate::services::peer::erase_user_id(db, u.id).await;
     Ok(())

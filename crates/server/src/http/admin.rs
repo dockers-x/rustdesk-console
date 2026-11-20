@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
-use axum::Json;
+use axum::{Extension, Json};
 use sea_orm::Set;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,11 +14,12 @@ use std::collections::HashMap;
 
 use entity::{group, peer, user};
 
-use crate::http::middleware::{AcceptLang, AdminUser, BackendUser, ClientIp};
+use crate::http::middleware::{AcceptLang, AdminUser, AuditReader, BackendUser, ClientIp, DeviceAccess};
 use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
 use crate::http::security_audit::AuditContext;
 use crate::services;
+use crate::services::console_roles::ConsoleRole;
 use crate::services::login_security::{ChallengeSources, VerificationKind};
 use crate::services::user::{LoginProof, AUTH_ENROLLMENT, AUTH_TOTP};
 use crate::state::AppState;
@@ -1261,12 +1262,22 @@ pub async fn user_change_pwd(
     }
 }
 
-pub async fn user_current(State(_state): State<AppState>, user: BackendUser) -> Response {
-    resp::no_store(resp::success(AdminLoginPayload::from_user(
+pub async fn user_current(user: BackendUser, role: Option<Extension<ConsoleRole>>) -> Response {
+    let mut payload = AdminLoginPayload::from_user(
         &user.user,
         user.token,
         user.user_token.auth_level == AUTH_ENROLLMENT,
-    )))
+    );
+    if !payload.must_enroll_totp {
+        match role.map(|Extension(role)| role) {
+            Some(ConsoleRole::AuditReader) => payload.route_names = vec!["AuditReader".to_owned()],
+            Some(ConsoleRole::DeviceGroupOperator { .. }) => {
+                payload.route_names = vec!["DeviceGroupOperator".to_owned()];
+            }
+            _ => {}
+        }
+    }
+    resp::no_store(resp::success(payload))
 }
 
 #[derive(Deserialize, Default)]
@@ -2394,7 +2405,7 @@ pub struct PeerQuery {
 
 pub async fn peer_list(
     State(state): State<AppState>,
-    _user: AdminUser,
+    access: DeviceAccess,
     Query(q): Query<PeerQuery>,
 ) -> Response {
     let f = services::peer::PeerFilters {
@@ -2407,8 +2418,18 @@ pub async fn peer_list(
         ip: q.ip,
         alias: q.alias,
     };
-    match services::peer::list_filtered(&state.db, q.page.unwrap_or(0), q.page_size.unwrap_or(0), f)
-        .await
+    let group_ids = match &access {
+        DeviceAccess::Admin => None,
+        DeviceAccess::Operator { group_ids, .. } => Some(group_ids.as_slice()),
+    };
+    match services::peer::list_filtered_in_groups(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+        f,
+        group_ids,
+    )
+    .await
     {
         Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
         Err(e) => resp::fail(101, e.to_string()),
@@ -2418,10 +2439,16 @@ pub async fn peer_list(
 pub async fn peer_detail(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    _user: AdminUser,
+    access: DeviceAccess,
     Path(id): Path<i32>,
 ) -> Response {
-    match services::peer::info_by_row_id(&state.db, id).await {
+    let peer = match access {
+        DeviceAccess::Admin => services::peer::info_by_row_id(&state.db, id).await,
+        DeviceAccess::Operator { group_ids, .. } => {
+            services::peer::detail_in_groups(&state.db, id, &group_ids).await
+        }
+    };
+    match peer {
         Ok(Some(p)) => resp::success(p),
         _ => resp::fail(101, state.tr(&lang, "ItemNotFound")),
     }
@@ -2444,11 +2471,28 @@ pub struct PeerForm {
 pub async fn peer_update(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    _user: AdminUser,
+    access: DeviceAccess,
+    audit: AuditContext,
     Json(f): Json<PeerForm>,
 ) -> Response {
+    audit.subject(f.row_id);
     if f.row_id == 0 {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
+    }
+    if let DeviceAccess::Operator { user_id, .. } = access {
+        let denied = || resp::fail(resp::CODE_NO_ACCESS, state.tr(&lang, "NoAccess"));
+        if f.id.is_some() || f.user_id.is_some() {
+            return denied();
+        }
+        return match services::peer::update_in_groups(
+            &state.db, user_id, f.row_id, f.alias, f.group_id,
+        )
+        .await
+        {
+            Ok(true) => resp::success(Value::Null),
+            Ok(false) => denied(),
+            Err(_) => resp::fail(101, state.tr(&lang, "OperationFailed")),
+        };
     }
     let mut am = peer::ActiveModel {
         row_id: Set(f.row_id),
@@ -2640,7 +2684,7 @@ fn disconnect_key(uuid: &str, peer_id: &str) -> String {
 
 pub async fn login_log_list(
     State(state): State<AppState>,
-    _user: AdminUser,
+    _user: AuditReader,
     Query(q): Query<PageQuery>,
 ) -> Response {
     match services::login_log::list(
@@ -2880,7 +2924,7 @@ pub struct AuditQuery {
 
 pub async fn audit_conn_list(
     State(state): State<AppState>,
-    _user: AdminUser,
+    _user: AuditReader,
     Query(q): Query<AuditQuery>,
 ) -> Response {
     match services::audit::conn_list(
@@ -2925,7 +2969,7 @@ pub async fn audit_conn_batch_delete(
 
 pub async fn audit_file_list(
     State(state): State<AppState>,
-    _user: AdminUser,
+    _user: AuditReader,
     Query(q): Query<AuditQuery>,
 ) -> Response {
     match services::audit::file_list(

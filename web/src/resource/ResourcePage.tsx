@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -138,7 +138,7 @@ function stringArrayValue(value: unknown) {
   return [];
 }
 
-export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
+export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; beforeTable?: ReactNode }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const idField = cfg.idField ?? "id";
@@ -275,6 +275,8 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
           )}
         </div>
       </div>
+
+      {beforeTable}
 
       {oneTimeSecret && (
         <div className="mb-4">

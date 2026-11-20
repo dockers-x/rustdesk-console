@@ -511,6 +511,18 @@ fn admin_routes() -> Router<AppState> {
             post(oauth::admin_bind_confirm),
         )
         .route("/api/admin/oauth/info", get(oauth::admin_info))
+        // Console roles and audit retention
+        .route(
+            "/api/admin/console-role/:id",
+            get(super::console_audit::role).put(super::console_audit::assign_role),
+        )
+        .route("/api/admin/console-audit/list", get(super::console_audit::list))
+        .route(
+            "/api/admin/console-audit/retention",
+            get(super::console_audit::retention).put(super::console_audit::set_retention),
+        )
+        .route("/api/admin/console-audit/preview", get(super::console_audit::preview))
+        .route("/api/admin/console-audit/cleanup", post(super::console_audit::cleanup))
         // audit
         .route("/api/admin/audit_conn/list", get(admin::audit_conn_list))
         .route(

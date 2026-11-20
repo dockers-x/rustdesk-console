@@ -154,6 +154,8 @@ pub async fn device_group_update(
 }
 
 pub async fn device_group_delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
-    device_group::Entity::delete_by_id(id).exec(db).await?;
-    Ok(())
+    let transaction = super::console_roles::authority_transaction(db).await?;
+    device_group::Entity::delete_by_id(id).exec(&transaction).await?;
+    super::console_roles::remove_group(&transaction, id).await?;
+    transaction.commit().await
 }

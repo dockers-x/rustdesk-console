@@ -3,6 +3,7 @@ import {
   authenticatedHome,
   canAccessConsolePath,
   hasAdminAccess,
+  restrictedConsoleRole,
 } from "./access";
 
 describe("console access", () => {
@@ -32,6 +33,21 @@ describe("console access", () => {
     expect(canAccessConsolePath("/users", false)).toBe(false);
     expect(canAccessConsolePath("/settings", false)).toBe(false);
     expect(canAccessConsolePath("/notification-routing", false)).toBe(false);
+  });
+
+  it("limits audit readers and device operators to their assigned Console pages", () => {
+    const audit = restrictedConsoleRole(["AuditReader"]);
+    const operator = restrictedConsoleRole(["DeviceGroupOperator"]);
+    expect(authenticatedHome(false, audit)).toBe("/console-audit");
+    expect(authenticatedHome(false, operator)).toBe("/peers");
+    for (const path of ["/console-audit", "/login_log", "/audit_conn", "/audit_file"]) {
+      expect(canAccessConsolePath(path, false, audit)).toBe(true);
+      expect(canAccessConsolePath(path, false, operator)).toBe(false);
+    }
+    expect(canAccessConsolePath("/record_file", false, audit)).toBe(false);
+    expect(canAccessConsolePath("/peers?id=123", false, operator)).toBe(true);
+    expect(canAccessConsolePath("/device_group", false, operator)).toBe(false);
+    expect(canAccessConsolePath("/developer/keys", false, operator)).toBe(false);
   });
 
   it("allows administrators to use every console route", () => {

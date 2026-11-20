@@ -8,14 +8,15 @@
 use std::net::{IpAddr, SocketAddr};
 
 use async_trait::async_trait;
-use axum::extract::{ConnectInfo, FromRequestParts};
-use axum::http::request::Parts;
+use axum::extract::{ConnectInfo, FromRequestParts, MatchedPath};
+use axum::http::{request::Parts, Method};
 use axum::response::Response;
 
 use entity::{deployment_token, user, user_token};
 
 use crate::http::response;
 use crate::state::AppState;
+use crate::services::console_roles::{self, ConsoleRole};
 
 /// `Accept-Language` header value (empty string when absent).
 pub struct AcceptLang(pub String);
@@ -301,6 +302,22 @@ impl FromRequestParts<AppState> for BackendUser {
                 state.tr(&lang, "PasswordChangeRequired"),
             ));
         }
+        if !user.is_admin() {
+            let role = console_roles::for_user(&state.db, user.id)
+                .await
+                .map_err(|_| response::fail(101, state.tr(&lang, "OperationFailed")))?;
+            let path = parts
+                .extensions
+                .get::<MatchedPath>()
+                .map_or(parts.uri.path(), MatchedPath::as_str);
+            if !restricted_console_access(&role, &parts.method, path) {
+                return Err(response::fail(
+                    response::CODE_NO_ACCESS,
+                    state.tr(&lang, "NoAccess"),
+                ));
+            }
+            parts.extensions.insert(role);
+        }
         if ut.auth_level == AUTH_ENROLLMENT {
             if !enrollment_allowed_path(parts.uri.path()) {
                 return Err(response::fail(114, "TOTP enrollment required"));
@@ -334,6 +351,125 @@ impl FromRequestParts<AppState> for BackendUser {
             token,
             user_token: ut,
         })
+    }
+}
+
+fn restricted_console_access(role: &ConsoleRole, method: &Method, path: &str) -> bool {
+    if *role == ConsoleRole::Member {
+        return true;
+    }
+    match (*method == Method::GET, path) {
+        (true, "/api/admin/user/current" | "/api/admin/user/mySecurity") => return true,
+        (
+            false,
+            "/api/admin/logout"
+            | "/api/admin/user/changeCurPwd"
+            | "/api/admin/user/myTfaSetup"
+            | "/api/admin/user/myTfaEnable",
+        ) => {
+            return *method == Method::POST;
+        }
+        _ => {}
+    }
+    match role {
+        ConsoleRole::AuditReader => {
+            *method == Method::GET
+                && matches!(
+                    path,
+                    "/api/admin/login_log/list"
+                        | "/api/admin/audit_conn/list"
+                        | "/api/admin/audit_file/list"
+                        | "/api/admin/console-audit/list"
+                )
+        }
+        ConsoleRole::DeviceGroupOperator { .. } => match (*method == Method::GET, path) {
+            (true, "/api/admin/peer/list" | "/api/admin/peer/detail/:id") => true,
+            (false, "/api/admin/peer/update") => *method == Method::POST,
+            _ => false,
+        },
+        ConsoleRole::Member => true,
+    }
+}
+
+/// Authorizes audit list operations for a superadmin or assigned audit reader.
+pub(crate) struct AuditReader;
+
+#[async_trait]
+impl FromRequestParts<AppState> for AuditReader {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let backend = BackendUser::from_request_parts(parts, state).await?;
+        match console_access(parts, &backend) {
+            Some(ConsoleAccess::Admin | ConsoleAccess::AuditReader) => Ok(Self),
+            _ => Err(no_access(parts, state)),
+        }
+    }
+}
+
+/// Authorizes scoped peer operations, carrying the operator and assigned group IDs.
+pub(crate) enum DeviceAccess {
+    Admin,
+    Operator { user_id: i32, group_ids: Vec<i32> },
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for DeviceAccess {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let backend = BackendUser::from_request_parts(parts, state).await?;
+        match console_access(parts, &backend) {
+            Some(ConsoleAccess::Admin) => Ok(Self::Admin),
+            Some(ConsoleAccess::DeviceGroupOperator(group_ids)) => Ok(Self::Operator {
+                user_id: backend.user.id,
+                group_ids,
+            }),
+            _ => Err(no_access(parts, state)),
+        }
+    }
+}
+
+enum ConsoleAccess {
+    Admin,
+    AuditReader,
+    DeviceGroupOperator(Vec<i32>),
+}
+
+fn no_access(parts: &Parts, state: &AppState) -> Response {
+    let lang = header(parts, "Accept-Language").unwrap_or_default();
+    response::fail(response::CODE_NO_ACCESS, state.tr(&lang, "NoAccess"))
+}
+
+fn console_access(parts: &mut Parts, backend: &BackendUser) -> Option<ConsoleAccess> {
+    use crate::services::user::{AUTH_CONSOLE_ADMIN, AUTH_TOTP};
+    if backend.user.is_admin() {
+        if !matches!(
+            backend.user_token.auth_level,
+            AUTH_TOTP | AUTH_CONSOLE_ADMIN
+        ) {
+            return None;
+        }
+        if let Some(audit) = parts
+            .extensions
+            .get::<super::security_audit::AuditContext>()
+        {
+            audit.admin_access();
+        }
+        return Some(ConsoleAccess::Admin);
+    }
+    match parts.extensions.remove::<ConsoleRole>()? {
+        ConsoleRole::AuditReader => Some(ConsoleAccess::AuditReader),
+        ConsoleRole::DeviceGroupOperator { group_ids } => {
+            Some(ConsoleAccess::DeviceGroupOperator(group_ids))
+        }
+        ConsoleRole::Member => None,
     }
 }
 

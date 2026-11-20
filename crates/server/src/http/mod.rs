@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod api;
+mod console_audit;
 pub mod developer;
 mod developer_openapi;
 pub mod file;

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 
@@ -15,10 +15,11 @@ use super::middleware::extract_client_ip;
 
 const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct Decision {
     actor_id: Option<i32>,
     admin_access: bool,
+    management_action: Option<&'static str>,
     session_id: Option<i32>,
     api_key_id: Option<i32>,
     deployment_token_id: Option<i32>,
@@ -69,6 +70,14 @@ impl AuditContext {
         decision.deployment_token_id = Some(token_id);
     }
 
+    /// Set a code-defined management action for this request.
+    pub(crate) fn management(&self, action: &'static str) {
+        self.0
+            .lock()
+            .expect("security audit context poisoned")
+            .management_action = Some(action);
+    }
+
     pub fn subject(&self, subject_id: i32) {
         self.0
             .lock()
@@ -115,12 +124,41 @@ pub async fn trace(State(state): State<AppState>, request: Request, next: Next) 
         .extensions()
         .get::<BusinessCode>()
         .map(|code| code.0);
-    let decision = context.0.lock().expect("security audit context poisoned");
+    let decision = context
+        .0
+        .lock()
+        .expect("security audit context poisoned")
+        .clone();
     let failed = status >= StatusCode::BAD_REQUEST.as_u16() || code.is_some_and(|n| n != 0);
     let denied = matches!(
         response.status(),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
     ) || matches!(code, Some(401 | 403));
+    if let (Some(actor_id), Some(action)) = (
+        decision.actor_id,
+        decision
+            .management_action
+            .or_else(|| management_action(&route, &method)),
+    ) {
+        let outcome = if denied {
+            "denied"
+        } else if failed {
+            "failed"
+        } else {
+            "success"
+        };
+        if let Err(error) = crate::services::console_audit::record(
+            &state.db,
+            action,
+            outcome,
+            actor_id,
+            decision.subject_id,
+        )
+        .await
+        {
+            tracing::error!(%request_id, action, %error, "Failed to persist Console management audit");
+        }
+    }
     if decision.admin_access
         || decision.result.is_some()
         || audited_route(&route, &method)
@@ -151,6 +189,57 @@ pub async fn trace(State(state): State<AppState>, request: Request, next: Next) 
         tracing::debug!(%request_id, %route, %method, status, elapsed_ms, "HTTP request");
     }
     response
+}
+
+fn management_action(route: &str, method: &Method) -> Option<&'static str> {
+    match (method.clone(), route) {
+        (Method::PUT, "/api/admin/console-role/:id") => Some("roles.assign"),
+        (Method::PUT, "/api/admin/user/control-role/:id") => Some("roles.control_assign"),
+        (Method::PUT, "/api/admin/device-admission/settings") => Some("admission.settings"),
+        (Method::POST, "/api/admin/device-admission/review") => Some("admission.review"),
+        (Method::POST, "/api/ab/rule") => Some("address_book.grant_create"),
+        (Method::PATCH, "/api/ab/rule") => Some("address_book.grant_update"),
+        (Method::DELETE, "/api/ab/rules") => Some("address_book.grant_delete"),
+        (Method::PUT, "/api/admin/console-audit/retention") => Some("audit.retention"),
+        (Method::POST, "/api/admin/console-audit/cleanup") => Some("audit.cleanup"),
+        (Method::PUT, "/api/admin/ldap/settings") => Some("login_security.ldap"),
+        (Method::PATCH, "/api/admin/config/login-security") => Some("login_security.update"),
+        (Method::POST, "/api/admin/config/login-security/test-email") => {
+            Some("login_security.test_email")
+        }
+        (Method::POST, "/api/admin/config/smtp") => Some("login_security.smtp_save"),
+        (Method::POST, "/api/admin/user/create") => Some("users.create"),
+        (Method::POST, "/api/admin/user/update") => Some("users.update"),
+        (Method::POST, "/api/admin/user/delete") => Some("users.delete"),
+        (Method::POST, "/api/admin/user/changePwd") => Some("login_security.reset_password"),
+        (Method::POST, "/api/admin/user/tfa/reset") => Some("login_security.reset_totp"),
+        (Method::POST, "/api/admin/user/security") => Some("login_security.account"),
+        (Method::POST, "/api/admin/peer/update") => Some("devices.update"),
+        (Method::POST, "/api/admin/strategy/create") => Some("strategies.create"),
+        (Method::POST, "/api/admin/strategy/update") => Some("strategies.update"),
+        (Method::POST, "/api/admin/strategy/delete") => Some("strategies.delete"),
+        (Method::POST, "/api/admin/strategy/assign") => Some("strategies.assign"),
+        (Method::POST, "/api/admin/strategy_assignment/create") => {
+            Some("strategy_assignments.create")
+        }
+        (Method::POST, "/api/admin/strategy_assignment/update") => {
+            Some("strategy_assignments.update")
+        }
+        (Method::POST, "/api/admin/strategy_assignment/delete") => {
+            Some("strategy_assignments.delete")
+        }
+        (Method::POST, _) if route.starts_with("/api/admin/user/trusted-login-device/") => {
+            Some("login_security.account")
+        }
+        (Method::POST, _) if route.starts_with("/api/admin/config/smtp/") => {
+            Some("login_security.smtp")
+        }
+        (Method::POST, _) if route.starts_with("/api/admin/device_group/") => {
+            Some("roles.device_group")
+        }
+        (Method::POST, _) if route.starts_with("/api/admin/group/") => Some("roles.user_group"),
+        _ => None,
+    }
 }
 
 fn audited_route(route: &str, method: &axum::http::Method) -> bool {

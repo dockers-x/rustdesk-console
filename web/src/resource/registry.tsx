@@ -9,6 +9,7 @@ import { PeerQuickActions } from "../components/PeerQuickActions";
 import { OAuthProviderBadge } from "../components/OAuthProviderBadge";
 import { RecordFileActions } from "../components/RecordFileActions";
 import { UserControlRoleAction } from "../pages/DeviceAdmissionPage";
+import { ConsoleRoleAction } from "../components/ConsoleRoleAction";
 import { UserSecurityActions } from "../components/UserSecurityActions";
 import { WebClientActions } from "../components/WebClientActions";
 import { renderStrategyOptionsSummary } from "./strategyOptions";
@@ -437,6 +438,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     rowActions: (row, t) => (
       <div className="flex flex-wrap items-center gap-2">
         <UserSecurityActions row={row} />
+        {!row.is_admin && <ConsoleRoleAction id={Number(row.id)} username={String(row.username)} />}
         <UserControlRoleAction userId={Number(row.id)} username={String(row.username ?? "")} />
         <RouterLink className="text-sm text-kumo-brand hover:underline"
           to={`/strategy_assignments?target_type=user&target_id=${encodeURIComponent(String(row.id))}`}>
@@ -1033,6 +1035,34 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       activeConnectionDeviceCol,
       monoCol("uuid", "uuid", "max-w-48"),
       { key: "updated_at", label: "updatedAt" },
+    ],
+    fields: [],
+  },
+  {
+    name: "console-audit",
+    titleKey: "consoleAudit",
+    api: "/api/admin/console-audit",
+    canCreate: false,
+    canEdit: false,
+    canDelete: false,
+    filters: [
+      { name: "action", label: "action" },
+      { name: "result", label: "result", type: "select", options: [
+        { label: "auditSuccess", value: "success" },
+        { label: "auditDenied", value: "denied" },
+        { label: "auditFailed", value: "failed" },
+      ] },
+      { name: "actor_id", label: "auditActor" },
+      { name: "subject_id", label: "auditSubject" },
+    ],
+    columns: [
+      { key: "created_at", label: "createdAt" },
+      { key: "action", label: "action" },
+      { key: "result", label: "result", render: (row, t) => t({
+        success: "auditSuccess", denied: "auditDenied", failed: "auditFailed",
+      }[String(row.result)] ?? String(row.result)) },
+      { key: "actor_id", label: "auditActor" },
+      { key: "subject_id", label: "auditSubject" },
     ],
     fields: [],
   },

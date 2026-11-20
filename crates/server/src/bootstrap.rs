@@ -172,6 +172,7 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(audit_file::Entity);
     create!(audit_alarm::Entity);
     create!(audit_receipt::Entity);
+    create!(entity::console_audit::Entity);
     create!(record_file::Entity);
     create!(deployment_token::Entity);
     create!(entity::developer_key::Entity);

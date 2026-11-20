@@ -4,6 +4,7 @@ import { selfSignedMessages } from "./features/self-signed-client/messages";
 import { developerMessages } from "./features/developer/messages";
 import { addressBookMessages } from "./locales/addressBook";
 import { routingPolicyMessages } from "./locales/routingPolicy";
+import { consoleAuditMessages } from "./locales/consoleAudit";
 import { ru } from "./locales/ru";
 
 const en: Record<string, string> = {
@@ -2041,9 +2042,9 @@ i18n.on("languageChanged", (language) => {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en } },
-    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru } },
-    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"] } },
+    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en } },
+    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru } },
+    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"] } },
   },
   lng: detectLang(),
   fallbackLng: "en",

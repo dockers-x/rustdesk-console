@@ -16,6 +16,7 @@ pub mod audit_conn;
 pub mod audit_file;
 pub mod audit_alarm;
 pub mod audit_receipt;
+pub mod console_audit;
 pub mod deployment_event;
 pub mod deployment_token;
 pub mod control_role;

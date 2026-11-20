@@ -3,6 +3,7 @@ import { Button } from "@cloudflare/kumo/components/button";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AppShell } from "./components/AppShell";
+import { ConsoleAuditRetention } from "./pages/ConsoleAuditRetention";
 import { AddressBookPage } from "./pages/AddressBookPage";
 import { DeviceAdmissionPage } from "./pages/DeviceAdmissionPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
@@ -19,6 +20,7 @@ import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { SelfSignedClientPage } from "./features/self-signed-client/SelfSignedClientPage";
 import { DeveloperPage } from "./features/developer/DeveloperPage";
 import { ResourcePage } from "./resource/ResourcePage";
+import type { ResourceConfig } from "./resource/types";
 import { ALL_RESOURCES, resourcePath } from "./resource/registry";
 import { apiGet } from "./lib/api";
 import { currentUserQueryKey } from "./lib/auth";
@@ -26,12 +28,27 @@ import {
   authenticatedHome,
   canAccessConsolePath,
   hasAdminAccess,
+  restrictedConsoleRole,
+  type RestrictedConsoleRole,
 } from "./lib/access";
 
 interface CurrentUserAccess {
   route_names?: string[];
   must_enroll_totp?: boolean;
   tfa_enabled?: boolean;
+}
+
+function resourceForRole(resource: ResourceConfig, role?: RestrictedConsoleRole): ResourceConfig {
+  if (role === "audit") return { ...resource, canDelete: false };
+  if (role === "devices" && resource.name === "peers") {
+    return {
+      ...resource,
+      canDelete: false,
+      columns: resource.columns.filter(({ key }) => !["__peer_actions", "__peer_info"].includes(key)),
+      fields: resource.fields.filter(({ name }) => name === "alias"),
+    };
+  }
+  return resource;
 }
 
 export default function AuthenticatedApp() {
@@ -69,8 +86,9 @@ export default function AuthenticatedApp() {
   if (currentUser.data.must_enroll_totp) return <EnrollTotpPage />;
 
   const isAdmin = hasAdminAccess(currentUser.data.route_names);
-  const home = authenticatedHome(isAdmin);
-  if (!canAccessConsolePath(location.pathname, isAdmin)) {
+  const role = restrictedConsoleRole(currentUser.data.route_names);
+  const home = authenticatedHome(isAdmin, role);
+  if (!canAccessConsolePath(location.pathname, isAdmin, role)) {
     return <Navigate to={home} replace />;
   }
 
@@ -79,6 +97,7 @@ export default function AuthenticatedApp() {
       <Route element={
         <AppShell
           isAdmin={isAdmin}
+          role={role}
           showTotpReminder={isAdmin && currentUser.data.tfa_enabled === false}
         />
       }>
@@ -118,7 +137,8 @@ export default function AuthenticatedApp() {
                 key={["peers", "strategy_assignments"].includes(resource.name)
                   ? `${resource.name}${location.search}`
                   : resource.name}
-                cfg={resource}
+                cfg={resourceForRole(resource, role)}
+                beforeTable={isAdmin && resource.name === "console-audit" ? <ConsoleAuditRetention /> : undefined}
               />
             }
           />

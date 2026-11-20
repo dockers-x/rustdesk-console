@@ -97,6 +97,74 @@ pub async fn list(
     })
 }
 
+fn existing_groups(ids: &[i32]) -> sea_orm::sea_query::SelectStatement {
+    use ::entity::device_group;
+    sea_orm::sea_query::Query::select()
+        .column(device_group::Column::Id)
+        .from(device_group::Entity)
+        .and_where(device_group::Column::Id.is_in(ids.iter().copied()))
+        .to_owned()
+}
+
+pub(crate) async fn detail_in_groups(
+    db: &DatabaseConnection,
+    row_id: i32,
+    ids: &[i32],
+) -> Result<Option<peer::Model>, DbErr> {
+    peer::Entity::find_by_id(row_id)
+        .filter(peer::Column::GroupId.in_subquery(existing_groups(ids)))
+        .one(db)
+        .await
+}
+
+/// Apply an operator's edit with the membership predicate on the database write.
+pub(crate) async fn update_in_groups(
+    db: &DatabaseConnection,
+    actor_id: i32,
+    row_id: i32,
+    alias: Option<String>,
+    destination: Option<i32>,
+) -> Result<bool, DbErr> {
+    use super::console_roles::{self, ConsoleRole};
+    use sea_orm::sea_query::Expr;
+
+    let transaction = console_roles::authority_transaction(db).await?;
+    let actor = ::entity::user::Entity::find_by_id(actor_id)
+        .one(&transaction)
+        .await?;
+    if !actor.is_some_and(|actor| actor.is_enabled() && !actor.is_admin()) {
+        return Ok(false);
+    }
+    let ConsoleRole::DeviceGroupOperator { group_ids } =
+        console_roles::for_user(&transaction, actor_id).await?
+    else {
+        return Ok(false);
+    };
+    if let Some(id) = destination {
+        if !group_ids.contains(&id)
+            || ::entity::device_group::Entity::find_by_id(id)
+                .one(&transaction)
+                .await?
+                .is_none()
+        {
+            return Ok(false);
+        }
+    }
+    let mut update = peer::Entity::update_many()
+        .col_expr(peer::Column::UpdatedAt, Expr::value(now()))
+        .filter(peer::Column::RowId.eq(row_id))
+        .filter(peer::Column::GroupId.in_subquery(existing_groups(&group_ids)));
+    if let Some(alias) = alias {
+        update = update.col_expr(peer::Column::Alias, Expr::value(alias));
+    }
+    if let Some(group_id) = destination {
+        update = update.col_expr(peer::Column::GroupId, Expr::value(group_id));
+    }
+    let changed = update.exec(&transaction).await?.rows_affected > 0;
+    transaction.commit().await?;
+    Ok(changed)
+}
+
 pub async fn create(db: &DatabaseConnection, am: peer::ActiveModel) -> Result<peer::Model, DbErr> {
     let mut am = am;
     am.created_at = Set(now());
@@ -158,8 +226,21 @@ pub async fn list_filtered(
     page_size: u64,
     f: PeerFilters,
 ) -> Result<PeerListResult, DbErr> {
+    list_filtered_in_groups(db, page, page_size, f, None).await
+}
+
+pub(crate) async fn list_filtered_in_groups(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    f: PeerFilters,
+    group_ids: Option<&[i32]>,
+) -> Result<PeerListResult, DbErr> {
     let (page, page_size) = paginate(page, page_size);
     let mut q = peer::Entity::find();
+    if let Some(ids) = group_ids {
+        q = q.filter(peer::Column::GroupId.in_subquery(existing_groups(ids)));
+    }
     if let Some(uid) = f.user_id {
         q = q.filter(peer::Column::UserId.eq(uid));
     }
