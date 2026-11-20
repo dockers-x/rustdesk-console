@@ -10,6 +10,13 @@ pub struct Model {
     pub name: String,
     #[sea_orm(default_value = "")]
     pub url: String,
+    #[sea_orm(default_value = "webhook")]
+    pub channel: String,
+    #[sea_orm(default_value = "")]
+    pub topic: String,
+    #[sea_orm(default_value = "")]
+    #[serde(skip_serializing)]
+    pub destination_revision: String,
     #[sea_orm(default_value = "")]
     #[serde(skip_serializing)]
     pub secret: String,

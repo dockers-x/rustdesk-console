@@ -342,6 +342,14 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/message/status", post(admin::message_status))
         .route("/api/admin/message/delete", post(admin::message_delete))
         .route(
+            "/api/admin/notification/templates",
+            get(admin::notification_template_list).post(admin::notification_template_save),
+        )
+        .route(
+            "/api/admin/notification/template/delete",
+            post(admin::notification_template_delete),
+        )
+        .route(
             "/api/admin/webhook/subscriptions",
             get(admin::webhook_subscription_list).post(admin::webhook_subscription_save),
         )

@@ -24,6 +24,8 @@ pub mod login_log;
 pub mod login_verification;
 pub mod message;
 pub mod message_read;
+pub mod notification_template;
+pub mod notification_template_binding;
 pub mod oauth;
 pub mod peer;
 pub mod record_file;

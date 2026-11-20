@@ -2,6 +2,7 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub const STATUS_PENDING: &str = "pending";
+pub const STATUS_SENDING: &str = "sending";
 pub const STATUS_SUCCESS: &str = "success";
 pub const STATUS_FAILED: &str = "failed";
 
@@ -16,6 +17,11 @@ pub struct Model {
     pub event_id: String,
     #[sea_orm(default_value = "")]
     pub event_type: String,
+    #[sea_orm(default_value = "webhook")]
+    pub channel: String,
+    #[sea_orm(default_value = "")]
+    #[serde(skip_serializing)]
+    pub destination_revision: String,
     #[sea_orm(default_value = "pending")]
     pub status: String,
     #[sea_orm(default_value = 0)]
@@ -30,6 +36,10 @@ pub struct Model {
     pub error: String,
     #[sea_orm(default_value = 0)]
     pub delivered_at: i64,
+    /// Scheduled time for pending rows, or lease deadline for sending rows.
+    #[sea_orm(default_value = 0)]
+    #[serde(skip_serializing)]
+    pub execute_at: i64,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

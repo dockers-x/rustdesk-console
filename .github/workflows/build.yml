@@ -71,13 +71,26 @@ jobs:
           files: rustdesk-console-${{ matrix.target }}.tar.gz
 
   docker:
-    needs: webui
+    needs: binaries
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Download packaged Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rustdesk-console-*-unknown-linux-musl
+          path: release-packages
+          merge-multiple: true
+      - name: Prepare image binaries
+        run: |
+          set -euo pipefail
+          mkdir -p release-binaries/{amd64,arm64}
+          tar -xOf release-packages/rustdesk-console-x86_64-unknown-linux-musl.tar.gz ./rustdesk-console > release-binaries/amd64/rustdesk-console
+          tar -xOf release-packages/rustdesk-console-aarch64-unknown-linux-musl.tar.gz ./rustdesk-console > release-binaries/arm64/rustdesk-console
+          chmod 755 release-binaries/{amd64,arm64}/rustdesk-console
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -97,6 +110,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.release
           platforms: linux/amd64,linux/arm64
           build-args: BUILD_REVISION=${{ github.sha }}
           push: ${{ startsWith(github.ref, 'refs/tags/') }}

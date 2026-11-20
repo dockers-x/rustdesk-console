@@ -129,6 +129,10 @@ rustdesk-console reset-admin-pwd <新密码>
 环境变量覆盖。非中国时区部署时可改成对应 IANA 时区，例如 `TZ=Europe/Berlin`。
 业务时间戳仍按 UTC 保存；`TZ` 用于服务端本地日志/启动时间，以及管理后台界面的本地时间显示。
 
+### 设备上线通知
+
+在「通知路由」配置 ntfy、Bark、Server 酱或 Webhook，支持多渠道、可编辑模板和测试发送。详见[设备通知说明](docs/notification-routing.zh-CN.md)。
+
 ### 认证与安全日志
 
 升级后，管理员需要重新登录。尚未绑定 TOTP 的管理员须先在 Console 完成绑定。

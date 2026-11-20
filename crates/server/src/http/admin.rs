@@ -1552,6 +1552,45 @@ pub struct WebhookQuery {
     pub page_size: Option<u64>,
 }
 
+pub async fn notification_template_list(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Query(q): Query<WebhookQuery>,
+) -> Response {
+    match services::notification_template::list(
+        &state.db,
+        q.page.unwrap_or(0),
+        q.page_size.unwrap_or(0),
+    )
+    .await
+    {
+        Ok(page) => resp::success(page),
+        Err(_) => resp::fail(101, "Failed to load notification templates"),
+    }
+}
+
+pub async fn notification_template_save(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Json(input): Json<services::notification_template::Input>,
+) -> Response {
+    match services::notification_template::save(&state.db, input).await {
+        Ok(template) => resp::success(template),
+        Err(message) => resp::fail(101, message),
+    }
+}
+
+pub async fn notification_template_delete(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Json(request): Json<IdForm>,
+) -> Response {
+    match services::notification_template::delete(&state.db, request.id).await {
+        Ok(()) => resp::success(Value::Null),
+        Err(message) => resp::fail(101, message),
+    }
+}
+
 pub async fn webhook_subscription_list(
     State(state): State<AppState>,
     _user: AdminUser,
@@ -1596,17 +1635,26 @@ pub async fn webhook_subscription_delete(
     }
 }
 
+#[derive(Deserialize)]
+pub struct WebhookTestForm {
+    #[serde(default)]
+    pub id: i32,
+    pub config: Option<services::webhook::WebhookSubscriptionInput>,
+}
+
 pub async fn webhook_subscription_test(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     _user: AdminUser,
-    Json(f): Json<IdForm>,
+    Json(f): Json<WebhookTestForm>,
 ) -> Response {
-    if f.id <= 0 {
-        return resp::fail(101, state.tr(&lang, "ParamsError"));
-    }
-    match services::webhook::test_subscription(&state.db, f.id).await {
-        Ok(_) => resp::success(Value::Null),
+    let result = match f.config {
+        Some(config) => services::webhook::test_configuration(&state.db, config).await,
+        None if f.id > 0 => services::webhook::test_subscription(&state.db, f.id).await,
+        None => return resp::fail(101, state.tr(&lang, "ParamsError")),
+    };
+    match result {
+        Ok(()) => resp::success(Value::Null),
         Err(e) => resp::fail(101, e),
     }
 }

@@ -138,6 +138,10 @@ zone, for example `TZ=Europe/Berlin`, if you do not want Asia/Shanghai local tim
 Business timestamps remain stored in UTC; `TZ` is used for server-local logs/start
 time and for the admin UI's local-time display.
 
+### Device notifications
+
+Notification Routing supports ntfy, Bark, Server Chan and Webhook. A device can trigger several rules, each with its own template and test action. See the [notification guide](docs/notification-routing.zh-CN.md).
+
 ### Authentication and security logs
 
 Administrators must enroll in TOTP and sign in again after upgrading. Their existing

@@ -35,7 +35,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 275;
+pub const DATABASE_VERSION: i32 = 276;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 type MigrationFn = for<'a> fn(&'a DatabaseConnection, &'a Config) -> MigrationFuture<'a>;
@@ -77,6 +77,11 @@ const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
         version: 275,
         name: "session authentication level",
         apply: migration_275,
+    },
+    SchemaMigration {
+        version: 276,
+        name: "notification destinations and delivery schedule",
+        apply: migration_276,
     },
 ];
 
@@ -165,6 +170,8 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(entity::developer_key::Entity);
     create!(deployment_event::Entity);
     create!(webhook_subscription::Entity);
+    create!(entity::notification_template::Entity);
+    create!(entity::notification_template_binding::Entity);
     create!(webhook_delivery::Entity);
     create!(device_presence_state::Entity);
     create!(strategy::Entity);
@@ -249,6 +256,101 @@ fn migration_275<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> Migrati
                 .to_owned();
             db.execute(db.get_database_backend().build(&statement)).await?;
         }
+        Ok(())
+    })
+}
+
+fn migration_276<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        use sea_orm::sea_query::{Alias, Index};
+
+        for (table, column, mut definition) in [
+            (
+                "webhook_subscriptions",
+                "channel",
+                ColumnDef::new(Alias::new("channel"))
+                    .string()
+                    .not_null()
+                    .default("webhook")
+                    .to_owned(),
+            ),
+            (
+                "webhook_subscriptions",
+                "topic",
+                ColumnDef::new(Alias::new("topic"))
+                    .string()
+                    .not_null()
+                    .default("")
+                    .to_owned(),
+            ),
+            (
+                "webhook_deliveries",
+                "channel",
+                ColumnDef::new(Alias::new("channel"))
+                    .string()
+                    .not_null()
+                    .default("webhook")
+                    .to_owned(),
+            ),
+            (
+                "webhook_subscriptions",
+                "destination_revision",
+                ColumnDef::new(Alias::new("destination_revision"))
+                    .string()
+                    .not_null()
+                    .default("")
+                    .to_owned(),
+            ),
+            (
+                "webhook_deliveries",
+                "destination_revision",
+                ColumnDef::new(Alias::new("destination_revision"))
+                    .string()
+                    .not_null()
+                    .default("")
+                    .to_owned(),
+            ),
+            (
+                "webhook_deliveries",
+                "execute_at",
+                ColumnDef::new(Alias::new("execute_at"))
+                    .big_integer()
+                    .not_null()
+                    .default(0)
+                    .to_owned(),
+            ),
+        ] {
+            if !column_exists(db, table, column).await? {
+                let statement = Table::alter()
+                    .table(Alias::new(table))
+                    .add_column(&mut definition)
+                    .to_owned();
+                db.execute(db.get_database_backend().build(&statement))
+                    .await?;
+            }
+        }
+        let index_name = "idx_webhook_delivery_schedule";
+        let backend = db.get_database_backend();
+        // MySQL's CREATE INDEX does not support IF NOT EXISTS.
+        let mut index = Index::create();
+        if backend == DatabaseBackend::MySql {
+            let statement = Statement::from_string(
+                backend,
+                format!("SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'webhook_deliveries' AND index_name = '{index_name}' LIMIT 1"),
+            );
+            if db.query_one(statement).await?.is_some() {
+                return Ok(());
+            }
+        } else {
+            index.if_not_exists();
+        }
+        index
+            .name(index_name)
+            .table(webhook_delivery::Entity)
+            .col(webhook_delivery::Column::Status)
+            .col(webhook_delivery::Column::ExecuteAt)
+            .col(webhook_delivery::Column::Id);
+        db.execute(backend.build(&index)).await?;
         Ok(())
     })
 }
@@ -774,7 +876,7 @@ mod tests {
             .map(|row| row.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, vec![271, 272, 273, 274, DATABASE_VERSION]);
+        assert_eq!(versions, vec![271, 272, 273, 274, 275, DATABASE_VERSION]);
     }
 
     #[tokio::test]

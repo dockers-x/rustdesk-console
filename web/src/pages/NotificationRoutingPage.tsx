@@ -1,10 +1,16 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Badge, type BadgeVariant } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
-import { Input } from "@cloudflare/kumo/components/input";
+import { Input, Textarea } from "@cloudflare/kumo/components/input";
+import { Select } from "@cloudflare/kumo/components/select";
 import { Table } from "@cloudflare/kumo/components/table";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
@@ -16,6 +22,10 @@ import {
 import { InlineMessage } from "../components/InlineMessage";
 import { TableState } from "../components/TableState";
 import { apiGet, apiPost } from "../lib/api";
+import {
+  NotificationTemplatesPanel,
+  useNotificationTemplates,
+} from "./NotificationTemplatesPanel";
 
 interface ListResult<T> {
   list: T[];
@@ -24,10 +34,29 @@ interface ListResult<T> {
   page_size: number;
 }
 
-interface WebhookSubscription {
+const CHANNELS = {
+  webhook: "notificationChannelWebhook",
+  ntfy: "notificationChannelNtfy",
+  bark: "notificationChannelBark",
+  server_chan: "notificationChannelServerChan",
+} as const;
+
+type Channel = keyof typeof CHANNELS;
+
+const DEFAULT_URL: Record<Channel, string> = {
+  webhook: "",
+  ntfy: "https://ntfy.sh",
+  bark: "https://api.day.app",
+  server_chan: "",
+};
+
+interface NotificationSubscription {
   id: number;
   name: string;
+  channel?: Channel;
   url: string;
+  topic?: string;
+  template_id?: number | null;
   event_types: string[];
   device_ids: string[];
   device_group_ids: number[];
@@ -35,9 +64,11 @@ interface WebhookSubscription {
   secret_set: boolean;
 }
 
-interface WebhookDelivery {
+interface NotificationDelivery {
   id: number;
   subscription_id: number;
+  subscription_name?: string;
+  channel?: Channel;
   event_id: string;
   event_type: string;
   status: string;
@@ -55,23 +86,42 @@ interface DeviceGroup {
 interface FormState {
   id?: number;
   name: string;
+  channel: Channel;
   url: string;
+  stored_url: string;
+  topic: string;
+  template_id: number;
   secret: string;
+  secret_set: boolean;
   clear_secret: boolean;
-  event_types: string[];
+  event_types?: string[];
   device_ids_text: string;
   device_group_ids: number[];
   enabled: boolean;
 }
 
 const EVENT_TYPES = ["device.online", "device.offline"];
+const ONLINE_EVENTS = ["device.online"];
+const TEST_MUTATION_KEY = ["notification-test"];
+const SECRET_LABEL = {
+  webhook: "webhookSecret",
+  ntfy: "notificationAccessToken",
+  bark: "notificationDeviceKey",
+  server_chan: "notificationSendKey",
+} as const;
+
+type TestRule = Pick<NotificationSubscription, "id" | "name">;
 
 const emptyForm: FormState = {
   name: "",
+  channel: "webhook",
   url: "",
+  stored_url: "",
+  topic: "",
+  template_id: 0,
   secret: "",
+  secret_set: false,
   clear_secret: false,
-  event_types: [...EVENT_TYPES],
   device_ids_text: "",
   device_group_ids: [],
   enabled: true,
@@ -96,15 +146,20 @@ export function NotificationRoutingPage() {
   const qc = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
-  const [deleteTarget, setDeleteTarget] = useState<WebhookSubscription | null>(
-    null,
-  );
-  const [message, setMessage] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
+  const pickerPortal = useRef<HTMLDivElement>(null);
+  const testedDrafts = useRef(new WeakSet<FormState>());
+  const [deleteTarget, setDeleteTarget] =
+    useState<NotificationSubscription | null>(null);
+  const [message, setMessage] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
 
   const subscriptions = useQuery({
     queryKey: ["webhook-subscriptions"],
     queryFn: () =>
-      apiGet<ListResult<WebhookSubscription>>(
+      apiGet<ListResult<NotificationSubscription>>(
         "/api/admin/webhook/subscriptions",
         { page: 1, page_size: 100 },
       ),
@@ -113,7 +168,7 @@ export function NotificationRoutingPage() {
   const deliveries = useQuery({
     queryKey: ["webhook-deliveries"],
     queryFn: () =>
-      apiGet<ListResult<WebhookDelivery>>("/api/admin/webhook/deliveries", {
+      apiGet<ListResult<NotificationDelivery>>("/api/admin/webhook/deliveries", {
         page: 1,
         page_size: 20,
       }),
@@ -128,22 +183,60 @@ export function NotificationRoutingPage() {
       }),
   });
 
+  const templates = useNotificationTemplates();
+  const availableTemplates = templates.data?.list ?? [];
+  const selectedTemplateAvailable = availableTemplates.some(
+    (template) => template.id === form.template_id,
+  );
+
+  const eventTypes =
+    form.event_types ??
+    (form.channel === "webhook" ? EVENT_TYPES : ONLINE_EVENTS);
+  const usesUrl = form.channel !== "server_chan";
+  const usesTopic = form.channel === "ntfy";
+  const requiresSecret = form.channel === "bark" || form.channel === "server_chan";
+  const secretScopedToUrl = form.channel === "ntfy" || form.channel === "bark";
+  const canKeepStoredSecret =
+    form.secret_set &&
+    (!secretScopedToUrl || form.url.trim() === form.stored_url);
+  const clearingStoredSecret = canKeepStoredSecret && form.clear_secret;
+  const configComplete =
+    form.name.trim() !== "" &&
+    (!usesUrl || form.url.trim() !== "") &&
+    (!usesTopic || form.topic.trim() !== "") &&
+    (!requiresSecret || canKeepStoredSecret || form.secret.trim() !== "") &&
+    eventTypes.length > 0;
+
+  const formConfig = () => ({
+    id: form.id ?? 0,
+    name: form.name,
+    channel: form.channel,
+    url: form.url,
+    topic: form.topic,
+    template_id: form.template_id,
+    secret: form.secret,
+    clear_secret: form.clear_secret && !form.secret.trim(),
+    event_types: eventTypes,
+    device_ids: splitDeviceIds(form.device_ids_text),
+    device_group_ids: form.device_group_ids,
+    enabled: form.enabled,
+  });
+
+  const closeForm = () => {
+    setFormOpen(false);
+    setForm(emptyForm);
+    testedDrafts.current = new WeakSet<FormState>();
+  };
+
   const save = useMutation({
     mutationFn: () =>
-      apiPost<WebhookSubscription>("/api/admin/webhook/subscriptions", {
-        id: form.id ?? 0,
-        name: form.name,
-        url: form.url,
-        secret: form.secret,
-        clear_secret: form.clear_secret,
-        event_types: form.event_types,
-        device_ids: splitDeviceIds(form.device_ids_text),
-        device_group_ids: form.device_group_ids,
-        enabled: form.enabled,
-      }),
+      apiPost<NotificationSubscription>(
+        "/api/admin/webhook/subscriptions",
+        formConfig(),
+      ),
     onSuccess: () => {
-      setFormOpen(false);
-      setMessage(t("webhookSaved"));
+      closeForm();
+      setMessage({ tone: "success", text: t("notificationRuleSaved") });
       void qc.invalidateQueries({ queryKey: ["webhook-subscriptions"] });
     },
   });
@@ -153,19 +246,46 @@ export function NotificationRoutingPage() {
       apiPost("/api/admin/webhook/subscription/delete", { id }),
     onSuccess: () => {
       setDeleteTarget(null);
-      setMessage(t("webhookDeleted"));
+      setMessage({ tone: "success", text: t("notificationRuleDeleted") });
       void qc.invalidateQueries({ queryKey: ["webhook-subscriptions"] });
     },
   });
 
   const test = useMutation({
-    mutationFn: (id: number) =>
+    mutationKey: TEST_MUTATION_KEY,
+    mutationFn: ({ id }: TestRule) =>
       apiPost("/api/admin/webhook/subscription/test", { id }),
-    onSuccess: () => {
-      setMessage(t("webhookTestSent"));
+    onSuccess: (_, { name }) => {
+      setMessage({ tone: "success", text: t("notificationTestSent", { name }) });
+    },
+    onError: (error, { name }) => {
+      setMessage({
+        tone: "error",
+        text: t("notificationTestFailed", {
+          name,
+          error: error.message || t("operationFailed"),
+        }),
+      });
+    },
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["webhook-deliveries"] });
     },
   });
+  const pendingTestIds = useMutationState({
+    filters: { mutationKey: TEST_MUTATION_KEY, status: "pending" },
+    select: (mutation) => (mutation.state.variables as TestRule).id,
+  });
+
+  const draftTest = useMutation({
+    mutationFn: () =>
+      apiPost("/api/admin/webhook/subscription/test", { config: formConfig() }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["webhook-deliveries"] });
+    },
+  });
+  const formActionDisabled =
+    !configComplete || save.isPending || draftTest.isPending;
+  const showDraftResult = testedDrafts.current.has(form);
 
   const groupNameById = useMemo(() => {
     const map = new Map<number, string>();
@@ -175,26 +295,52 @@ export function NotificationRoutingPage() {
 
   const openCreate = () => {
     setForm(emptyForm);
-    setMessage("");
+    setMessage(null);
     save.reset();
+    draftTest.reset();
     setFormOpen(true);
   };
 
-  const openEdit = (row: WebhookSubscription) => {
+  const openEdit = (row: NotificationSubscription) => {
     setForm({
       id: row.id,
       name: row.name,
+      channel: row.channel ?? "webhook",
       url: row.url,
+      stored_url: row.url,
+      topic: row.topic ?? "",
+      template_id: row.template_id ?? 0,
       secret: "",
+      secret_set: row.secret_set,
       clear_secret: false,
-      event_types: row.event_types.length ? row.event_types : [...EVENT_TYPES],
+      event_types: row.event_types,
       device_ids_text: row.device_ids.join("\n"),
       device_group_ids: row.device_group_ids,
       enabled: row.enabled,
     });
-    setMessage("");
+    setMessage(null);
     save.reset();
+    draftTest.reset();
     setFormOpen(true);
+  };
+
+  const changeChannel = (channel: Channel) => {
+    setForm((state) => ({
+      ...state,
+      channel,
+      url: DEFAULT_URL[channel],
+      topic: "",
+      secret: "",
+      secret_set: false,
+      clear_secret: state.clear_secret || state.secret_set,
+    }));
+  };
+
+  const eventLabel = (event: string) => {
+    if (event === "device.online") return t("online");
+    if (event === "device.offline") return t("offline");
+    if (event === "webhook.test") return t("notificationTestDelivery");
+    return event;
   };
 
   return (
@@ -206,20 +352,20 @@ export function NotificationRoutingPage() {
             {t("notificationRoutingHint")}
           </p>
         </div>
-        <Button onClick={openCreate}>{t("createWebhook")}</Button>
+        <Button onClick={openCreate}>{t("createNotificationRule")}</Button>
       </div>
 
       {message && (
-        <InlineMessage tone="success" className="mb-4">
-          {message}
+        <InlineMessage tone={message.tone} className="mb-4">
+          {message.text}
         </InlineMessage>
       )}
 
       <section className="mb-5 rounded-lg border border-kumo-line bg-kumo-elevated">
         <div className="border-b border-kumo-line px-4 py-3">
-          <h2 className="text-base font-semibold">{t("webhookSubscriptions")}</h2>
+          <h2 className="text-base font-semibold">{t("notificationRules")}</h2>
           <p className="mt-1 text-sm text-kumo-subtle">
-            {t("webhookSubscriptionsHint")}
+            {t("notificationRulesHint")}
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -227,7 +373,7 @@ export function NotificationRoutingPage() {
             <Table.Header>
               <Table.Row>
                 <Table.Head>{t("name")}</Table.Head>
-                <Table.Head>{t("webhookUrl")}</Table.Head>
+                <Table.Head>{t("notificationDestination")}</Table.Head>
                 <Table.Head>{t("events")}</Table.Head>
                 <Table.Head>{t("filters")}</Table.Head>
                 <Table.Head>{t("status")}</Table.Head>
@@ -239,21 +385,37 @@ export function NotificationRoutingPage() {
                 <Table.Row key={row.id}>
                   <Table.Cell className="font-medium">{row.name}</Table.Cell>
                   <Table.Cell>
-                    <span className="block max-w-[20rem] truncate font-mono text-xs">
-                      {row.url}
-                    </span>
+                    <div className="font-medium">
+                      {t(CHANNELS[row.channel ?? "webhook"])}
+                    </div>
+                    {row.url && (
+                      <div className="mt-1 max-w-[20rem] break-all font-mono text-xs text-kumo-subtle">
+                        {row.url}
+                      </div>
+                    )}
+                    {row.topic && (
+                      <div className="max-w-[20rem] break-all text-xs text-kumo-subtle">
+                        {t("notificationTopic")}: {row.topic}
+                      </div>
+                    )}
+                    {!!row.template_id && (
+                      <div className="mt-1 text-xs text-kumo-subtle">
+                        {availableTemplates.find((template) => template.id === row.template_id)?.name ||
+                          `#${row.template_id}`}
+                      </div>
+                    )}
                   </Table.Cell>
                   <Table.Cell>
                     <div className="flex flex-wrap gap-1">
                       {row.event_types.map((event) => (
                         <Badge key={event} variant="secondary">
-                          {event}
+                          {eventLabel(event)}
                         </Badge>
                       ))}
                     </div>
                   </Table.Cell>
                   <Table.Cell>
-                    <span className="text-xs text-kumo-subtle">
+                    <span className="text-xs text-kumo-default/80">
                       {row.device_ids.length === 0 &&
                       row.device_group_ids.length === 0
                         ? t("allDevices")
@@ -285,10 +447,11 @@ export function NotificationRoutingPage() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        loading={test.isPending}
-                        onClick={() => test.mutate(row.id)}
+                        aria-label={t("notificationTestRule", { name: row.name })}
+                        loading={pendingTestIds.includes(row.id)}
+                        onClick={() => test.mutate(row)}
                       >
-                        {t("testWebhook")}
+                        {t("notificationSendTest")}
                       </Button>
                       <Button
                         size="sm"
@@ -324,22 +487,23 @@ export function NotificationRoutingPage() {
           {!subscriptions.isLoading &&
             !subscriptions.error &&
             (subscriptions.data?.list ?? []).length === 0 && (
-              <TableState tone="empty">{t("webhookEmpty")}</TableState>
+              <TableState tone="empty">{t("notificationRulesEmpty")}</TableState>
             )}
         </div>
       </section>
 
       <section className="rounded-lg border border-kumo-line bg-kumo-elevated">
         <div className="border-b border-kumo-line px-4 py-3">
-          <h2 className="text-base font-semibold">{t("webhookDeliveries")}</h2>
+          <h2 className="text-base font-semibold">{t("notificationDeliveries")}</h2>
           <p className="mt-1 text-sm text-kumo-subtle">
-            {t("webhookDeliveriesHint")}
+            {t("notificationDeliveriesHint")}
           </p>
         </div>
         <div className="overflow-x-auto">
           <Table>
             <Table.Header>
               <Table.Row>
+                <Table.Head>{t("notificationRule")}</Table.Head>
                 <Table.Head>{t("event")}</Table.Head>
                 <Table.Head>{t("status")}</Table.Head>
                 <Table.Head>{t("httpStatus")}</Table.Head>
@@ -351,7 +515,20 @@ export function NotificationRoutingPage() {
               {(deliveries.data?.list ?? []).map((row) => (
                 <Table.Row key={row.id}>
                   <Table.Cell>
-                    <div className="font-mono text-xs">{row.event_type}</div>
+                    <div className="font-medium">
+                      {row.subscription_name ||
+                        (row.subscription_id === 0 && t("notificationDraftTest")) ||
+                        subscriptions.data?.list.find(
+                          (subscription) => subscription.id === row.subscription_id,
+                        )?.name ||
+                        `#${row.subscription_id}`}
+                    </div>
+                    <div className="mt-1 text-xs text-kumo-subtle">
+                      {t(CHANNELS[row.channel ?? "webhook"])}
+                    </div>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <div className="text-sm">{eventLabel(row.event_type)}</div>
                     <div className="mt-1 max-w-[16rem] truncate text-xs text-kumo-subtle">
                       {row.event_id}
                     </div>
@@ -383,49 +560,150 @@ export function NotificationRoutingPage() {
           {!deliveries.isLoading &&
             !deliveries.error &&
             (deliveries.data?.list ?? []).length === 0 && (
-              <TableState tone="empty">{t("webhookDeliveryEmpty")}</TableState>
+              <TableState tone="empty">{t("notificationDeliveriesEmpty")}</TableState>
             )}
         </div>
       </section>
 
-      <Dialog.Root open={formOpen} onOpenChange={setFormOpen}>
-        <Dialog size="lg" className={dialogPanelClass}>
+      <NotificationTemplatesPanel />
+
+      <Dialog.Root
+        open={formOpen}
+        onOpenChange={(open) => {
+          if (!open && !save.isPending) closeForm();
+        }}
+      >
+        <Dialog size="lg" className={dialogPanelClass} style={{ overflow: "visible" }}>
           <DialogHeader
-            title={form.id ? t("editWebhook") : t("createWebhook")}
-            description={t("webhookDialogHint")}
+            title={
+              form.id ? t("editNotificationRule") : t("createNotificationRule")
+            }
           />
           <DialogBody>
-            <div className="grid gap-4">
-              <label className="block">
-                <span className="mb-1 block text-sm">{t("name")}</span>
-                <Input
-                  value={form.name}
-                  onChange={(e) =>
-                    setForm((state) => ({ ...state, name: e.target.value }))
-                  }
+            <form
+              id="notification-rule-form"
+              ref={formRef}
+              className="grid gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (formActionDisabled) return;
+                draftTest.reset();
+                save.mutate();
+              }}
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-sm">{t("name")}</span>
+                  <Input
+                    className="w-full"
+                    required
+                    value={form.name}
+                    onChange={(e) =>
+                      setForm((state) => ({ ...state, name: e.target.value }))
+                    }
+                  />
+                </label>
+                <Select<Channel>
+                  className="w-full"
+                  container={pickerPortal}
+                  label={t("notificationChannel")}
+                  value={form.channel}
+                  onValueChange={(channel) => {
+                    if (channel) changeChannel(channel);
+                  }}
+                  items={(Object.keys(CHANNELS) as Channel[]).map((channel) => ({
+                    value: channel,
+                    label: t(CHANNELS[channel]),
+                  }))}
                 />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-sm">{t("webhookUrl")}</span>
+              </div>
+              {usesUrl && (
+                <div className={usesTopic ? "grid gap-3 sm:grid-cols-[2fr_1fr]" : ""}>
+                  <label className="block">
+                    <span className="mb-1 block text-sm">
+                      {t(form.channel === "webhook" ? "webhookUrl" : "notificationBaseUrl")}
+                    </span>
+                    <Input
+                      className="w-full"
+                      required
+                      type="url"
+                      value={form.url}
+                      placeholder={DEFAULT_URL[form.channel] || "https://example.com/webhook"}
+                      onChange={(e) =>
+                        setForm((state) => ({ ...state, url: e.target.value }))
+                      }
+                    />
+                  </label>
+                  {usesTopic && (
+                    <label className="block">
+                      <span className="mb-1 block text-sm">
+                        {t("notificationTopic")}
+                      </span>
+                      <Input
+                        className="w-full"
+                        required
+                        value={form.topic}
+                        onChange={(e) =>
+                          setForm((state) => ({ ...state, topic: e.target.value }))
+                        }
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+              <div>
+                <label htmlFor="notification-secret" className="mb-1 block text-sm">
+                  {t(SECRET_LABEL[form.channel])}
+                  {!requiresSecret && (
+                    <span className="text-xs text-kumo-subtle">
+                      {" "}{t("notificationOptional")}
+                    </span>
+                  )}
+                </label>
                 <Input
-                  value={form.url}
-                  placeholder="https://example.com/webhook"
-                  onChange={(e) =>
-                    setForm((state) => ({ ...state, url: e.target.value }))
-                  }
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-sm">{t("webhookSecret")}</span>
-                <Input
+                  id="notification-secret"
+                  className="w-full"
+                  type="password"
+                  autoComplete="new-password"
+                  required={requiresSecret && !canKeepStoredSecret}
+                  disabled={clearingStoredSecret}
                   value={form.secret}
-                  placeholder={form.id ? t("keepExistingSecret") : ""}
+                  aria-describedby={
+                    canKeepStoredSecret && !clearingStoredSecret
+                      ? "notification-keep-secret"
+                      : undefined
+                  }
                   onChange={(e) =>
                     setForm((state) => ({ ...state, secret: e.target.value }))
                   }
                 />
-              </label>
-              {form.id && (
+                {canKeepStoredSecret && !clearingStoredSecret && (
+                  <p id="notification-keep-secret" className="mt-1 text-xs text-kumo-default/80">
+                    {t("keepExistingSecret")}
+                  </p>
+                )}
+              </div>
+              {form.channel === "server_chan" && (
+                <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                  <a
+                    className="rounded-sm text-kumo-default underline underline-offset-2 focus-visible:outline-2"
+                    href="https://sc3.ft07.com/sendkey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t("notificationServerChanAppLink")}
+                  </a>
+                  <a
+                    className="rounded-sm text-kumo-default underline underline-offset-2 focus-visible:outline-2"
+                    href="https://sct.ftqq.com/sendkey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t("notificationServerChanWeChatLink")}
+                  </a>
+                </div>
+              )}
+              {canKeepStoredSecret && !requiresSecret && (
                 <label className="inline-flex min-h-10 items-center gap-2 text-sm">
                   <input
                     type="checkbox"
@@ -434,12 +712,37 @@ export function NotificationRoutingPage() {
                       setForm((state) => ({
                         ...state,
                         clear_secret: e.target.checked,
+                        secret: e.target.checked ? "" : state.secret,
                       }))
                     }
                   />
-                  {t("clearWebhookSecret")}
+                  {t(form.channel === "webhook" ? "clearWebhookSecret" : "notificationClearAccessToken")}
                 </label>
               )}
+              {form.channel === "webhook" && (
+                <p className="text-xs text-kumo-default/80">{t("webhookDialogHint")}</p>
+              )}
+              <Select<number>
+                className="w-full"
+                container={pickerPortal}
+                label={t("notificationTemplate")}
+                value={form.template_id}
+                onValueChange={(templateId) => {
+                  if (templateId === null) return;
+                  setForm((state) => ({ ...state, template_id: templateId }));
+                }}
+                items={[
+                  { value: 0, label: t("notificationTemplateBuiltIn") },
+                  ...(form.template_id > 0 && !selectedTemplateAvailable
+                    ? [{ value: form.template_id, label: `#${form.template_id}` }]
+                    : []),
+                  ...availableTemplates.map((template) => ({
+                    value: template.id,
+                    label: template.name,
+                  })),
+                ]}
+                description={templates.error ? t("notificationTemplatesUnavailable") : undefined}
+              />
               <fieldset className="grid gap-2">
                 <legend className="text-sm">{t("events")}</legend>
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -450,25 +753,29 @@ export function NotificationRoutingPage() {
                     >
                       <input
                         type="checkbox"
-                        checked={form.event_types.includes(event)}
+                        checked={eventTypes.includes(event)}
                         onChange={(e) =>
                           setForm((state) => ({
                             ...state,
                             event_types: e.target.checked
-                              ? [...state.event_types, event]
-                              : state.event_types.filter((item) => item !== event),
+                              ? [...eventTypes, event]
+                              : eventTypes.filter((item) => item !== event),
                           }))
                         }
                       />
-                      {event}
+                      {eventLabel(event)}
                     </label>
                   ))}
                 </div>
               </fieldset>
-              <label className="block">
-                <span className="mb-1 block text-sm">{t("deviceIdFilter")}</span>
-                <textarea
-                  className="min-h-24 w-full rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+              <div>
+                <label htmlFor="notification-device-ids" className="mb-1 block text-sm">
+                  {t("deviceIdFilter")}
+                </label>
+                <Textarea
+                  id="notification-device-ids"
+                  aria-describedby="notification-device-ids-hint"
+                  className="min-h-24 w-full"
                   value={form.device_ids_text}
                   placeholder="123456789&#10;987654321"
                   onChange={(e) =>
@@ -478,10 +785,10 @@ export function NotificationRoutingPage() {
                     }))
                   }
                 />
-                <span className="mt-1 block text-xs text-kumo-subtle">
+                <p id="notification-device-ids-hint" className="mt-1 text-xs text-kumo-default/80">
                   {t("deviceIdFilterHint")}
-                </span>
-              </label>
+                </p>
+              </div>
               <fieldset className="grid gap-2">
                 <legend className="text-sm">{t("deviceGroupFilter")}</legend>
                 <div className="grid max-h-40 gap-2 overflow-auto rounded-lg border border-kumo-line bg-kumo-base p-2 sm:grid-cols-2">
@@ -524,31 +831,55 @@ export function NotificationRoutingPage() {
                 />
                 {t("enabled")}
               </label>
-            </div>
+            </form>
           </DialogBody>
-          <DialogFooter
-            error={
-              save.error
-                ? (save.error as Error).message || t("operationFailed")
-                : undefined
-            }
-          >
-            <Button variant="secondary" onClick={() => setFormOpen(false)}>
-              {t("cancel")}
-            </Button>
-            <Button
-              loading={save.isPending}
-              disabled={
-                save.isPending ||
-                form.name.trim() === "" ||
-                form.url.trim() === "" ||
-                form.event_types.length === 0
+          <div className="shrink-0 overflow-hidden rounded-b-xl">
+            <DialogFooter
+              error={
+                save.error
+                  ? save.error.message || t("operationFailed")
+                  : showDraftResult && draftTest.error
+                    ? t("notificationDraftTestFailed", {
+                        error: draftTest.error.message || t("operationFailed"),
+                      })
+                    : undefined
               }
-              onClick={() => save.mutate()}
             >
-              {t("save")}
-            </Button>
-          </DialogFooter>
+              {showDraftResult && draftTest.isSuccess && (
+                <InlineMessage
+                  tone="success"
+                  className="w-full motion-safe:transition-opacity motion-safe:duration-150 motion-safe:ease-(--ease-out) motion-safe:starting:opacity-0"
+                >
+                  {t("notificationDraftTestSent")}
+                </InlineMessage>
+              )}
+              <Button variant="secondary" disabled={save.isPending} onClick={closeForm}>
+                {t("cancel")}
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={formActionDisabled}
+                loading={draftTest.isPending}
+                onClick={() => {
+                  if (!formRef.current?.reportValidity()) return;
+                  save.reset();
+                  testedDrafts.current.add(form);
+                  draftTest.mutate();
+                }}
+              >
+                {t("notificationSendTest")}
+              </Button>
+              <Button
+                type="submit"
+                form="notification-rule-form"
+                loading={save.isPending}
+                disabled={formActionDisabled}
+              >
+                {t("save")}
+              </Button>
+            </DialogFooter>
+          </div>
+          <div ref={pickerPortal} className="contents" />
         </Dialog>
       </Dialog.Root>
 

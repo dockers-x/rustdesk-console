@@ -8,3 +8,5 @@
 docs/*
 !docs/self-signed-client.en.md
 !docs/self-signed-client.zh-CN.md
+
+/release-packages
