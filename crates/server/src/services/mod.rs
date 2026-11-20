@@ -19,6 +19,7 @@ pub mod ldap;
 pub mod ldap_settings;
 pub mod login_log;
 pub mod login_security;
+mod mail_templates;
 pub mod message;
 mod notification_channel;
 mod notification_delivery;

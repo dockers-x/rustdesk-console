@@ -207,7 +207,7 @@ pub async fn login(
     match services::login_security::required_verification(&state.db, &user, &device).await {
         Ok(Some(kind)) => {
             let challenge = match services::login_security::create_login_challenge(
-                &state.db, &user, &device, kind,
+                &state.db, &user, &device, kind, &lang,
             )
             .await
             {
@@ -376,6 +376,7 @@ pub struct PasswordResetRequestForm {
 pub async fn password_reset_request(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
+    AcceptLang(lang): AcceptLang,
     Json(f): Json<PasswordResetRequestForm>,
 ) -> Response {
     if state.limiter.check_security_status(&ip).0 {
@@ -384,7 +385,8 @@ pub async fn password_reset_request(
     if f.account.trim().is_empty() {
         return resp::fail(101, "ParamsError");
     }
-    match services::login_security::request_password_reset(&state.db, &f.account, &ip).await {
+    match services::login_security::request_password_reset(&state.db, &f.account, &ip, &lang).await
+    {
         Ok(secret) => resp::success(json!({ "secret": secret })),
         Err(e) => resp::fail(101, e),
     }
@@ -435,7 +437,7 @@ pub async fn password_reset_confirm(
         Err(e) => {
             audit.decision("password_reset", "rejected", "reset_denied");
             state.limiter.record_failed_attempt(&ip);
-            resp::fail(101, e)
+            resp::fail(101, state.tr(&lang, &e))
         }
     }
 }
@@ -767,15 +769,7 @@ async fn send_test_email_response(
     if to.is_empty() || !to.contains('@') {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
-    match services::login_security::send_test_email(
-        &state.db,
-        config_id,
-        to,
-        "RustDesk Console test email",
-        "This is a RustDesk Console SMTP configuration test email.",
-    )
-    .await
-    {
+    match services::login_security::send_test_email(&state.db, config_id, to, &lang).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, e),
     }
@@ -1237,6 +1231,8 @@ pub struct UserPasswordForm {
     pub id: i32,
     #[serde(default)]
     pub password: String,
+    #[serde(default, rename = "confirmPassword")]
+    pub confirm_password: Option<String>,
 }
 
 pub async fn user_change_pwd(
@@ -1250,15 +1246,58 @@ pub async fn user_change_pwd(
     if f.password.len() < 4 {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
+    if f.confirm_password
+        .as_ref()
+        .is_some_and(|confirm| confirm != &f.password)
+    {
+        return resp::fail(101, state.tr(&lang, "PasswordMismatch"));
+    }
     match services::user::info_by_id(&state.db, f.id).await {
         Ok(Some(target)) if target.is_admin() && user.auth_level != AUTH_TOTP => {
             resp::fail(resp::CODE_NO_ACCESS, state.tr(&lang, "NoAccess"))
         }
-        Ok(Some(u)) => match services::user::update_password(&state.db, &u, &f.password).await {
-            Ok(_) => resp::success(Value::Null),
-            Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
-        },
+        Ok(Some(target)) => {
+            match services::ldap::is_directory_user(&state.db, target.id).await {
+                Ok(false) => {}
+                Ok(true) => return resp::fail(101, state.tr(&lang, "DirectoryPasswordManaged")),
+                Err(_) => return resp::fail(101, state.tr(&lang, "OperationFailed")),
+            }
+            match services::user::update_password(&state.db, &target, &f.password).await {
+                Ok(()) => resp::success(Value::Null),
+                Err(_) => resp::fail(101, state.tr(&lang, "OperationFailed")),
+            }
+        }
         _ => resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    }
+}
+
+pub async fn user_send_password_reset(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    ClientIp(ip): ClientIp,
+    user: AdminUser,
+    audit: AuditContext,
+    Json(form): Json<IdForm>,
+) -> Response {
+    audit.subject(form.id);
+    let target = match services::user::info_by_id(&state.db, form.id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+        Err(_) => return resp::fail(101, state.tr(&lang, "OperationFailed")),
+    };
+    if target.is_admin() && user.auth_level != AUTH_TOTP {
+        return resp::fail(resp::CODE_NO_ACCESS, state.tr(&lang, "NoAccess"));
+    }
+    match services::login_security::send_user_password_reset(
+        &state.db,
+        &target,
+        &ip,
+        &state.config.lang,
+    )
+    .await
+    {
+        Ok(()) => resp::success(Value::Null),
+        Err(error) => resp::fail(101, state.tr(&lang, &error)),
     }
 }
 

@@ -419,6 +419,12 @@ export function LoginPage() {
       setError(t("verificationCodeRequired"));
       return;
     }
+    const code = resetCode.trim();
+    const mailedToken = resetSecret ? null : /^([a-zA-Z0-9]{40})[.]([0-9]{6})$/.exec(code);
+    if (!resetSecret && !mailedToken) {
+      setError(t("passwordResetTokenInvalid"));
+      return;
+    }
     if (resetPassword.length < 4) {
       setError(t("passwordMinLength"));
       return;
@@ -432,8 +438,8 @@ export function LoginPage() {
     setLoading(true);
     try {
       await apiPost("/api/admin/password-reset/confirm", {
-        secret: resetSecret,
-        code: resetCode,
+        secret: mailedToken?.[1] ?? resetSecret,
+        code: mailedToken?.[2] ?? code,
         password: resetPassword,
         confirmPassword: resetConfirmPassword,
       });
@@ -790,6 +796,16 @@ export function LoginPage() {
                   >
                     {t("sendResetCode")}
                   </Button>
+                  <Button type="button" variant="secondary" className="w-full justify-center"
+                    disabled={loading} onClick={() => {
+                      setError("");
+                      setMessage("");
+                      setResetSecret("");
+                      setResetCode("");
+                      setResetStep("confirm");
+                    }}>
+                    {t("passwordResetUseToken")}
+                  </Button>
                   <Button
                     type="button"
                     variant="secondary"
@@ -804,19 +820,20 @@ export function LoginPage() {
               {setupChecked && !setupMode && resetStep === "confirm" && (
                 <>
                   <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-3 text-sm leading-6">
-                    <div className="font-medium">{t("passwordResetCodeTitle")}</div>
+                    <div className="font-medium">{t(resetSecret ? "passwordResetCodeTitle" : "passwordResetUseToken")}</div>
                     <div className="mt-1 text-kumo-subtle">
-                      {t("passwordResetConfirmHint")}
+                      {t(resetSecret ? "passwordResetConfirmHint" : "passwordResetTokenHint")}
                     </div>
                   </div>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-medium">
-                      {t("verificationCode")}
+                      {t(resetSecret ? "verificationCode" : "passwordResetToken")}
                     </span>
                     <Input
-                      aria-label={t("verificationCode")}
+                      aria-label={t(resetSecret ? "verificationCode" : "passwordResetToken")}
                       value={resetCode}
-                      inputMode="numeric"
+                      inputMode={resetSecret ? "numeric" : "text"}
+                      type={resetSecret ? "text" : "password"}
                       autoComplete="one-time-code"
                       autoFocus
                       className="w-full"

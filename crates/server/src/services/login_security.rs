@@ -1,6 +1,6 @@
 use chrono::Utc;
 use hmac::{Hmac, Mac};
-use lettre::message::Mailbox;
+use lettre::message::{Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Address, Message, SmtpTransport, Transport};
 use rand::RngCore;
@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use ::entity::{login_verification, smtp_email_config, system_setting, trusted_login_device, user};
 
+use super::mail_templates::{self, MailKind, MailMessage};
 use crate::services::now;
 
 const LOGIN_SECURITY_KEY: &str = "login_security";
@@ -402,15 +403,19 @@ pub async fn send_test_email(
     db: &DatabaseConnection,
     config_id: Option<i32>,
     to: &str,
-    title: &str,
-    body: &str,
+    locale: &str,
 ) -> Result<(), String> {
     let settings = match config_id.filter(|id| *id > 0) {
         Some(id) => email_settings_by_id(db, id).await,
         None => email_settings(db).await,
     }
     .map_err(|e| e.to_string())?;
-    send_email(&settings, to, title, body).await
+    send_email(
+        &settings,
+        to,
+        mail_templates::compose(locale, MailKind::SmtpTest),
+    )
+    .await
 }
 
 pub fn totp_required(u: &user::Model, settings: &LoginSecuritySettings) -> bool {
@@ -441,8 +446,9 @@ pub async fn create_login_challenge(
     u: &user::Model,
     device: &DeviceLoginInfo,
     kind: VerificationKind,
+    locale: &str,
 ) -> Result<LoginChallenge, String> {
-    create_challenge(db, u, device, kind, false).await
+    create_challenge(db, u, device, kind, false, locale).await
 }
 
 pub async fn create_federated_challenge(
@@ -450,8 +456,9 @@ pub async fn create_federated_challenge(
     u: &user::Model,
     device: &DeviceLoginInfo,
     kind: VerificationKind,
+    locale: &str,
 ) -> Result<LoginChallenge, String> {
-    create_challenge(db, u, device, kind, true).await
+    create_challenge(db, u, device, kind, true, locale).await
 }
 
 async fn create_challenge(
@@ -460,6 +467,7 @@ async fn create_challenge(
     device: &DeviceLoginInfo,
     kind: VerificationKind,
     federated: bool,
+    locale: &str,
 ) -> Result<LoginChallenge, String> {
     let secret = crate::support::random::random_string(40);
     let mut code_hash = String::new();
@@ -473,10 +481,10 @@ async fn create_challenge(
         }
         let code = random_email_code();
         code_hash = hash_code(&secret, &code);
-        let body = format!(
-            "Your RustDesk Console verification code is: {code}\n\nThis code expires in 10 minutes."
-        );
-        Some((email, body))
+        Some((
+            email,
+            mail_templates::compose(locale, MailKind::LoginCode(&code)),
+        ))
     } else {
         None
     };
@@ -540,29 +548,35 @@ async fn create_challenge(
     .map_err(|e| e.to_string())?;
 
     transaction.commit().await.map_err(|e| e.to_string())?;
-    if let Some((email, body)) = email_message {
-        send_email(
-            &email,
-            &u.email,
-            "RustDesk Console verification code",
-            &body,
-        )
-        .await?;
+    if let Some((settings, message)) = email_message {
+        send_email(&settings, &u.email, message).await?;
     }
     Ok(LoginChallenge { kind, secret })
+}
+
+const PASSWORD_RESET_KINDS: [&str; 2] = [
+    login_verification::KIND_PASSWORD_RESET,
+    login_verification::KIND_ADMIN_PASSWORD_RESET,
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PasswordResetDelivery {
+    VerificationCode,
+    MailToken,
 }
 
 pub async fn request_password_reset(
     db: &DatabaseConnection,
     account: &str,
     ip: &str,
+    locale: &str,
 ) -> Result<String, String> {
-    let secret = crate::support::random::random_string(40);
+    let fake_secret = || crate::support::random::random_string(40);
     let account = account.trim();
     if account.is_empty() {
-        return Ok(secret);
+        return Ok(fake_secret());
     }
-    let user = user::Entity::find()
+    let candidate = user::Entity::find()
         .filter(
             Condition::any()
                 .add(user::Column::Username.eq(account))
@@ -571,82 +585,129 @@ pub async fn request_password_reset(
         .one(db)
         .await
         .map_err(|e| e.to_string())?;
-    let Some(u) = user else {
-        return Ok(secret);
+    let Some(target) = candidate else {
+        return Ok(fake_secret());
     };
-    if !u.is_enabled() || u.email.trim().is_empty() {
-        return Ok(secret);
+    match issue_password_reset(
+        db,
+        &target,
+        ip,
+        PasswordResetDelivery::VerificationCode,
+        locale,
+    )
+    .await
+    {
+        Ok(secret) => Ok(secret),
+        Err(_) => Ok(fake_secret()),
     }
-    let email = match email_settings(db).await {
-        Ok(email) if email.is_configured() => email,
-        Ok(_) => return Ok(secret),
-        Err(e) => {
-            tracing::warn!("failed to load SMTP config for password reset: {e}");
-            return Ok(secret);
-        }
-    };
+}
+
+pub async fn send_user_password_reset(
+    db: &DatabaseConnection,
+    target: &user::Model,
+    ip: &str,
+    locale: &str,
+) -> Result<(), String> {
+    issue_password_reset(db, target, ip, PasswordResetDelivery::MailToken, locale)
+        .await
+        .map(|_| ())
+}
+
+fn password_reset_hash(secret: &str, code: &str, recipient: Option<&str>) -> String {
+    match recipient {
+        Some(email) => hash_code(&format!("{secret}\0{email}"), code),
+        None => hash_code(secret, code),
+    }
+}
+
+async fn issue_password_reset(
+    db: &DatabaseConnection,
+    target: &user::Model,
+    ip: &str,
+    delivery: PasswordResetDelivery,
+    locale: &str,
+) -> Result<String, String> {
+    if !target.is_enabled() {
+        return Err("UserDisabled".into());
+    }
+    if target.email.trim().is_empty() {
+        return Err("EmailNotConfigured".into());
+    }
+    if super::ldap::is_directory_user(db, target.id)
+        .await
+        .map_err(|_| "OperationFailed")?
+    {
+        return Err("DirectoryPasswordManaged".into());
+    }
+    let email = email_settings(db).await.map_err(|_| "OperationFailed")?;
+    if !email.is_configured() {
+        return Err("ResetMailSmtpRequired".into());
+    }
+    let secret = crate::support::random::random_string(40);
     let code = random_email_code();
-    let code_hash = hash_code(&secret, &code);
-    let body = format!(
-        "Your RustDesk Console password reset code is: {code}\n\nThis code expires in 15 minutes. If you did not request a password reset, ignore this email."
-    );
-    let transaction = db.begin().await.map_err(|e| e.to_string())?;
-    user::Entity::update_many()
-        .col_expr(user::Column::Id, Expr::col(user::Column::Id).into())
-        .filter(user::Column::Id.eq(u.id))
-        .exec(&transaction)
+    let (kind, recipient, message) = match delivery {
+        PasswordResetDelivery::VerificationCode => (
+            login_verification::KIND_PASSWORD_RESET,
+            None,
+            mail_templates::compose(locale, MailKind::ResetCode(&code)),
+        ),
+        PasswordResetDelivery::MailToken => (
+            login_verification::KIND_ADMIN_PASSWORD_RESET,
+            Some(target.email.as_str()),
+            mail_templates::compose(
+                locale,
+                MailKind::AdminResetToken(&format!("{secret}.{code}")),
+            ),
+        ),
+    };
+    let tx = db.begin().await.map_err(|_| "OperationFailed")?;
+    let current = super::user::lock_account(&tx, target.id)
         .await
-        .map_err(|e| e.to_string())?;
-    let current = user::Entity::find_by_id(u.id)
-        .one(&transaction)
-        .await
-        .map_err(|e| e.to_string())?;
-    if !current.is_some_and(|current| {
-        current.is_enabled()
-            && current.password == u.password
-            && current.updated_at == u.updated_at
-            && current.email == u.email
+        .map_err(|_| "OperationFailed")?;
+    if !current.is_some_and(|account| {
+        account.is_enabled()
+            && account.password == target.password
+            && account.email == target.email
+            && account.updated_at == target.updated_at
+            && account.is_admin == target.is_admin
     }) {
-        return Ok(secret);
+        return Err("OperationFailed".into());
     }
     if login_verification::Entity::find()
-        .filter(login_verification::Column::UserId.eq(u.id))
-        .filter(login_verification::Column::Kind.eq(login_verification::KIND_PASSWORD_RESET))
+        .filter(login_verification::Column::UserId.eq(target.id))
+        .filter(login_verification::Column::Kind.is_in(PASSWORD_RESET_KINDS))
         .filter(login_verification::Column::VerifiedAt.eq(0))
         .filter(login_verification::Column::ExpiresAt.gt(Utc::now().timestamp()))
-        .order_by_desc(login_verification::Column::Id)
-        .one(&transaction)
+        .one(&tx)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|_| "OperationFailed")?
         .is_some()
     {
-        return Ok(secret);
+        return Err("ResetMailCooldown".into());
     }
     let challenge = login_verification::ActiveModel {
-        user_id: Set(u.id),
+        user_id: Set(target.id),
         secret: Set(secret.clone()),
-        kind: Set(login_verification::KIND_PASSWORD_RESET.to_string()),
-        code_hash: Set(code_hash),
-        ip: Set(ip.to_string()),
+        kind: Set(kind.into()),
+        code_hash: Set(password_reset_hash(&secret, &code, recipient)),
+        ip: Set(ip.into()),
         expires_at: Set(Utc::now().timestamp() + PASSWORD_RESET_TTL_SECS),
         created_at: Set(now()),
         updated_at: Set(now()),
         ..Default::default()
     }
-    .insert(&transaction)
+    .insert(&tx)
     .await
-    .map_err(|e| e.to_string())?;
-    transaction.commit().await.map_err(|e| e.to_string())?;
-    if send_email(&email, &u.email, "RustDesk Console password reset", &body)
-        .await
-        .is_err()
-    {
-        tracing::warn!("failed to send password reset email");
+    .map_err(|_| "OperationFailed")?;
+    tx.commit().await.map_err(|_| "OperationFailed")?;
+
+    if send_email(&email, &target.email, message).await.is_err() {
+        tracing::warn!(user_id = target.id, "failed to send password reset email");
         login_verification::Entity::delete_by_id(challenge.id)
             .exec(db)
             .await
-            .map_err(|e| e.to_string())?;
-        return Ok(crate::support::random::random_string(40));
+            .map_err(|_| "OperationFailed")?;
+        return Err("ResetMailDeliveryFailed".into());
     }
     Ok(secret)
 }
@@ -658,37 +719,50 @@ pub async fn confirm_password_reset(
     new_password: &str,
 ) -> Result<i32, String> {
     if new_password.len() < 4 {
-        return Err("Password must be at least 4 characters".to_string());
+        return Err("ParamsError".into());
     }
     let now_ts = Utc::now().timestamp();
     let challenge = login_verification::Entity::find()
         .filter(login_verification::Column::Secret.eq(secret.trim()))
-        .filter(login_verification::Column::Kind.eq(login_verification::KIND_PASSWORD_RESET))
+        .filter(login_verification::Column::Kind.is_in(PASSWORD_RESET_KINDS))
         .filter(login_verification::Column::VerifiedAt.eq(0))
         .one(db)
         .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "The verification code is incorrect or has expired".to_string())?;
-    if challenge.expires_at < now_ts {
-        return Err("The verification code is incorrect or has expired".to_string());
+        .map_err(|_| "OperationFailed")?
+        .ok_or("ResetCodeInvalid")?;
+    if challenge.expires_at <= now_ts {
+        return Err("ResetCodeInvalid".into());
     }
     let u = user::Entity::find_by_id(challenge.user_id)
         .one(db)
         .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "UserNotFound".to_string())?;
+        .map_err(|_| "OperationFailed")?
+        .filter(user::Model::is_enabled)
+        .ok_or("ResetCodeInvalid")?;
+    if super::ldap::is_directory_user(db, u.id)
+        .await
+        .map_err(|_| "OperationFailed")?
+    {
+        return Err("ResetCodeInvalid".into());
+    }
+    let recipient = (challenge.kind == login_verification::KIND_ADMIN_PASSWORD_RESET)
+        .then_some(u.email.as_str());
     let claimed = login_verification::Entity::update_many()
         .col_expr(login_verification::Column::VerifiedAt, Expr::value(now_ts))
         .filter(login_verification::Column::Id.eq(challenge.id))
         .filter(login_verification::Column::VerifiedAt.eq(0))
         .exec(db)
         .await
-        .map_err(|e| e.to_string())?;
-    if claimed.rows_affected != 1 || hash_code(&challenge.secret, code) != challenge.code_hash {
-        return Err("The verification code is incorrect or has expired".to_string());
+        .map_err(|_| "OperationFailed")?;
+    if claimed.rows_affected != 1
+        || password_reset_hash(&challenge.secret, code, recipient) != challenge.code_hash
+    {
+        return Err("ResetCodeInvalid".into());
     }
 
-    crate::services::user::update_password(db, &u, new_password).await?;
+    crate::services::user::update_password(db, &u, new_password)
+        .await
+        .map_err(|_| "OperationFailed")?;
     Ok(u.id)
 }
 
@@ -1039,23 +1113,24 @@ async fn save_json_setting<T: Serialize>(
 async fn send_email(
     settings: &EmailSettings,
     to: &str,
-    title: &str,
-    body: &str,
+    message: MailMessage,
 ) -> Result<(), String> {
     let settings = settings.clone().normalized();
     if !settings.is_configured() {
         return Err("EmailNotConfigured".to_string());
     }
     let to = to.trim().to_string();
-    let title = title.to_string();
-    let body = body.to_string();
     tokio::task::spawn_blocking(move || {
         let from = sender_mailbox(&settings)?;
         let email = Message::builder()
             .from(from)
             .to(to.parse().map_err(|e| format!("invalid recipient: {e}"))?)
-            .subject(title)
-            .body(body)
+            .subject(message.subject)
+            .multipart(
+                MultiPart::alternative()
+                    .singlepart(SinglePart::plain(message.text))
+                    .singlepart(SinglePart::html(message.html)),
+            )
             .map_err(|e| e.to_string())?;
         let mut builder = match settings.tls.as_str() {
             "none" => SmtpTransport::builder_dangerous(settings.host.as_str()),
@@ -1283,9 +1358,10 @@ mod tests {
         };
         for index in 0..5 {
             device.ip = format!("192.0.2.{index}");
-            let challenge = create_login_challenge(&db, &account, &device, VerificationKind::Totp)
-                .await
-                .unwrap();
+            let challenge =
+                create_login_challenge(&db, &account, &device, VerificationKind::Totp, "en")
+                    .await
+                    .unwrap();
             assert!(verify_login_challenge(
                 &db,
                 &challenge.secret,
@@ -1297,7 +1373,7 @@ mod tests {
             .is_err());
         }
         assert!(
-            create_login_challenge(&db, &account, &device, VerificationKind::Totp)
+            create_login_challenge(&db, &account, &device, VerificationKind::Totp, "en")
                 .await
                 .is_err()
         );
@@ -1321,6 +1397,11 @@ mod tests {
         db.execute(backend.build(&schema.create_table_from_entity(login_verification::Entity)))
             .await
             .unwrap();
+        db.execute(
+            backend.build(&schema.create_table_from_entity(::entity::ldap_identity::Entity)),
+        )
+        .await
+        .unwrap();
         let user = user::ActiveModel {
             username: Set("reset-user".into()),
             email: Set("reset@example.com".into()),
@@ -1330,7 +1411,7 @@ mod tests {
         .insert(&db)
         .await
         .unwrap();
-        login_verification::ActiveModel {
+        let challenge = login_verification::ActiveModel {
             user_id: Set(user.id),
             secret: Set("original-secret".into()),
             kind: Set(login_verification::KIND_PASSWORD_RESET.into()),
@@ -1342,7 +1423,7 @@ mod tests {
         .await
         .unwrap();
         assert_ne!(
-            request_password_reset(&db, "reset-user", "other-ip")
+            request_password_reset(&db, "reset-user", "other-ip", "en")
                 .await
                 .unwrap(),
             "original-secret"
@@ -1351,6 +1432,15 @@ mod tests {
             confirm_password_reset(&db, "original-secret", "wrong", "new-password")
                 .await
                 .is_err()
+        );
+        assert!(
+            login_verification::Entity::find_by_id(challenge.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+                .verified_at
+                > 0
         );
         assert!(
             confirm_password_reset(&db, "original-secret", "123456", "new-password")

@@ -212,6 +212,9 @@ fn management_action(route: &str, method: &Method) -> Option<&'static str> {
         (Method::POST, "/api/admin/user/update") => Some("users.update"),
         (Method::POST, "/api/admin/user/delete") => Some("users.delete"),
         (Method::POST, "/api/admin/user/changePwd") => Some("login_security.reset_password"),
+        (Method::POST, "/api/admin/user/password-reset/email") => {
+            Some("login_security.email_password_reset")
+        }
         (Method::POST, "/api/admin/user/tfa/reset") => Some("login_security.reset_totp"),
         (Method::POST, "/api/admin/user/security") => Some("login_security.account"),
         (Method::POST, "/api/admin/peer/update") => Some("devices.update"),

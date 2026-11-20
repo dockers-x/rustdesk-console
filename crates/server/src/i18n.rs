@@ -134,7 +134,7 @@ impl I18n {
     }
 }
 
-fn language_preferences(header: &str) -> Vec<&str> {
+pub(crate) fn language_preferences(header: &str) -> Vec<&str> {
     let mut preferences: Vec<(&str, f32)> = header
         .split(',')
         .filter_map(|entry| {

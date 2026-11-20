@@ -39,7 +39,7 @@ import {
   UsersThree,
   VideoCamera,
 } from "@phosphor-icons/react";
-import { clearToken } from "../lib/auth";
+import { clearToken, getAuthSessionId } from "../lib/auth";
 import { canAccessConsolePath, type RestrictedConsoleRole } from "../lib/access";
 import { useAppTitle } from "../lib/adminTitle";
 import { getMode, setMode } from "../lib/theme";
@@ -209,6 +209,7 @@ const isItemActive = (pathname: string, item: NavItem) => {
 };
 
 const MOBILE_QUERY = "(max-width: 767px)";
+const TOTP_REMINDER_SKIP_KEY = "admin-totp-reminder-skip-session";
 
 export function AppShell({
   isAdmin,
@@ -225,6 +226,14 @@ export function AppShell({
   const appTitle = useAppTitle();
   const navigate = useNavigate();
   const location = useLocation();
+  const authSession = getAuthSessionId();
+  const [skippedTotpSession, setSkippedTotpSession] = useState(
+    () => localStorage.getItem(TOTP_REMINDER_SKIP_KEY),
+  );
+  const skipTotpReminder = () => {
+    localStorage.setItem(TOTP_REMINDER_SKIP_KEY, authSession);
+    setSkippedTotpSession(authSession);
+  };
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(
     () =>
@@ -555,16 +564,21 @@ export function AppShell({
           </div>
         </header>
         <main id="main-content" className="admin-workspace min-h-0 flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
-          {showTotpReminder && (
+          {showTotpReminder && skippedTotpSession !== authSession && (
             <Banner
               className="mb-4"
               variant="alert"
               icon={<ShieldCheck size={18} />}
               title={t("adminTotpReminder")}
               action={
-                <Banner.Action onClick={() => navigate("/my#account-security")}>
-                  {t("accountSecurity")}
-                </Banner.Action>
+                <>
+                  <Banner.Action onClick={() => navigate("/my#account-security")}>
+                    {t("accountSecurity")}
+                  </Banner.Action>
+                  <Banner.Action variant="secondary" onClick={skipTotpReminder}>
+                    {t("adminTotpSkipSession")}
+                  </Banner.Action>
+                </>
               }
             />
           )}

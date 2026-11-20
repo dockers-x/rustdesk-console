@@ -828,6 +828,7 @@ export const ru: Record<string, string> = {
   totpIssuer: "Издатель TOTP",
   totpIssuerHint: "Название, которое приложение для аутентификации показывает при настройке TOTP.",
   adminTotpReminder: "Для вашей учётной записи администратора отключена двухфакторная аутентификация.",
+  adminTotpSkipSession: "Пропустить в этом сеансе",
   requireEmailVerification: "Требовать проверку email",
   requireEmailVerificationHint: "Отправлять одноразовый код на email пользователя при входе.",
   requireDeviceVerification: "Проверять новые устройства входа",

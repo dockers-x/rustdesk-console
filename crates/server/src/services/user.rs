@@ -646,6 +646,12 @@ pub async fn update_password(
         )
         .filter(user::Column::Id.eq(u.id))
         .filter(user::Column::Password.eq(&u.password))
+        .filter(user::Column::Email.eq(&u.email))
+        .filter(user::Column::Status.eq(u.status))
+        .filter(match u.is_admin {
+            Some(is_admin) => user::Column::IsAdmin.eq(is_admin),
+            None => user::Column::IsAdmin.is_null(),
+        })
         .filter(match u.updated_at {
             Some(timestamp) => user::Column::UpdatedAt.eq(timestamp),
             None => user::Column::UpdatedAt.is_null(),

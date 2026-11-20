@@ -339,6 +339,10 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/user/delete", post(admin::user_delete))
         .route("/api/admin/user/changePwd", post(admin::user_change_pwd))
         .route(
+            "/api/admin/user/password-reset/email",
+            post(admin::user_send_password_reset),
+        )
+        .route(
             "/api/admin/user/security",
             post(admin::user_security_update),
         )

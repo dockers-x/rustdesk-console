@@ -5,6 +5,7 @@ import { developerMessages } from "./features/developer/messages";
 import { addressBookMessages } from "./locales/addressBook";
 import { routingPolicyMessages } from "./locales/routingPolicy";
 import { consoleAuditMessages } from "./locales/consoleAudit";
+import { passwordResetMessages } from "./locales/passwordReset";
 import { ru } from "./locales/ru";
 
 const en: Record<string, string> = {
@@ -838,6 +839,7 @@ const en: Record<string, string> = {
   totpIssuer: "TOTP issuer",
   totpIssuerHint: "The name shown in authenticator apps when an account sets up TOTP.",
   adminTotpReminder: "Two-factor authentication is off for your administrator account.",
+  adminTotpSkipSession: "Skip for this session",
   requireEmailVerification: "Require email verification",
   requireEmailVerificationHint: "Send a one-time code to the user's email address during sign-in.",
   requireDeviceVerification: "Verify new login devices",
@@ -1841,6 +1843,7 @@ const zhCN: Record<string, string> = {
   totpIssuer: "TOTP 发行者",
   totpIssuerHint: "绑定时显示在验证器应用中的名称。",
   adminTotpReminder: "你的管理员账号尚未启用二次验证。",
+  adminTotpSkipSession: "本次跳过",
   requireEmailVerification: "要求邮箱验证",
   requireEmailVerificationHint: "登录时向用户邮箱发送一次性验证码。",
   requireDeviceVerification: "验证新的登录设备",
@@ -2042,9 +2045,9 @@ i18n.on("languageChanged", (language) => {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en } },
-    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru } },
-    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"] } },
+    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en, ...passwordResetMessages.en } },
+    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru, ...passwordResetMessages.ru } },
+    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"], ...passwordResetMessages["zh-CN"] } },
   },
   lng: detectLang(),
   fallbackLng: "en",

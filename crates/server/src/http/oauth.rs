@@ -191,7 +191,11 @@ async fn auth_query_pre(
                 return Err(PollError::NativeMfa);
             }
             let challenge = services::login_security::create_federated_challenge(
-                &state.db, &account, &device, kind,
+                &state.db,
+                &account,
+                &device,
+                kind,
+                &state.config.lang,
             )
             .await
             .map_err(|_| PollError::Failed)?;

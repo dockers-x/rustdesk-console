@@ -537,7 +537,7 @@ pub async fn login(
     match services::login_security::required_verification(&state.db, &user, &device).await {
         Ok(Some(kind)) => {
             let challenge = match services::login_security::create_login_challenge(
-                &state.db, &user, &device, kind,
+                &state.db, &user, &device, kind, &lang,
             )
             .await
             {

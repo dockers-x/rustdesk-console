@@ -8,6 +8,8 @@ import { Input } from "@cloudflare/kumo/components/input";
 import { Table } from "@cloudflare/kumo/components/table";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Switch } from "@cloudflare/kumo/components/switch";
+import { Tabs } from "@cloudflare/kumo/components/tabs";
+import { UserPasswordResetForm } from "../components/UserPasswordResetForm";
 import { AvatarPreview } from "../components/AvatarPreview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InlineMessage } from "../components/InlineMessage";
@@ -177,12 +179,15 @@ export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; before
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<unknown>(null);
+  const [userEditTab, setUserEditTab] = useState<"details" | "password">("details");
+  const [savedUserEmail, setSavedUserEmail] = useState("");
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [oneTimeSecret, setOneTimeSecret] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Record<string, unknown> | null>(
     null,
   );
   const editing = editingId !== null;
+  const editingUser = editing && cfg.name === "users";
 
   const openCreate = () => {
     setEditingId(null);
@@ -195,6 +200,8 @@ export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; before
     setOpen(true);
   };
   const openEdit = (row: Record<string, unknown>) => {
+    setUserEditTab("details");
+    setSavedUserEmail(typeof row.email === "string" ? row.email.trim() : "");
     setEditingId(row[idField]);
     setForm({ ...initialForm(cfg, row), [idField]: row[idField] });
     setOpen(true);
@@ -410,64 +417,82 @@ export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; before
                 title={`${editing ? t("edit") : t("create")} · ${t(cfg.titleKey)}`}
                 description={editing ? t("editDialogHint") : t("createDialogHint")}
               />
-              <DialogBody>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {cfg.fields
-                    .filter((f) => !(editing && f.createOnly))
-                    .filter((f) => !f.visibleWhen || f.visibleWhen(form, editing))
-                    .map((field) => {
-                      const fullWidth =
-                        field.type === "textarea" ||
-                        field.type === "switch" ||
-                        field.type === "color" ||
-                        field.type === "avatar" ||
-                        field.type === "strategy_options" ||
-                        field.type === "tag_names" ||
-                        field.type === "oauth_provider";
-                      return (
-                        <div
-                          key={field.name}
-                          className={fullWidth ? "sm:col-span-2" : undefined}
-                        >
-                          <FieldInput
-                            field={field}
-                            editing={editing}
-                            value={form[field.name]}
-                            form={form}
-                            onChange={(v) =>
-                              setForm((s) => {
-                                const next = { ...s, [field.name]: v };
-                                for (const resetName of field.resetFieldsOnChange ?? []) {
-                                  const resetField = cfg.fields.find(
-                                    (candidate) => candidate.name === resetName,
-                                  );
-                                  next[resetName] =
-                                    resetField?.defaultValue ??
-                                    (resetField?.type === "switch" ? false : "");
-                                }
-                                return next;
-                              })
-                            }
-                          />
-                        </div>
-                      );
-                    })}
+              {editingUser && (
+                <div className="shrink-0 px-4 pt-3 sm:px-6">
+                  <Tabs
+                    value={userEditTab}
+                    onValueChange={(value) => setUserEditTab(value === "password" ? "password" : "details")}
+                    tabs={[
+                      { value: "details", label: t("userEditDetails") },
+                      { value: "password", label: t("resetPassword") },
+                    ]}
+                  />
                 </div>
-              </DialogBody>
-              <DialogFooter
-                error={
-                  save.error
-                    ? (save.error as Error).message || t("operationFailed")
-                    : undefined
-                }
-              >
-                <Button variant="secondary" onClick={() => setOpen(false)}>
-                  {t("cancel")}
-                </Button>
-                <Button onClick={() => save.mutate()} loading={save.isPending}>
-                  {t("save")}
-                </Button>
-              </DialogFooter>
+              )}
+              {editingUser && userEditTab === "password" ? (
+                open && <UserPasswordResetForm id={Number(editingId)} email={savedUserEmail} onClose={() => setOpen(false)} />
+              ) : (
+                <>
+                  <DialogBody>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {cfg.fields
+                        .filter((f) => !(editing && f.createOnly))
+                        .filter((f) => !f.visibleWhen || f.visibleWhen(form, editing))
+                        .map((field) => {
+                          const fullWidth =
+                            field.type === "textarea" ||
+                            field.type === "switch" ||
+                            field.type === "color" ||
+                            field.type === "avatar" ||
+                            field.type === "strategy_options" ||
+                            field.type === "tag_names" ||
+                            field.type === "oauth_provider";
+                          return (
+                            <div
+                              key={field.name}
+                              className={fullWidth ? "sm:col-span-2" : undefined}
+                            >
+                              <FieldInput
+                                field={field}
+                                editing={editing}
+                                value={form[field.name]}
+                                form={form}
+                                onChange={(v) =>
+                                  setForm((s) => {
+                                    const next = { ...s, [field.name]: v };
+                                    for (const resetName of field.resetFieldsOnChange ?? []) {
+                                      const resetField = cfg.fields.find(
+                                        (candidate) => candidate.name === resetName,
+                                      );
+                                      next[resetName] =
+                                        resetField?.defaultValue ??
+                                        (resetField?.type === "switch" ? false : "");
+                                    }
+                                    return next;
+                                  })
+                                }
+                              />
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </DialogBody>
+                  <DialogFooter
+                    error={
+                      save.error
+                        ? (save.error as Error).message || t("operationFailed")
+                        : undefined
+                    }
+                  >
+                    <Button variant="secondary" onClick={() => setOpen(false)}>
+                      {t("cancel")}
+                    </Button>
+                    <Button onClick={() => save.mutate()} loading={save.isPending}>
+                      {t("save")}
+                    </Button>
+                  </DialogFooter>
+                </>
+              )}
             </Dialog>
           </Dialog.Root>
         </>
