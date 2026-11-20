@@ -487,7 +487,8 @@ pub async fn options_for_delivery(
 ) -> Result<Option<(i64, HashMap<String, String>)>, DbErr> {
     use sea_orm::sea_query::OnConflict;
     let row = strategy_delivery::Entity::find_by_id(p.row_id).one(db).await?;
-    if row.is_none() && effective.is_none() {
+    let has_delivery_state = row.is_some();
+    if !has_delivery_state && effective.is_none() {
         return Ok(None);
     }
     let previous: BTreeSet<String> = row
@@ -513,7 +514,7 @@ pub async fn options_for_delivery(
         }
         previous.union(&current).cloned().collect()
     };
-    if keys != previous {
+    if !has_delivery_state || keys != previous {
         strategy_delivery::Entity::insert(strategy_delivery::ActiveModel {
             peer_row_id: Set(p.row_id),
             managed_keys: Set(serde_json::to_value(keys).map_err(|error| DbErr::Json(error.to_string()))?),
