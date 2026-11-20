@@ -35,7 +35,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 276;
+pub const DATABASE_VERSION: i32 = 277;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 type MigrationFn = for<'a> fn(&'a DatabaseConnection, &'a Config) -> MigrationFuture<'a>;
@@ -82,6 +82,11 @@ const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
         version: 276,
         name: "notification destinations and delivery schedule",
         apply: migration_276,
+    },
+    SchemaMigration {
+        version: 277,
+        name: "shared address book notes",
+        apply: migration_277,
     },
 ];
 
@@ -178,12 +183,16 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     create!(device_presence_state::Entity);
     create!(strategy::Entity);
     create!(strategy_assignment::Entity);
+    create!(entity::strategy_delivery::Entity);
     create!(system_setting::Entity);
     create!(address_book_collection::Entity);
     create!(address_book_collection_rule::Entity);
     create!(entity::address_book_trash::Entity);
     create!(server_cmd::Entity);
     create!(device_group::Entity);
+    create!(entity::device_admission::Entity);
+    create!(entity::routing_settings::Entity);
+    create!(entity::control_role::Entity);
     create!(active_connection::Entity);
     Ok(())
 }
@@ -256,6 +265,19 @@ fn migration_275<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> Migrati
                         .not_null()
                         .default(false),
                 )
+                .to_owned();
+            db.execute(db.get_database_backend().build(&statement)).await?;
+        }
+        Ok(())
+    })
+}
+
+fn migration_277<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        if !column_exists(db, "address_book_collections", "note").await? {
+            let statement = Table::alter()
+                .table(address_book_collection::Entity)
+                .add_column(ColumnDef::new(address_book_collection::Column::Note).string().not_null().default(""))
                 .to_owned();
             db.execute(db.get_database_backend().build(&statement)).await?;
         }
@@ -879,7 +901,7 @@ mod tests {
             .map(|row| row.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, vec![271, 272, 273, 274, 275, DATABASE_VERSION]);
+        assert_eq!(versions, vec![271, 272, 273, 274, 275, 276, DATABASE_VERSION]);
     }
 
     #[tokio::test]

@@ -396,10 +396,23 @@ pub async fn list(
     page_size: u64,
     username_like: Option<String>,
 ) -> Result<UserListResult, DbErr> {
+    list_filtered(db, page, page_size, username_like, None).await
+}
+
+pub async fn list_filtered(
+    db: &DatabaseConnection,
+    page: u64,
+    page_size: u64,
+    username_like: Option<String>,
+    group_id: Option<i32>,
+) -> Result<UserListResult, DbErr> {
     let (page, page_size) = paginate(page, page_size);
     let mut q = user::Entity::find();
     if let Some(name) = username_like.filter(|s| !s.is_empty()) {
         q = q.filter(user::Column::Username.contains(&name));
+    }
+    if let Some(group_id) = group_id.filter(|id| *id > 0) {
+        q = q.filter(user::Column::GroupId.eq(group_id));
     }
     let total = q.clone().count(db).await? as i64;
     let list = q

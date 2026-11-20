@@ -3,6 +3,7 @@ import { initReactI18next } from "react-i18next";
 import { selfSignedMessages } from "./features/self-signed-client/messages";
 import { developerMessages } from "./features/developer/messages";
 import { addressBookMessages } from "./locales/addressBook";
+import { routingPolicyMessages } from "./locales/routingPolicy";
 import { ru } from "./locales/ru";
 
 const en: Record<string, string> = {
@@ -778,7 +779,9 @@ const en: Record<string, string> = {
   strategyAutoUpdate: "Auto update",
   strategyLanDiscovery: "LAN discovery",
   strategyDirectServer: "Direct server",
-  strategyDirectServerHint: "Optional host or host:port used by direct connection mode.",
+  strategyDirectServerHint: "Allow direct connections to a device by its IP and port.",
+  strategyDefault: "Default strategy",
+  effectiveStrategy: "Effective strategy",
   strategyDirectServerPlaceholder: "10.0.0.10:21118",
   strategyDirectAccessPort: "Direct access port",
   strategyCustomRendezvousServer: "Custom rendezvous server",
@@ -1779,7 +1782,9 @@ const zhCN: Record<string, string> = {
   strategyAutoUpdate: "自动更新",
   strategyLanDiscovery: "局域网发现",
   strategyDirectServer: "直连服务器",
-  strategyDirectServerHint: "直连模式使用的可选主机或 host:port。",
+  strategyDirectServerHint: "允许通过设备的 IP 地址和端口直接连接。",
+  strategyDefault: "默认策略",
+  effectiveStrategy: "生效策略",
   strategyDirectServerPlaceholder: "10.0.0.10:21118",
   strategyDirectAccessPort: "直连端口",
   strategyCustomRendezvousServer: "自定义 Rendezvous 服务器",
@@ -2036,9 +2041,9 @@ i18n.on("languageChanged", (language) => {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { translation: { ...en, ...addressBookMessages.en } },
-    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru } },
-    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"] } },
+    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en } },
+    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru } },
+    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"] } },
   },
   lng: detectLang(),
   fallbackLng: "en",

@@ -922,6 +922,7 @@ pub struct PageQuery {
     pub client: Option<String>,
     #[serde(default, rename = "type")]
     pub r#type: Option<String>,
+    pub group_id: Option<i32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1056,7 +1057,7 @@ pub struct UserForm {
     #[serde(default)]
     pub status: i32,
     #[serde(default)]
-    pub remark: String,
+    pub remark: Option<String>,
     #[serde(default)]
     pub password: String,
 }
@@ -1079,7 +1080,7 @@ impl UserForm {
             tfa_enforced: false,
             email_verification_enabled: false,
             login_device_verification_enabled: false,
-            remark: self.remark.clone(),
+            remark: self.remark.clone().unwrap_or_default(),
             created_at: None,
             updated_at: None,
         }
@@ -1091,11 +1092,12 @@ pub async fn user_list(
     _user: AdminUser,
     Query(q): Query<PageQuery>,
 ) -> Response {
-    match services::user::list(
+    match services::user::list_filtered(
         &state.db,
         q.page.unwrap_or(0),
         q.page_size.unwrap_or(0),
         q.username,
+        q.group_id,
     )
     .await
     {
@@ -1195,7 +1197,14 @@ pub async fn user_update(
     if f.id == 0 {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
-    match services::user::update(&state.db, &f.to_model()).await {
+    let mut update = f.to_model();
+    if f.remark.is_none() {
+        let Ok(Some(current)) = services::user::info_by_id(&state.db, f.id).await else {
+            return resp::fail(101, state.tr(&lang, "ItemNotFound"));
+        };
+        update.remark = current.remark;
+    }
+    match services::user::update(&state.db, &update).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     }
@@ -2009,6 +2018,7 @@ pub struct StrategyAssignmentQuery {
     pub page_size: Option<u64>,
     #[serde(default)]
     pub target_type: Option<String>,
+    pub target_id: Option<String>,
 }
 
 pub async fn strategy_list(
@@ -2106,9 +2116,19 @@ pub async fn strategy_assign(
     _user: AdminUser,
     Json(f): Json<StrategyAssignForm>,
 ) -> Response {
+    save_strategy_assignment(&state, &lang, None, f).await
+}
+
+async fn save_strategy_assignment(
+    state: &AppState,
+    lang: &str,
+    previous: Option<i32>,
+    f: StrategyAssignForm,
+) -> Response {
     let target_id = value_as_string(f.target_id).unwrap_or_default();
-    match services::strategy::assign(
+    match services::strategy::replace_assignment(
         &state.db,
+        previous,
         f.strategy_id,
         &f.target_type,
         &target_id,
@@ -2135,6 +2155,7 @@ pub async fn strategy_assignment_list(
         q.page.unwrap_or(0),
         q.page_size.unwrap_or(0),
         q.target_type,
+        q.target_id,
     )
     .await
     {
@@ -2167,15 +2188,13 @@ pub async fn strategy_assignment_create(
 pub async fn strategy_assignment_update(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
-    user: AdminUser,
+    _user: AdminUser,
     Json(f): Json<StrategyAssignForm>,
 ) -> Response {
-    if f.id > 0 {
-        if let Err(e) = services::strategy::delete_assignment(&state.db, f.id).await {
-            return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e));
-        }
+    if f.id <= 0 {
+        return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
-    strategy_assign(State(state), AcceptLang(lang), user, Json(f)).await
+    save_strategy_assignment(&state, &lang, Some(f.id), f).await
 }
 
 pub async fn strategy_assignment_delete(
@@ -2516,26 +2535,26 @@ pub async fn peer_request_sysinfo_refresh(
 }
 
 pub async fn peer_enable_trusted_devices(
-    State(state): State<AppState>,
-    AcceptLang(lang): AcceptLang,
     _user: AdminUser,
-    Json(f): Json<AbRowIdForm>,
 ) -> Response {
-    if f.row_id <= 0 {
-        return resp::fail(101, state.tr(&lang, "ParamsError"));
-    }
-    let peer = match services::peer::info_by_row_id(&state.db, f.row_id).await {
-        Ok(Some(peer)) => peer,
-        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    resp::fail(101, "Trusted devices must be configured on the client")
+}
+
+pub async fn peer_effective_strategy(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Path(id): Path<i32>,
+) -> Response {
+    let Ok(Some(peer)) = services::peer::info_by_row_id(&state.db, id).await else {
+        return resp::fail(101, "ItemNotFound");
     };
-    match services::strategy::ensure_trusted_devices_enabled_for_peer(&state.db, &peer).await {
-        Ok(result) => resp::success(json!({
-            "peer_id": peer.id,
-            "strategy_id": result.strategy_id,
-            "strategy_name": result.strategy_name,
-            "already_enabled": result.already_enabled,
+    match services::strategy::effective_for_peer(&state.db, &peer).await {
+        Ok(Some(policy)) => resp::success(json!({
+            "id": policy.id, "name": policy.name,
+            "source": policy.source, "revision": policy.modified_at,
         })),
-        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        Ok(None) => resp::success(Value::Null),
+        Err(_) => resp::fail(101, "OperationFailed"),
     }
 }
 

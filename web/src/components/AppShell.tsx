@@ -77,6 +77,7 @@ const NAV_ICONS: Record<string, IconType> = {
   devices: Monitor,
   oauth: Key,
   addressBook: AddressBook,
+  deviceAdmission: ShieldCheck,
   collections: Folders,
   shareRules: ShieldCheck,
   shareRecords: ShareNetwork,
@@ -145,6 +146,7 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
     items: [
       adminItem("devices"),
       adminItem("deviceGroups"),
+      { to: "/device-admission", key: "deviceAdmission" },
       adminItem("addressBook"),
       adminItem("collections"),
       adminItem("shareRules"),

@@ -128,6 +128,7 @@ export function AddressBookPage() {
   const [filter, setFilter] = useState("");
   const [editing, setEditing] = useState<Book | "new" | null>(null);
   const [bookName, setBookName] = useState("");
+  const [bookNote, setBookNote] = useState("");
   const [manage, setManage] = useState<Book | null>(null);
   const [deleteBook, setDeleteBook] = useState<Book | null>(null);
 
@@ -150,8 +151,9 @@ export function AddressBookPage() {
   const saveProfile = useMutation({
     mutationFn: async () => {
       const name = bookName.trim();
-      if (editing === "new") return apiPost("/api/ab/shared/add", { name });
-      return apiPut("/api/ab/shared/update/profile", { guid: editing?.guid, name });
+      const note = bookNote.trim();
+      if (editing === "new") return apiPost("/api/ab/shared/add", { name, note });
+      return apiPut("/api/ab/shared/update/profile", { guid: editing?.guid, name, note });
     },
     onSuccess: () => {
       setEditing(null);
@@ -192,14 +194,14 @@ export function AddressBookPage() {
               <Input label={t("name")} value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} />
               <Button type="submit" variant="secondary">{t("search")}</Button>
             </form>
-            <Button onClick={() => { saveProfile.reset(); setBookName(""); setEditing("new"); }}>
+            <Button onClick={() => { saveProfile.reset(); setBookName(""); setBookNote(""); setEditing("new"); }}>
               <Plus size={16} />{t("bookNewShared")}
             </Button>
           </div>
           <Table>
             <Table.Header>
               <Table.Row>
-                {[ "name", "bookOwner", "rule", "actions" ].map((key) => <Table.Head key={key}>{t(key)}</Table.Head>)}
+                {[ "name", "bookOwner", "rule", "note", "actions" ].map((key) => <Table.Head key={key}>{t(key)}</Table.Head>)}
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -211,12 +213,13 @@ export function AddressBookPage() {
                   </Table.Cell>
                   <Table.Cell>{book.owner}</Table.Cell>
                   <Table.Cell><Badge>{t(permissionLabels[book.rule] || "noData")}</Badge></Table.Cell>
+                  <Table.Cell><span className="block max-w-64 break-words">{book.note || "—"}</span></Table.Cell>
                   <Table.Cell>
                     {book.rule === 3 && (
                       <div className="flex flex-wrap gap-1">
                         <Button size="sm" variant="ghost" onClick={() => setManage(book)}>{t("shareRules")}</Button>
                         <Button size="sm" variant="ghost" onClick={() => {
-                          saveProfile.reset(); setBookName(book.name); setEditing(book);
+                          saveProfile.reset(); setBookName(book.name); setBookNote(book.note ?? ""); setEditing(book);
                         }}>{t("edit")}</Button>
                         <Button size="sm" variant="ghost" onClick={() => { deleteProfile.reset(); setDeleteBook(book); }}>
                           {t("delete")}
@@ -255,6 +258,8 @@ export function AddressBookPage() {
           onSubmit={(event) => { event.preventDefault(); if (bookName.trim()) saveProfile.mutate(); }}>
           <Input label={t("name")} value={bookName} required maxLength={120}
             onChange={(event) => setBookName(event.target.value)} />
+          <Input label={t("note")} value={bookNote} maxLength={255}
+            onChange={(event) => setBookNote(event.target.value)} />
         </BookDialog>
       )}
       {manage && <GrantDialog key={manage.guid} book={manage} onClose={() => setManage(null)} />}

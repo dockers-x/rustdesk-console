@@ -120,6 +120,14 @@ export function PeerInfoDrawer({
       }),
   });
 
+  const effectiveStrategy = useQuery({
+    queryKey: ["peer-effective-strategy", row.row_id],
+    enabled: open && scope === "admin" && Boolean(row.row_id),
+    queryFn: () => apiGet<{ name: string; source: string; revision: number } | null>(
+      `/api/admin/peer/effective-strategy/${encodeURIComponent(String(row.row_id))}`,
+    ),
+  });
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -236,6 +244,26 @@ export function PeerInfoDrawer({
                   {t("standardClientMetricsHint")}
                 </p>
               </section>
+
+              {scope === "admin" && (
+                <section className="mt-5 grid gap-3">
+                  <h3 className="text-sm font-semibold">{t("effectiveStrategy")}</h3>
+                  {effectiveStrategy.data ? (
+                    <dl className="grid gap-3 sm:grid-cols-3">
+                      <DetailItem label={t("name")} value={effectiveStrategy.data.name} />
+                      <DetailItem label={t("targetType")} value={t({
+                        peer: "targetPeer", user: "targetUser",
+                        device_group: "targetDeviceGroup", default: "strategyDefault",
+                      }[effectiveStrategy.data.source] ?? "noData")} />
+                      <DetailItem label={t("version")} value={effectiveStrategy.data.revision} mono />
+                    </dl>
+                  ) : (
+                    <p className="text-sm text-kumo-subtle">
+                      {t(effectiveStrategy.isPending ? "loading" : effectiveStrategy.error ? "operationFailed" : "noData")}
+                    </p>
+                  )}
+                </section>
+              )}
 
               {scope === "admin" && (
                 <section className="mt-5 grid gap-3">

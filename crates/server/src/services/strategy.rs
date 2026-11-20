@@ -1,13 +1,22 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use sha2::{Digest, Sha256};
 
 use sea_orm::*;
 
-use ::entity::{peer, strategy, strategy_assignment};
+use ::entity::{peer, strategy, strategy_assignment, strategy_delivery};
 
 use crate::services::{now, paginate};
 
 pub const DEFAULT_PRIORITY: i32 = 100;
-const TRUSTED_DEVICES_OPTION: &str = "enable-trusted-devices";
+const POLICY_LOCK_ROW: i32 = 0;
+const DEFAULT_TARGET: &str = "global";
+const NON_HEARTBEAT_OPTIONS: &[&str] = &[
+    "windows-service-video-save-directory", "enable-trusted-devices",
+    "custom-rendezvous-server", "relay-server", "api-server", "key",
+    "allow-websocket", "ice-servers", "allow-insecure-tls-fallback",
+    "proxy-url", "proxy-username", "proxy-password",
+];
 
 pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
     "access-mode",
@@ -67,6 +76,8 @@ pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveStrategy {
     pub id: i32,
+    pub name: String,
+    pub source: String,
     pub modified_at: i64,
     pub config_options: HashMap<String, String>,
     pub extra: HashMap<String, String>,
@@ -113,7 +124,7 @@ pub async fn list(
 }
 
 pub async fn info_by_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: i32,
 ) -> Result<Option<strategy::Model>, DbErr> {
     strategy::Entity::find_by_id(id).one(db).await
@@ -211,13 +222,32 @@ pub async fn set_status(
     Ok(())
 }
 
+async fn lock_policy_writes(tx: &DatabaseTransaction) -> Result<(), DbErr> {
+    use sea_orm::sea_query::{Expr, OnConflict};
+    strategy_delivery::Entity::insert(strategy_delivery::ActiveModel {
+        peer_row_id: Set(POLICY_LOCK_ROW),
+        managed_keys: Set(serde_json::json!([])),
+    })
+    .on_conflict(OnConflict::column(strategy_delivery::Column::PeerRowId).do_nothing().to_owned())
+    .exec_without_returning(tx)
+    .await?;
+    strategy_delivery::Entity::update_many()
+        .col_expr(strategy_delivery::Column::PeerRowId, Expr::value(POLICY_LOCK_ROW))
+        .filter(strategy_delivery::Column::PeerRowId.eq(POLICY_LOCK_ROW))
+        .exec(tx)
+        .await?;
+    Ok(())
+}
+
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    let tx = db.begin().await?;
+    lock_policy_writes(&tx).await?;
     strategy_assignment::Entity::delete_many()
         .filter(strategy_assignment::Column::StrategyId.eq(id))
-        .exec(db)
+        .exec(&tx)
         .await?;
-    strategy::Entity::delete_by_id(id).exec(db).await?;
-    Ok(())
+    strategy::Entity::delete_by_id(id).exec(&tx).await?;
+    tx.commit().await
 }
 
 pub async fn assign(
@@ -227,30 +257,58 @@ pub async fn assign(
     target_id: &str,
     priority: i32,
 ) -> Result<(), DbErr> {
+    replace_assignment(db, None, strategy_id, target_type, target_id, priority).await
+}
+
+pub async fn replace_assignment(
+    db: &DatabaseConnection,
+    previous: Option<i32>,
+    strategy_id: i32,
+    target_type: &str,
+    target_id: &str,
+    priority: i32,
+) -> Result<(), DbErr> {
     let target_type = normalize_target_type(target_type)?;
-    let target_id = target_id.trim();
-    if target_id.is_empty() {
-        return Err(DbErr::Custom("assignment target is required".to_string()));
+    let target_id = if target_type == strategy_assignment::TARGET_DEFAULT {
+        DEFAULT_TARGET
+    } else {
+        target_id.trim()
+    };
+    if target_id.is_empty() || (target_type != strategy_assignment::TARGET_PEER
+        && target_type != strategy_assignment::TARGET_DEFAULT
+        && target_id.parse::<i32>().ok().is_none_or(|id| id <= 0))
+    {
+        return Err(DbErr::Custom("invalid strategy assignment target".to_string()));
+    }
+    let tx = db.begin().await?;
+    lock_policy_writes(&tx).await?;
+    if strategy_id > 0 && info_by_id(&tx, strategy_id).await?.is_none() {
+        return Err(DbErr::RecordNotFound("Strategy".into()));
+    }
+    if let Some(id) = previous {
+        if strategy_assignment::Entity::delete_by_id(id).exec(&tx).await?.rows_affected == 0 {
+            return Err(DbErr::RecordNotFound("Strategy assignment".into()));
+        }
     }
     strategy_assignment::Entity::delete_many()
         .filter(strategy_assignment::Column::TargetType.eq(target_type))
         .filter(strategy_assignment::Column::TargetId.eq(target_id))
-        .exec(db)
+        .exec(&tx)
         .await?;
-    if strategy_id <= 0 {
-        return Ok(());
+    if strategy_id > 0 {
+        strategy_assignment::ActiveModel {
+            strategy_id: Set(strategy_id),
+            target_type: Set(target_type.to_string()),
+            target_id: Set(target_id.to_string()),
+            priority: Set(priority),
+            created_at: Set(now()),
+            updated_at: Set(now()),
+            ..Default::default()
+        }
+        .insert(&tx)
+        .await?;
     }
-    let am = strategy_assignment::ActiveModel {
-        strategy_id: Set(strategy_id),
-        target_type: Set(target_type.to_string()),
-        target_id: Set(target_id.to_string()),
-        priority: Set(priority),
-        created_at: Set(now()),
-        updated_at: Set(now()),
-        ..Default::default()
-    };
-    am.insert(db).await?;
-    Ok(())
+    tx.commit().await
 }
 
 pub async fn list_assignments(
@@ -258,11 +316,15 @@ pub async fn list_assignments(
     page: u64,
     page_size: u64,
     target_type: Option<String>,
+    target_id: Option<String>,
 ) -> Result<StrategyAssignmentListResult, DbErr> {
     let (page, page_size) = paginate(page, page_size);
     let mut q = strategy_assignment::Entity::find();
     if let Some(target_type) = target_type.filter(|v| !v.trim().is_empty()) {
         q = q.filter(strategy_assignment::Column::TargetType.eq(target_type.trim()));
+    }
+    if let Some(id) = target_id.filter(|v| !v.trim().is_empty()) {
+        q = q.filter(strategy_assignment::Column::TargetId.eq(id.trim()));
     }
     let total = q.clone().count(db).await? as i64;
     let list = q
@@ -312,87 +374,6 @@ pub async fn assign_peer_by_strategy_name(
     .await
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerTrustedDevicesStrategyResult {
-    pub strategy_id: i32,
-    pub strategy_name: String,
-    pub already_enabled: bool,
-}
-
-pub async fn ensure_trusted_devices_enabled_for_peer(
-    db: &DatabaseConnection,
-    p: &peer::Model,
-) -> Result<PeerTrustedDevicesStrategyResult, DbErr> {
-    if p.id.trim().is_empty() {
-        return Err(DbErr::Custom("peer id is required".to_string()));
-    }
-
-    if let Some(existing) = effective_for_peer(db, p).await? {
-        if existing
-            .config_options
-            .get(TRUSTED_DEVICES_OPTION)
-            .map(|value| value.eq_ignore_ascii_case("Y"))
-            .unwrap_or(false)
-        {
-            let name = info_by_id(db, existing.id)
-                .await?
-                .map(|row| row.name)
-                .unwrap_or_else(|| format!("Strategy {}", existing.id));
-            return Ok(PeerTrustedDevicesStrategyResult {
-                strategy_id: existing.id,
-                strategy_name: name,
-                already_enabled: true,
-            });
-        }
-    }
-
-    let mut config_options = effective_for_peer(db, p)
-        .await?
-        .map(|strategy| strategy.config_options)
-        .unwrap_or_default();
-    config_options.insert(TRUSTED_DEVICES_OPTION.to_string(), "Y".to_string());
-
-    let name = unique_peer_strategy_name(db, &p.id).await?;
-    let note = format!(
-        "Auto-created by console to enable RustDesk trusted-device behavior for peer {}.",
-        p.id
-    );
-    let row = create(
-        db,
-        &name,
-        &note,
-        strategy::STATUS_ENABLE,
-        config_options,
-        HashMap::new(),
-    )
-    .await?;
-    assign(db, row.id, strategy_assignment::TARGET_PEER, &p.id, 1).await?;
-    Ok(PeerTrustedDevicesStrategyResult {
-        strategy_id: row.id,
-        strategy_name: row.name,
-        already_enabled: false,
-    })
-}
-
-async fn unique_peer_strategy_name(
-    db: &DatabaseConnection,
-    peer_id: &str,
-) -> Result<String, DbErr> {
-    let base = format!("Trusted devices · {peer_id}");
-    if info_by_name(db, &base).await?.is_none() {
-        return Ok(base);
-    }
-    for suffix in 2..1000 {
-        let name = format!("{base} · {suffix}");
-        if info_by_name(db, &name).await?.is_none() {
-            return Ok(name);
-        }
-    }
-    Err(DbErr::Custom(
-        "unable to allocate strategy name".to_string(),
-    ))
-}
-
 pub async fn effective_for_peer(
     db: &DatabaseConnection,
     p: &peer::Model,
@@ -403,6 +384,7 @@ pub async fn effective_for_peer(
         (strategy_assignment::TARGET_PEER, p.id.as_str()),
         (strategy_assignment::TARGET_USER, user_id.as_str()),
         (strategy_assignment::TARGET_DEVICE_GROUP, group_id.as_str()),
+        (strategy_assignment::TARGET_DEFAULT, DEFAULT_TARGET),
     ];
     for (target_type, target_id) in candidates {
         if target_id.is_empty() || target_id == "0" {
@@ -437,18 +419,80 @@ async fn effective_for_target(
         if !row.is_enabled() {
             continue;
         }
-        return Ok(Some(to_effective(row)?));
+        return Ok(Some(to_effective(row, target_type)?));
     }
     Ok(None)
 }
 
-pub fn to_effective(row: strategy::Model) -> Result<EffectiveStrategy, DbErr> {
+fn to_effective(row: strategy::Model, source: &str) -> Result<EffectiveStrategy, DbErr> {
+    let mut config_options = decode_string_map(&row.config_options)?;
+    config_options.retain(|key, _| ALLOWED_CONFIG_OPTIONS.contains(&key.as_str())
+        && !NON_HEARTBEAT_OPTIONS.contains(&key.as_str()));
+    let mut extra = decode_string_map(&row.extra)?;
+    extra.retain(|key, _| !NON_HEARTBEAT_OPTIONS.contains(&key.as_str()));
+    // Clients compare this value for equality. Keep it stable across replicas
+    // and distinct for updates made within the same second.
+    let payload = serde_json::to_vec(&(
+        row.id, source,
+        config_options.iter().collect::<BTreeMap<_, _>>(),
+        extra.iter().collect::<BTreeMap<_, _>>(),
+    )).map_err(|error| DbErr::Json(error.to_string()))?;
+    let digest = Sha256::digest(payload);
+    let mut revision = [0; 8];
+    revision[..6].copy_from_slice(&digest[..6]);
     Ok(EffectiveStrategy {
         id: row.id,
-        modified_at: row.modified_at,
-        config_options: decode_string_map(&row.config_options)?,
-        extra: decode_string_map(&row.extra)?,
+        name: row.name,
+        source: source.into(),
+        modified_at: i64::from_le_bytes(revision) + 1,
+        config_options,
+        extra,
     })
+}
+
+pub async fn options_for_delivery(
+    db: &DatabaseConnection,
+    p: &peer::Model,
+    effective: Option<&EffectiveStrategy>,
+    reported_revision: i64,
+) -> Result<Option<(i64, HashMap<String, String>)>, DbErr> {
+    use sea_orm::sea_query::OnConflict;
+    let row = strategy_delivery::Entity::find_by_id(p.row_id).one(db).await?;
+    if row.is_none() && effective.is_none() {
+        return Ok(None);
+    }
+    let previous: BTreeSet<String> = row
+        .map(|r| serde_json::from_value(r.managed_keys))
+        .transpose()
+        .map_err(|error| DbErr::Json(error.to_string()))?
+        .unwrap_or_default();
+    let (revision, mut options) = effective
+        .map(|policy| (policy.modified_at, policy.config_options.clone()))
+        .unwrap_or_default();
+    let current: BTreeSet<_> = options.keys().cloned().collect();
+    let keys = if revision == reported_revision {
+        options.clear();
+        current
+    } else {
+        for key in previous.difference(&current) {
+            if ALLOWED_CONFIG_OPTIONS.contains(&key.as_str()) && !NON_HEARTBEAT_OPTIONS.contains(&key.as_str()) {
+                options.insert(key.clone(), String::new());
+            }
+        }
+        previous.union(&current).cloned().collect()
+    };
+    if keys != previous {
+        strategy_delivery::Entity::insert(strategy_delivery::ActiveModel {
+            peer_row_id: Set(p.row_id),
+            managed_keys: Set(serde_json::to_value(keys).map_err(|error| DbErr::Json(error.to_string()))?),
+        })
+        .on_conflict(OnConflict::column(strategy_delivery::Column::PeerRowId)
+            .update_column(strategy_delivery::Column::ManagedKeys)
+            .to_owned())
+        .exec_without_returning(db)
+        .await?;
+    }
+    Ok(Some((revision, options)))
 }
 
 fn normalize_status(status: i32) -> i32 {
@@ -464,6 +508,7 @@ fn normalize_target_type(target_type: &str) -> Result<&'static str, DbErr> {
         strategy_assignment::TARGET_PEER => Ok(strategy_assignment::TARGET_PEER),
         strategy_assignment::TARGET_USER => Ok(strategy_assignment::TARGET_USER),
         strategy_assignment::TARGET_DEVICE_GROUP => Ok(strategy_assignment::TARGET_DEVICE_GROUP),
+        strategy_assignment::TARGET_DEFAULT => Ok(strategy_assignment::TARGET_DEFAULT),
         _ => Err(DbErr::Custom("invalid strategy target type".to_string())),
     }
 }
@@ -472,6 +517,11 @@ fn encode_config_options(options: HashMap<String, String>) -> Result<String, DbE
     for key in options.keys() {
         if !ALLOWED_CONFIG_OPTIONS.contains(&key.as_str()) {
             return Err(DbErr::Custom(format!("unsupported strategy option: {key}")));
+        }
+    }
+    if let Some(value) = options.get("direct-access-port") {
+        if !value.is_empty() && value.parse::<u16>().is_err() {
+            return Err(DbErr::Custom("direct access port is outside 0–65535".into()));
         }
     }
     encode_string_map(options)
@@ -586,6 +636,9 @@ mod tests {
         .await
         .unwrap();
 
+        db.execute(db.get_database_backend().build(&schema.create_table_from_entity(strategy_delivery::Entity)))
+            .await
+            .unwrap();
         let mut options = HashMap::new();
         options.insert("enable-file-transfer".to_string(), "N".to_string());
         let strategy = create(
@@ -623,5 +676,29 @@ mod tests {
             effective.config_options.get("enable-file-transfer"),
             Some(&"N".to_string())
         );
+        let old_revision = effective.modified_at;
+        let (_, initial) = options_for_delivery(&db, &peer, Some(&effective), 0)
+            .await.unwrap().unwrap();
+        assert_eq!(initial, effective.config_options);
+
+        assert!(assign(&db, 999, strategy_assignment::TARGET_USER, "7", 1).await.is_err());
+        assert_eq!(effective_for_peer(&db, &peer).await.unwrap().unwrap().id, strategy.id);
+        let changed = HashMap::from([("enable-clipboard".into(), "N".into())]);
+        update(&db, strategy.clone(), "restricted", "", strategy::STATUS_ENABLE, changed, HashMap::new())
+            .await.unwrap();
+        let effective = effective_for_peer(&db, &peer).await.unwrap().unwrap();
+        assert_ne!(effective.modified_at, old_revision);
+        let (_, delta) = options_for_delivery(&db, &peer, Some(&effective), old_revision)
+            .await.unwrap().unwrap();
+        assert_eq!(delta, HashMap::from([
+            ("enable-file-transfer".into(), String::new()),
+            ("enable-clipboard".into(), "N".into()),
+        ]));
+        let (_, acknowledged) = options_for_delivery(&db, &peer, Some(&effective), effective.modified_at)
+            .await.unwrap().unwrap();
+        assert!(acknowledged.is_empty());
+        assign(&db, strategy.id, strategy_assignment::TARGET_DEFAULT, "", 100).await.unwrap();
+        assign(&db, 0, strategy_assignment::TARGET_USER, "7", 100).await.unwrap();
+        assert_eq!(effective_for_peer(&db, &peer).await.unwrap().unwrap().source, "default");
     }
 }

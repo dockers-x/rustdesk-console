@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const TARGET_PEER: &str = "peer";
 pub const TARGET_USER: &str = "user";
 pub const TARGET_DEVICE_GROUP: &str = "device_group";
+pub const TARGET_DEFAULT: &str = "default";
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "strategy_assignments")]

@@ -294,29 +294,8 @@ pub async fn peer_request_sysinfo_refresh(
     }
 }
 
-pub async fn peer_enable_trusted_devices(
-    State(state): State<AppState>,
-    AcceptLang(lang): AcceptLang,
-    user: BackendUser,
-    Json(f): Json<AbRowIdForm>,
-) -> Response {
-    if f.row_id <= 0 {
-        return resp::fail(101, state.tr(&lang, "ParamsError"));
-    }
-    let peer = match services::peer::info_by_row_id(&state.db, f.row_id).await {
-        Ok(Some(peer)) if peer.user_id == user.user.id => peer,
-        Ok(Some(_)) => return resp::fail(101, state.tr(&lang, "NoAccess")),
-        _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
-    };
-    match services::strategy::ensure_trusted_devices_enabled_for_peer(&state.db, &peer).await {
-        Ok(result) => resp::success(json!({
-            "peer_id": peer.id,
-            "strategy_id": result.strategy_id,
-            "strategy_name": result.strategy_name,
-            "already_enabled": result.already_enabled,
-        })),
-        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
-    }
+pub async fn peer_enable_trusted_devices(_user: BackendUser) -> Response {
+    resp::fail(101, "Trusted devices must be configured on the client")
 }
 
 #[derive(Deserialize, Default)]

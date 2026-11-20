@@ -8,6 +8,7 @@ import { PeerInfoDrawer } from "../components/PeerInfoDrawer";
 import { PeerQuickActions } from "../components/PeerQuickActions";
 import { OAuthProviderBadge } from "../components/OAuthProviderBadge";
 import { RecordFileActions } from "../components/RecordFileActions";
+import { UserControlRoleAction } from "../pages/DeviceAdmissionPage";
 import { UserSecurityActions } from "../components/UserSecurityActions";
 import { WebClientActions } from "../components/WebClientActions";
 import { renderStrategyOptionsSummary } from "./strategyOptions";
@@ -286,6 +287,8 @@ const strategyTargetCol = {
         return t("targetUser");
       case "device_group":
         return t("targetDeviceGroup");
+      case "default":
+        return t("strategyDefault");
       default:
         return String(r.target_type ?? "") || "—";
     }
@@ -304,6 +307,7 @@ const STRATEGY_TARGET_OPTIONS = [
   { label: "targetPeer", value: "peer" },
   { label: "targetUser", value: "user" },
   { label: "targetDeviceGroup", value: "device_group" },
+  { label: "strategyDefault", value: "default" },
 ];
 const LOGIN_TYPE_OPTIONS = [
   { label: "loginTypeAccount", value: "account" },
@@ -385,7 +389,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     titleKey: "users",
     api: "/api/admin/user",
     idField: "id",
-    filters: [{ name: "username", label: "search" }],
+    filters: [{ name: "username", label: "search" }, { name: "group_id", label: "groupId" }],
     columns: [
       { key: "id", label: "id" },
       { key: "username", label: "username" },
@@ -393,6 +397,8 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { key: "nickname", label: "nickname" },
       adminCol,
       statusCol,
+      { key: "group_id", label: "groupId" },
+      { key: "remark", label: "note" },
       userTotpCol,
       userEmailSecurityCol,
       userTrustedDeviceCol,
@@ -403,6 +409,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { name: "password", label: "password", type: "password", createOnly: true },
       { name: "email", label: "email", type: "text" },
       { name: "nickname", label: "nickname", type: "text" },
+      { name: "remark", label: "note", type: "textarea" },
       {
         name: "avatar",
         label: "avatar",
@@ -427,7 +434,16 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         defaultValue: 1,
       },
     ],
-    rowActions: (row) => <UserSecurityActions row={row} />,
+    rowActions: (row, t) => (
+      <div className="flex flex-wrap items-center gap-2">
+        <UserSecurityActions row={row} />
+        <UserControlRoleAction userId={Number(row.id)} username={String(row.username ?? "")} />
+        <RouterLink className="text-sm text-kumo-brand hover:underline"
+          to={`/strategy_assignments?target_type=user&target_id=${encodeURIComponent(String(row.id))}`}>
+          {t("strategies")}
+        </RouterLink>
+      </div>
+    ),
   },
   {
     name: "groups",
@@ -579,6 +595,10 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     name: "strategy_assignments",
     titleKey: "strategyAssignments",
     api: "/api/admin/strategy_assignment",
+    filters: [
+      { name: "target_type", label: "targetType", type: "select", options: STRATEGY_TARGET_OPTIONS },
+      { name: "target_id", label: "targetId" },
+    ],
     columns: [
       { key: "id", label: "id" },
       { key: "strategy_id", label: "strategyId" },

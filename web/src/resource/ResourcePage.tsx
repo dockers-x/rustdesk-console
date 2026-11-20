@@ -149,7 +149,11 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
   const linkedDeviceId = cfg.name === "peers" ? searchParams.get("id") : null;
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState((): Record<string, string> =>
-    linkedDeviceId ? { id: linkedDeviceId } : {},
+    linkedDeviceId
+      ? { id: linkedDeviceId }
+      : cfg.name === "strategy_assignments"
+        ? Object.fromEntries([...searchParams].filter(([key]) => key === "target_type" || key === "target_id"))
+        : {},
   );
   const exactDeviceId = Boolean(linkedDeviceId && filters.id === linkedDeviceId);
 
@@ -182,7 +186,12 @@ export function ResourcePage({ cfg }: { cfg: ResourceConfig }) {
 
   const openCreate = () => {
     setEditingId(null);
-    setForm(initialForm(cfg));
+    const defaults = initialForm(cfg);
+    if (cfg.name === "strategy_assignments" && filters.target_type) {
+      defaults.target_type = filters.target_type;
+      defaults.target_id = filters.target_id ?? "";
+    }
+    setForm(defaults);
     setOpen(true);
   };
   const openEdit = (row: Record<string, unknown>) => {

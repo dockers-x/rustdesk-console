@@ -177,14 +177,23 @@ pub async fn heartbeat(
     let mut strategy = resolve_capability(&normalize_reported_version(&info.version, info.ver));
     if let Some(p) = &peer {
         match services::strategy::effective_for_peer(&state.db, p).await {
-            Ok(Some(effective)) => {
-                modified_at = effective.modified_at;
-                strategy.extra.extend(effective.extra);
-                if effective.modified_at != info.modified_at {
-                    strategy.config_options = effective.config_options;
+            Ok(effective) => {
+                if let Some(effective) = &effective {
+                    strategy.extra.extend(effective.extra.clone());
+                }
+                match services::strategy::options_for_delivery(
+                    &state.db, p, effective.as_ref(), info.modified_at,
+                )
+                .await
+                {
+                    Ok(Some((revision, options))) => {
+                        modified_at = revision;
+                        strategy.config_options = options;
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("failed to prepare strategy for {}: {e}", p.id),
                 }
             }
-            Ok(None) => {}
             Err(e) => tracing::warn!("failed to resolve strategy for {}: {e}", p.id),
         }
     }
@@ -1104,6 +1113,15 @@ pub async fn device_deploy(
     }
     match upsert_deployed_peer(&state, &auth, None, &f.id, &f.uuid, Some(&f.pk), None).await {
         Ok(peer) => {
+            if services::device_admission::token_is_configured(&state.config.security.hbbs_admission_token) {
+                let key = services::device_admission::DeviceKey {
+                    id: peer.id.clone(), uuid: peer.uuid.clone(), public_key: peer.pk.clone(),
+                };
+                if services::device_admission::record_deployment(&state.db, &key).await.is_err() {
+                    audit.decision("device_deploy", "error", "admission_write_failed");
+                    return Json(json!({ "error": "Failed to persist device approval" })).into_response();
+                }
+            }
             if let Some(strategy_id) = auth
                 .deployment_token
                 .as_ref()
@@ -2335,7 +2353,7 @@ pub async fn ab_shared_profiles(
             guid: compose_guid(u.group_id, u.id, ab.id),
             name: ab.name.clone(),
             owner: u.username.clone(),
-            note: String::new(),
+            note: ab.note.clone(),
             rule: entity::address_book_collection_rule::RULE_FULL_CONTROL,
         });
     }
@@ -2369,7 +2387,7 @@ pub async fn ab_shared_profiles(
                 guid: compose_guid(owner.group_id, owner.id, c.id),
                 name: c.name.clone(),
                 owner: owner.username.clone(),
-                note: String::new(),
+                note: c.note.clone(),
                 rule: *max_by_cid.get(&c.id).unwrap_or(&0),
             });
         }
@@ -2416,7 +2434,7 @@ pub async fn ab_shared_profile(
         guid: q.ab,
         name: book.name,
         owner: owner.username,
-        note: String::new(),
+        note: book.note,
         rule,
     })
     .into_response()
@@ -2429,11 +2447,9 @@ pub struct SharedAbForm {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
-    pub note: String,
+    pub note: Option<String>,
     #[serde(default)]
     pub owner: String,
-    #[serde(default)]
-    pub info: Value,
 }
 
 pub async fn ab_shared_add(
@@ -2442,11 +2458,11 @@ pub async fn ab_shared_add(
     Json(f): Json<SharedAbForm>,
 ) -> Response {
     let name = f.name.trim();
-    if name.is_empty() {
+    let note = f.note.as_deref().unwrap_or_default().trim();
+    if name.is_empty() || name.chars().count() > 120 || note.chars().count() > 255 {
         return resp::error("ParamsError");
     }
-    let _ = (&f.note, &f.info);
-    match services::address_book::create_collection(&state.db, user.user.id, name).await {
+    match services::address_book::create_collection_with_note(&state.db, user.user.id, name, note).await {
         Ok(row) => Json(json!({
             "guid": compose_guid(user.user.group_id, user.user.id, row.id),
             "name": row.name,
@@ -2481,23 +2497,15 @@ pub async fn ab_shared_update_profile(
             _ => return resp::error("owner not found"),
         }
     };
-    if let Err(e) =
-        services::address_book::update_collection(&state.db, collection.id, new_owner.id, &new_name)
-            .await
-    {
+    let note = f.note.as_deref().map(str::trim);
+    if new_name.chars().count() > 120 || note.is_some_and(|note| note.chars().count() > 255) {
+        return resp::error("ParamsError");
+    }
+    if let Err(e) = services::address_book::update_collection_profile(
+        &state.db, &collection, new_owner.id, &new_name, note,
+    ).await {
         return resp::error(e.to_string());
     }
-    if let Err(e) = services::address_book::transfer_collection_owner(
-        &state.db,
-        collection.id,
-        owner.id,
-        new_owner.id,
-    )
-    .await
-    {
-        return resp::error(e.to_string());
-    }
-    let _ = (&f.note, &f.info);
     Json(json!({
         "guid": compose_guid(new_owner.group_id, new_owner.id, collection.id),
         "name": new_name,

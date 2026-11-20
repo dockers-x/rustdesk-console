@@ -83,7 +83,14 @@ pub async fn authorize_connection(
                 .await
                 .unwrap_or(false)
         };
-    Json(json!({"allowed": allowed})).into_response()
+    if !allowed {
+        return Json(json!({"allowed": false})).into_response();
+    }
+    match services::device_admission::control_role(&state.db, caller.user.id).await {
+        Ok(role) if role.mask() == 0 => Json(json!({"allowed": true})).into_response(),
+        Ok(role) => Json(json!({"allowed": true, "control_permissions": role.mask()})).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 async fn connection_allowed(
@@ -144,6 +151,11 @@ mod tests {
             schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(entity::login_log::Entity),
             schema.create_table_from_entity(entity::login_verification::Entity),
+            schema.create_table_from_entity(entity::control_role::Entity),
+            schema.create_table_from_entity(entity::device_admission::Entity),
+            schema.create_table_from_entity(entity::routing_settings::Entity),
+            schema.create_table_from_entity(entity::strategy_delivery::Entity),
+            schema.create_table_from_entity(entity::address_book_trash::Entity),
             schema.create_table_from_entity(entity::strategy_assignment::Entity),
             schema.create_table_from_entity(entity::trusted_login_device::Entity),
             schema.create_table_from_entity(entity::audit_conn::Entity),
@@ -779,6 +791,133 @@ mod tests {
         let json =
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
         (status, json)
+    }
+
+    #[tokio::test]
+    async fn address_book_rules_control_console_and_native_access_and_recycle() {
+        let state = fixture().await;
+        let request = |method: &'static str, path: String, data: serde_json::Value,
+                       token: &'static str, native: bool| {
+            let state = state.clone();
+            async move {
+                let request = Request::builder().method(method).uri(path)
+                    .header("content-type", "application/json");
+                let request = if native {
+                    request.header("authorization", format!("Bearer {token}"))
+                } else {
+                    request.header("api-token", token)
+                };
+                let response = super::super::router::build(state)
+                    .oneshot(request.body(Body::from(data.to_string())).unwrap())
+                    .await.unwrap();
+                let status = response.status();
+                let bytes = to_bytes(response.into_body(), 32768).await.unwrap();
+                (status, serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_default())
+            }
+        };
+        let (status, book) = request("POST", "/api/ab/shared/add".into(),
+            json!({"name":"Operations","note":"Test address book"}), "token-1", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let guid = book["guid"].as_str().unwrap();
+        let (status, _) = request("POST", format!("/api/ab/peer/add/{guid}"),
+            json!({"id":"device-1","alias":"Notebook","password":"test-sync-value"}), "token-1", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, rule) = request("POST", "/api/ab/rule".into(),
+            json!({"guid":guid,"rule":1,"user":"user-2"}), "token-1", false).await;
+        let rule_id = rule["guid"].as_str().unwrap();
+        let peer_list = format!("/api/ab/peers?ab={guid}");
+        let (_, visible) = request("GET", peer_list.clone(), json!(null), "token-2", false).await;
+        assert_eq!(visible["data"][0]["alias"], "Notebook");
+        assert_eq!(visible["data"][0]["password"], "");
+        let (_, native) = request("GET", peer_list.clone(), json!(null), "token-2", true).await;
+        assert_eq!(native["data"][0]["password"], "test-sync-value");
+
+        for (level, edit_status, trash_status) in [
+            (1, StatusCode::BAD_REQUEST, StatusCode::BAD_REQUEST),
+            (2, StatusCode::OK, StatusCode::BAD_REQUEST),
+            (3, StatusCode::OK, StatusCode::OK),
+        ] {
+            let (status, _) = request("PATCH", "/api/ab/rule".into(),
+                json!({"guid":rule_id,"rule":level}), "token-1", false).await;
+            assert_eq!(status, StatusCode::OK);
+            let (status, _) = request("PUT", format!("/api/ab/peer/update/{guid}"),
+                json!({"id":"device-1","note":"Updated"}), "token-2", false).await;
+            assert_eq!(status, edit_status);
+            let (status, _) = request("DELETE", format!("/api/ab/peer/{guid}"),
+                json!(["device-1"]), "token-2", false).await;
+            assert_eq!(status, trash_status);
+        }
+        let (_, trash) = request("GET", format!("/api/ab/trash/{guid}"), json!(null), "token-2", false).await;
+        assert_eq!(trash["total"], 1);
+        assert!(!trash.to_string().contains("test-sync-value"));
+        assert_eq!(trash["data"][0]["note"], "Updated");
+        let row_id = trash["data"][0]["row_id"].as_i64().unwrap();
+        let (status, _) = request("POST", format!("/api/ab/trash/restore/{guid}"),
+            json!({"id":row_id}), "token-1", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, visible) = request("GET", peer_list.clone(), json!(null), "token-2", true).await;
+        assert_eq!(visible["data"][0]["password"], "test-sync-value");
+
+        let (status, _) = request("DELETE", "/api/ab/rules".into(),
+            json!([rule_id]), "token-1", false).await;
+        assert_eq!(status, StatusCode::OK);
+        for native in [false, true] {
+            let (status, _) = request("GET", peer_list.clone(), json!(null), "token-2", native).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+        assert!(!allowed(&state, "token-2", "device-1").await);
+    }
+
+    #[tokio::test]
+    async fn device_admission_requires_pairing_and_matches_registered_key() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut state = fixture().await;
+        const TOKEN: &str = "local-fixture-token-with-32-characters";
+        Arc::make_mut(&mut state.config).security.hbbs_admission_token = TOKEN.into();
+        let (status, _) = json_request(
+            &state, "PUT", "/api/admin/device-admission/settings",
+            json!({"require_deployment":true}), Some("token-3"),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+        let device = json!({
+            "id": "new-device-1", "uuid": STANDARD.encode([1; 16]),
+            "public_key": STANDARD.encode([2; 32]), "observe": true,
+        });
+        let check = |key: serde_json::Value, token| {
+            let state = state.clone();
+            async move {
+                json_request(&state, "POST", "/api/server/device-admission", key, token).await
+            }
+        };
+        assert_eq!(check(device.clone(), Some("wrong-token")).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(check(device.clone(), Some(TOKEN)).await.1["allowed"], false);
+        let (_, list) = json_request(
+            &state, "GET", "/api/admin/device-admission/list", json!(null), Some("token-3")
+        ).await;
+        let fingerprint = list["data"]["list"][0]["fingerprint"].as_str().unwrap();
+        let mut form = json!({"device_id":"new-device-1", "fingerprint":fingerprint, "approved":true});
+        let (_, saved) = json_request(&state, "POST", "/api/admin/device-admission/review",
+            form.clone(), Some("token-3")).await;
+        assert_eq!(saved["code"], 0, "{saved}");
+        assert_eq!(check(device.clone(), Some(TOKEN)).await.1["allowed"], true);
+        let mut changed = device.clone();
+        changed["public_key"] = json!(STANDARD.encode([3; 32]));
+        assert_eq!(check(changed, Some(TOKEN)).await.1["allowed"], false);
+        form["approved"] = json!(false);
+        let (_, saved) = json_request(&state, "POST", "/api/admin/device-admission/review",
+            form, Some("token-3")).await;
+        assert_eq!(saved["code"], 0, "{saved}");
+        assert_eq!(check(device, Some(TOKEN)).await.1["allowed"], false);
+
+        let (_, changed) = json_request(&state, "PUT", "/api/admin/user/control-role/1",
+            json!({"deny_keyboard":true,"deny_clipboard":true,"deny_file":true}), Some("token-3")).await;
+        assert_eq!(changed["code"], 0, "{changed}");
+        let (_, policy) = json_request(&state, "POST", "/api/server/authorize-connection",
+            json!({"id":"device-1"}), Some("token-1")).await;
+        assert_eq!(policy, json!({"allowed":true,"control_permissions":81}));
+        let (_, no_policy) = json_request(&state, "POST", "/api/server/authorize-connection",
+            json!({"id":"device-1"}), Some("token-2")).await;
+        assert_eq!(no_policy, json!({"allowed":false}));
     }
 
     #[tokio::test]

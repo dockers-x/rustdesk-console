@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AppShell } from "./components/AppShell";
 import { AddressBookPage } from "./pages/AddressBookPage";
+import { DeviceAdmissionPage } from "./pages/DeviceAdmissionPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GeoRoutingPage } from "./pages/GeoRoutingPage";
 import { MessageCenterPage } from "./pages/MessageCenterPage";
@@ -83,6 +84,7 @@ export default function AuthenticatedApp() {
       }>
         <Route path="/" element={<Navigate to={home} replace />} />
         <Route path="/overview" element={<OverviewPage />} />
+        <Route path="/device-admission" element={<DeviceAdmissionPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/my" element={<MyProfilePage />} />
         <Route path="/my/address_book" element={<AddressBookPage />} />
@@ -113,7 +115,9 @@ export default function AuthenticatedApp() {
             path={resourcePath(resource)}
             element={
               <ResourcePage
-                key={resource.name === "peers" ? `peers${location.search}` : resource.name}
+                key={["peers", "strategy_assignments"].includes(resource.name)
+                  ? `${resource.name}${location.search}`
+                  : resource.name}
                 cfg={resource}
               />
             }

@@ -43,18 +43,29 @@ pub struct Config {
     pub security: Security,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Security {
     /// Stock clients send unauthenticated telemetry. This weakens report integrity.
     #[serde(rename = "allow-legacy-device-reports")]
     pub allow_legacy_device_reports: bool,
+    #[serde(rename = "hbbs-admission-token")]
+    pub hbbs_admission_token: String,
+}
+
+impl std::fmt::Debug for Security {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Security")
+            .field("allow_legacy_device_reports", &self.allow_legacy_device_reports)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Security {
     fn default() -> Self {
         Self {
             allow_legacy_device_reports: true,
+            hbbs_admission_token: String::new(),
         }
     }
 }

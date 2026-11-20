@@ -462,8 +462,8 @@ pub async fn collection_list_by_ids(
         .await
 }
 
-pub async fn transfer_collection_owner(
-    db: &DatabaseConnection,
+async fn transfer_collection_owner(
+    db: &impl ConnectionTrait,
     collection_id: i32,
     old_user_id: i32,
     new_user_id: i32,
@@ -490,6 +490,12 @@ pub async fn transfer_collection_owner(
         )
         .filter(address_book_collection_rule::Column::CollectionId.eq(collection_id))
         .filter(address_book_collection_rule::Column::UserId.eq(old_user_id))
+        .exec(db)
+        .await?;
+    address_book_trash::Entity::update_many()
+        .col_expr(address_book_trash::Column::UserId, Expr::value(new_user_id))
+        .filter(address_book_trash::Column::CollectionId.eq(collection_id))
+        .filter(address_book_trash::Column::UserId.eq(old_user_id))
         .exec(db)
         .await?;
     Ok(())
@@ -813,9 +819,19 @@ pub async fn create_collection(
     user_id: i32,
     name: &str,
 ) -> Result<address_book_collection::Model, DbErr> {
+    create_collection_with_note(db, user_id, name, "").await
+}
+
+pub async fn create_collection_with_note(
+    db: &DatabaseConnection,
+    user_id: i32,
+    name: &str,
+    note: &str,
+) -> Result<address_book_collection::Model, DbErr> {
     let am = address_book_collection::ActiveModel {
         user_id: Set(user_id),
         name: Set(name.to_string()),
+        note: Set(note.into()),
         created_at: Set(now()),
         updated_at: Set(now()),
         ..Default::default()
@@ -829,15 +845,35 @@ pub async fn update_collection(
     user_id: i32,
     name: &str,
 ) -> Result<(), DbErr> {
-    let am = address_book_collection::ActiveModel {
-        id: Set(id),
-        user_id: Set(user_id),
-        name: Set(name.to_string()),
-        updated_at: Set(now()),
-        ..Default::default()
-    };
-    am.update(db).await?;
-    Ok(())
+    let current = collection_info_by_id(db, id).await?
+        .ok_or_else(|| DbErr::RecordNotFound("Address book".into()))?;
+    update_collection_profile(db, &current, user_id, name, None).await
+}
+
+pub async fn update_collection_profile(
+    db: &DatabaseConnection,
+    current: &address_book_collection::Model,
+    user_id: i32,
+    name: &str,
+    note: Option<&str>,
+) -> Result<(), DbErr> {
+    let tx = db.begin().await?;
+    let mut update = address_book_collection::Entity::update_many()
+        .col_expr(address_book_collection::Column::UserId, Expr::value(user_id))
+        .col_expr(address_book_collection::Column::Name, Expr::value(name))
+        .col_expr(address_book_collection::Column::UpdatedAt, Expr::value(now()))
+        .filter(address_book_collection::Column::Id.eq(current.id))
+        .filter(address_book_collection::Column::UserId.eq(current.user_id));
+    if let Some(note) = note {
+        update = update.col_expr(address_book_collection::Column::Note, Expr::value(note));
+    }
+    update.exec(&tx).await?;
+    let actual = address_book_collection::Entity::find_by_id(current.id).one(&tx).await?;
+    if actual.is_none_or(|row| row.user_id != user_id) {
+        return Err(DbErr::RecordNotUpdated);
+    }
+    transfer_collection_owner(&tx, current.id, current.user_id, user_id).await?;
+    tx.commit().await
 }
 
 /// Delete a collection and its rules + address books (≈ `DeleteCollection`).

@@ -412,7 +412,7 @@ async fn map_to_local_user(
     {
         return Ok(None);
     }
-    let account = user::ActiveModel {
+    let new_account = user::ActiveModel {
         username: Set(directory.username.clone()),
         email: Set(directory.email.clone()),
         nickname: Set(directory.nickname.clone()),
@@ -422,9 +422,8 @@ async fn map_to_local_user(
         created_at: Set(now()),
         updated_at: Set(now()),
         ..Default::default()
-    }
-    .insert(&tx)
-    .await?;
+    };
+    let account = super::login_security::insert_user_with_enrollment_policy(&tx, new_account).await?;
     ldap_identity::ActiveModel {
         user_id: Set(account.id),
         subject: Set(directory.subject.clone()),

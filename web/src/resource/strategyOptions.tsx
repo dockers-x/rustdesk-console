@@ -183,13 +183,6 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     type: "tri_state",
   },
   {
-    key: "enable-trusted-devices",
-    label: "strategyTrustedDevices",
-    hint: "strategyTrustedDevicesHint",
-    group: "security",
-    type: "tri_state",
-  },
-  {
     key: "whitelist",
     label: "strategyWhitelist",
     hint: "strategyWhitelistHint",
@@ -239,14 +232,6 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     label: "strategyAutoRecordIncoming",
     group: "session",
     type: "tri_state",
-  },
-  {
-    key: "windows-service-video-save-directory",
-    label: "strategyWindowsServiceRecordingDirectory",
-    hint: "strategyWindowsServiceRecordingDirectoryHint",
-    group: "session",
-    type: "text",
-    placeholder: "strategyWindowsServiceRecordingDirectoryPlaceholder",
   },
   {
     key: "keep-awake-during-incoming-sessions",
@@ -320,8 +305,7 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     label: "strategyDirectServer",
     hint: "strategyDirectServerHint",
     group: "device",
-    type: "text",
-    placeholder: "strategyDirectServerPlaceholder",
+    type: "tri_state",
   },
   {
     key: "direct-access-port",
@@ -333,44 +317,6 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     max: 65535,
   },
   {
-    key: "custom-rendezvous-server",
-    label: "strategyCustomRendezvousServer",
-    hint: "strategyNetworkMigrationHint",
-    group: "network",
-    type: "text",
-    placeholder: "strategyServerPlaceholder",
-  },
-  {
-    key: "relay-server",
-    label: "strategyRelayServer",
-    hint: "strategyNetworkMigrationHint",
-    group: "network",
-    type: "text",
-    placeholder: "strategyServerPlaceholder",
-  },
-  {
-    key: "api-server",
-    label: "strategyApiServer",
-    hint: "strategyNetworkMigrationHint",
-    group: "network",
-    type: "text",
-    placeholder: "strategyApiServerPlaceholder",
-  },
-  {
-    key: "key",
-    label: "strategyServerKey",
-    hint: "strategyNetworkMigrationHint",
-    group: "network",
-    type: "secret",
-    sensitive: true,
-  },
-  {
-    key: "allow-websocket",
-    label: "strategyAllowWebSocket",
-    group: "network",
-    type: "tri_state",
-  },
-  {
     key: "disable-udp",
     label: "strategyDisableUdp",
     group: "network",
@@ -380,41 +326,6 @@ const STRATEGY_OPTION_DEFINITIONS: readonly StrategyOptionDefinition[] = [
     key: "allow-kcp-congestion-control",
     label: "strategyKcpCongestionControl",
     hint: "strategyKcpCongestionControlHint",
-    group: "network",
-    type: "tri_state",
-  },
-  {
-    key: "ice-servers",
-    label: "strategyIceServers",
-    hint: "strategyIceServersHint",
-    group: "network",
-    type: "text",
-    placeholder: "strategyIceServersPlaceholder",
-  },
-  {
-    key: "proxy-url",
-    label: "strategyProxyUrl",
-    group: "network",
-    type: "text",
-    placeholder: "strategyProxyUrlPlaceholder",
-  },
-  {
-    key: "proxy-username",
-    label: "strategyProxyUsername",
-    group: "network",
-    type: "text",
-  },
-  {
-    key: "proxy-password",
-    label: "strategyProxyPassword",
-    group: "network",
-    type: "secret",
-    sensitive: true,
-  },
-  {
-    key: "allow-insecure-tls-fallback",
-    label: "strategyInsecureTlsFallback",
-    hint: "strategyInsecureTlsFallbackHint",
     group: "network",
     type: "tri_state",
   },
@@ -459,7 +370,7 @@ export function renderStrategyOptionsSummary(
   t: (key: string) => string,
 ): ReactNode {
   const entries = Object.entries(parseStrategyOptionsValue(value)).filter(
-    ([, optionValue]) => optionValue !== "",
+    ([key, optionValue]) => STRATEGY_OPTION_BY_KEY.has(key) && optionValue !== "",
   );
   if (entries.length === 0) return "—";
   const visible = entries.slice(0, 3);
@@ -509,7 +420,9 @@ export function StrategyOptionsInput({
 }) {
   const { t } = useTranslation();
   const options = parseStrategyOptionsValue(value);
-  const configuredCount = Object.values(options).filter((v) => v !== "").length;
+  const configuredCount = Object.entries(options).filter(
+    ([key, value]) => STRATEGY_OPTION_BY_KEY.has(key) && value !== "",
+  ).length;
 
   const updateOption = (key: string, nextValue: string | undefined) => {
     const next = { ...options };
