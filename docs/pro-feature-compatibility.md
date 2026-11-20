@@ -26,12 +26,14 @@
 | 浏览器共享链接、到期、凭据 | 已有 | `services/share_record.rs`、`WebClientActions.tsx`；实际连接仍依赖可用浏览器运行时和 WSS 部署。 |
 | TOTP、邮件、登录设备验证 | 已有 | `services/login_security.rs`；此次加强禁用账户、封禁与密码重置挑战处理。 |
 | OIDC/SSO、GitHub/Google/LinuxDO | 已有代码，需真实身份源验收 | `services/oauth.rs`；issuer、audience、nonce、JWKS 校验存在。 |
-| LDAP | 已有代码，需真实目录验收 | `services/ldap.rs`；保留当前显式本地密码回退策略，不声称完全等价于任意企业目录部署。 |
+| LDAP | Console 提供 | 支持目录配置、LDAPS、StartTLS、CA 和绑定测试。本地同名账号保留本地身份，LDAP 账号按目录的持久标识绑定。 |
 | 登录/连接/文件/告警审计 | 已有 | `services/audit*.rs`；重试事务去重，空成功响应，告警可查询；默认接收原版匿名上报，可显式关闭，不是可信网络侧审计。 |
 | 录制上传与存储 | 服务端接口及存储已有 | `services/record_storage.rs` 支持本地、S3、WebDAV；当前客户端 `record_upload.rs` 的上传开关默认关闭，不能据此声称自动上传可用，也不能主动取回控制端工具栏录在本地的文件。 |
-| 管理台操作审计 | 尚未实现 | `/api/audits/console` 仍是空结果兼容入口，不应和真实连接/文件/告警日志混为一谈。 |
-| 集中策略与安全设置同步 | 已有 | `services/strategy.rs` 和客户端 heartbeat。增量合并，不自动回滚原值；不是不可修改的客户端锁定。 |
-| 信任设备设置 | 已有设置分发 | `enable-trusted-devices` 使用客户端能力，与 Console 的登录设备验证不是同一信任体系。 |
+| 管理台操作审计 | Console 提供 | Console 审计页显示受跟踪的管理操作和结果。支持设定保留天数、预览和手动分批清理。 |
+| 集中策略与安全设置同步 | 已有 | 设备、用户、设备组、默认策略依次优先。心跳清除本版跟踪过的已取消选项，由客户端按默认设置处理。 |
+| 信任设备设置 | 由客户端配置 | 当前客户端过滤心跳中的 `enable-trusted-devices`。控制端信任设备与 Console 登录验证分别管理。 |
+| 设备准入 | Console 与配套 hbbs | 默认关闭。配对后可以要求获准的设备注册，撤销影响新建的配套 hbbs 路由。 |
+| 主控权限 | Console 与配套 hbbs | `MUST_LOGIN=Y` 时，支持该协议的桌面被控端接收键鼠、剪贴板、文件传输限制。 |
 | 强制登录后连接 | 已加固，仍有边界 | 此 hbbs fork 在 `MUST_LOGIN` 开启时检查普通及切换的打洞、中继协调请求：验证共享密钥签发的 JWT，或接受有效的目标绑定切换授权。JWT 密钥为空时拒绝 token 路径；普通请求还须通过 Console 实时授权，直连 IP 不经过此门禁。 |
 | 强制退出、撤销 token | Console API 有效，连接侧不完整 | API 删除 token 后拒绝后续请求；配套 hbbs 在新的普通协调请求中查询撤销状态；已建立会话不会因此立即中断。 |
 | 管理员断开连接 | 已有协作链路 | Console 排队 → heartbeat → 客户端断连；不是 HBBR 网络侧的即时强制切断。 |

@@ -276,7 +276,7 @@ pub async fn replace_assignment(
     };
     if target_id.is_empty() || (target_type != strategy_assignment::TARGET_PEER
         && target_type != strategy_assignment::TARGET_DEFAULT
-        && target_id.parse::<i32>().ok().is_none_or(|id| id <= 0))
+        && !target_id.parse::<i32>().is_ok_and(|id| id > 0 && id.to_string() == target_id))
     {
         return Err(DbErr::Custom("invalid strategy assignment target".to_string()));
     }
