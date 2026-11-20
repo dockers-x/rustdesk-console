@@ -35,7 +35,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 274;
+pub const DATABASE_VERSION: i32 = 275;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 type MigrationFn = for<'a> fn(&'a DatabaseConnection, &'a Config) -> MigrationFuture<'a>;
@@ -72,6 +72,11 @@ const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
         version: 274,
         name: "developer device group notes",
         apply: migration_274,
+    },
+    SchemaMigration {
+        version: 275,
+        name: "session authentication level",
+        apply: migration_275,
     },
 ];
 
@@ -195,6 +200,51 @@ fn migration_274<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> Migrati
                         .string()
                         .not_null()
                         .default(""),
+                )
+                .to_owned();
+            db.execute(db.get_database_backend().build(&statement))
+                .await?;
+        }
+        Ok(())
+    })
+}
+
+fn migration_275<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        if !column_exists(db, "user_tokens", "auth_level").await? {
+            let statement = Table::alter()
+                .table(user_token::Entity)
+                .add_column(
+                    ColumnDef::new(user_token::Column::AuthLevel)
+                        .integer()
+                        .not_null()
+                        .default(0),
+                )
+                .to_owned();
+            db.execute(db.get_database_backend().build(&statement))
+                .await?;
+        }
+        if !column_exists(db, "user_tokens", "renewable").await? {
+            let statement = Table::alter()
+                .table(user_token::Entity)
+                .add_column(
+                    ColumnDef::new(user_token::Column::Renewable)
+                        .boolean()
+                        .not_null()
+                        .default(true),
+                )
+                .to_owned();
+            db.execute(db.get_database_backend().build(&statement))
+                .await?;
+        }
+        if !column_exists(db, "login_verifications", "federated").await? {
+            let statement = Table::alter()
+                .table(login_verification::Entity)
+                .add_column(
+                    ColumnDef::new(login_verification::Column::Federated)
+                        .boolean()
+                        .not_null()
+                        .default(false),
                 )
                 .to_owned();
             db.execute(db.get_database_backend().build(&statement)).await?;
@@ -724,7 +774,7 @@ mod tests {
             .map(|row| row.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, vec![271, 272, 273, DATABASE_VERSION]);
+        assert_eq!(versions, vec![271, 272, 273, 274, DATABASE_VERSION]);
     }
 
     #[tokio::test]

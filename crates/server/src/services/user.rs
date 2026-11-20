@@ -3,10 +3,10 @@
 use chrono::Utc;
 use sea_orm::*;
 
-use ::entity::{login_log, user, user_token};
+use ::entity::{login_log, login_verification, user, user_token};
 
 use crate::config::Config;
-use crate::services::{now, paginate};
+use crate::services::{login_security, now, paginate};
 use crate::support::jwt::Jwt;
 use crate::support::password::{encrypt_password, verify_password};
 
@@ -35,12 +35,10 @@ pub async fn info_by_username_password(
     if cfg.ldap.enable {
         match crate::services::ldap::authenticate(cfg, db, username, password).await {
             Ok(u) => return Ok(Some(u)),
-            Err(e) => {
-                tracing::warn!("LDAP authentication failed: {e}; falling back to local database");
-            }
+            Err(_) => tracing::warn!("LDAP authentication failed; checking local credentials"),
         }
     }
-    let Some(u) = info_by_username(db, username).await? else {
+    let Some(u) = info_by_username(db, &format_username(username)).await? else {
         return Ok(None);
     };
     let hash = u.password.clone();
@@ -52,9 +50,18 @@ pub async fn info_by_username_password(
         return Ok(None);
     }
     if let Some(nh) = new_hash {
-        let mut am: user::ActiveModel = u.clone().into();
-        am.password = Set(nh.clone());
-        am.update(db).await?;
+        let upgraded = user::Entity::update_many()
+            .col_expr(
+                user::Column::Password,
+                sea_orm::sea_query::Expr::value(nh.clone()),
+            )
+            .filter(user::Column::Id.eq(u.id))
+            .filter(user::Column::Password.eq(&u.password))
+            .exec(db)
+            .await?;
+        if upgraded.rows_affected != 1 {
+            return Ok(None);
+        }
         let mut u = u;
         u.password = nh;
         return Ok(Some(u));
@@ -67,6 +74,34 @@ pub async fn info_by_access_token(
     db: &DatabaseConnection,
     token: &str,
 ) -> Result<Option<(user::Model, user_token::Model)>, DbErr> {
+    let Some((account, session)) = session_by_token(db, token).await? else {
+        return Ok(None);
+    };
+    if session.auth_level != AUTH_TOTP
+        && (session.auth_level == AUTH_ENROLLMENT || requires_totp(db, &account).await?)
+    {
+        return Ok(None);
+    }
+    Ok(Some((account, session)))
+}
+
+pub async fn requires_totp(db: &impl ConnectionTrait, user: &user::Model) -> Result<bool, DbErr> {
+    if user.is_admin() || user.tfa_enabled || user.tfa_enforced {
+        return Ok(true);
+    }
+    Ok(login_security::login_settings(db).await?.require_totp)
+}
+
+pub const AUTH_TOTP: i32 = 1;
+pub const AUTH_ENROLLMENT: i32 = 2;
+const ADMIN_SESSION_SECONDS: i64 = 12 * 60 * 60;
+const ENROLLMENT_SECONDS: i64 = 10 * 60;
+
+/// Looks up a live session before applying the permissions of the requested route.
+pub async fn session_by_token(
+    db: &DatabaseConnection,
+    token: &str,
+) -> Result<Option<(user::Model, user_token::Model)>, DbErr> {
     let Some(ut) = user_token::Entity::find()
         .filter(user_token::Column::Token.eq(token))
         .one(db)
@@ -74,13 +109,20 @@ pub async fn info_by_access_token(
     else {
         return Ok(None);
     };
-    if ut.expired_at < Utc::now().timestamp() {
+    if ut.expired_at <= Utc::now().timestamp() {
         return Ok(None);
     }
     let Some(u) = info_by_id(db, ut.user_id).await? else {
         return Ok(None);
     };
-    if !u.is_enabled() {
+    if !u.is_enabled()
+        || (ut.auth_level == AUTH_TOTP && !u.tfa_enabled)
+        || (ut.auth_level == AUTH_ENROLLMENT && u.tfa_enabled)
+        || (u.is_admin()
+            && ut.created_at.is_none_or(|created| {
+                Utc::now().timestamp() >= created.and_utc().timestamp() + ADMIN_SESSION_SECONDS
+            }))
+    {
         return Ok(None);
     }
     Ok(Some((u, ut)))
@@ -100,14 +142,94 @@ pub fn generate_token(jwt: &Jwt, u: &user::Model) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginProof {
+    SingleFactor,
+    Totp,
+    Enrollment,
+    WebSso { session_id: i32 },
+}
+
+impl From<login_security::VerificationKind> for LoginProof {
+    fn from(kind: login_security::VerificationKind) -> Self {
+        match kind {
+            login_security::VerificationKind::Totp => Self::Totp,
+            login_security::VerificationKind::Email => Self::SingleFactor,
+        }
+    }
+}
+
 /// Parameters for a login event (subset of `model.LoginLog`).
 pub struct LoginEvent {
+    pub proof: LoginProof,
     pub client: String,
     pub device_id: String,
     pub uuid: String,
     pub ip: String,
     pub login_type: String,
     pub platform: String,
+}
+
+/// Serialize authentication against writes to this account.
+pub(super) async fn lock_account(
+    transaction: &DatabaseTransaction,
+    user_id: i32,
+) -> Result<Option<user::Model>, DbErr> {
+    user::Entity::update_many()
+        .col_expr(
+            user::Column::Id,
+            sea_orm::sea_query::Expr::col(user::Column::Id).into(),
+        )
+        .filter(user::Column::Id.eq(user_id))
+        .exec(transaction)
+        .await?;
+    user::Entity::find_by_id(user_id).one(transaction).await
+}
+
+/// Requires the account lock, then locks and revalidates the authorizing session.
+pub(super) async fn lock_full_session(
+    transaction: &DatabaseTransaction,
+    account: &user::Model,
+    session_id: i32,
+) -> Result<(i32, i64), DbErr> {
+    // Serialize authorization with concurrent logout and session revocation.
+    user_token::Entity::update_many()
+        .col_expr(
+            user_token::Column::Id,
+            sea_orm::sea_query::Expr::col(user_token::Column::Id).into(),
+        )
+        .filter(user_token::Column::Id.eq(session_id))
+        .filter(user_token::Column::UserId.eq(account.id))
+        .exec(transaction)
+        .await?;
+    let source = user_token::Entity::find_by_id(session_id)
+        .one(transaction)
+        .await?
+        .filter(|session| {
+            session.user_id == account.id
+                && session.auth_level != AUTH_ENROLLMENT
+                && session.expired_at > Utc::now().timestamp()
+        })
+        .ok_or_else(|| DbErr::Custom("authorizing session expired".into()))?;
+    if !account.is_enabled()
+        || account.must_change_password
+        || (requires_totp(transaction, account).await? && source.auth_level != AUTH_TOTP)
+    {
+        return Err(DbErr::Custom(
+            "authorizing session is no longer valid".into(),
+        ));
+    }
+    let mut expires = source.expired_at;
+    if account.is_admin() {
+        let created = source
+            .created_at
+            .ok_or_else(|| DbErr::Custom("authorizing session has no timestamp".into()))?;
+        expires = expires.min(created.and_utc().timestamp() + ADMIN_SESSION_SECONDS);
+    }
+    if expires <= Utc::now().timestamp() {
+        return Err(DbErr::Custom("authorizing session expired".into()));
+    }
+    Ok((source.auth_level, expires))
 }
 
 /// Create a token and login log. Client-reported identifiers never change ownership.
@@ -118,24 +240,58 @@ pub async fn login(
     u: &user::Model,
     event: LoginEvent,
 ) -> Result<user_token::Model, DbErr> {
-    let token = generate_token(jwt, u);
+    let transaction = db.begin().await?;
+    let current = lock_account(&transaction, u.id)
+        .await?
+        .filter(|current| {
+            current.is_enabled()
+                && current.password == u.password
+                && current.tfa_enabled == u.tfa_enabled
+                && current.tfa_secret == u.tfa_secret
+                && current.updated_at == u.updated_at
+        })
+        .ok_or_else(|| DbErr::Custom("account changed during authentication".into()))?;
+    let (auth_level, source_expiry) = match event.proof {
+        LoginProof::Totp if current.tfa_enabled => (AUTH_TOTP, None),
+        LoginProof::Enrollment if !current.tfa_enabled => (AUTH_ENROLLMENT, None),
+        LoginProof::SingleFactor if !requires_totp(&transaction, &current).await? => (0, None),
+        LoginProof::WebSso { session_id } => {
+            let (auth_level, expires) =
+                lock_full_session(&transaction, &current, session_id).await?;
+            (auth_level, Some(expires))
+        }
+        _ => return Err(DbErr::Custom("TOTP is required".into())),
+    };
+    let now_ts = Utc::now().timestamp();
+    let mut expires = token_expire_timestamp(config);
+    if auth_level == AUTH_ENROLLMENT {
+        expires = expires.min(now_ts + ENROLLMENT_SECONDS);
+    } else if current.is_admin() {
+        expires = expires.min(now_ts + ADMIN_SESSION_SECONDS);
+    }
+    if let Some(source_expiry) = source_expiry {
+        expires = expires.min(source_expiry);
+    }
+    let token = generate_token(jwt, &current);
     let ut = user_token::ActiveModel {
         user_id: Set(u.id),
         token: Set(token),
         device_uuid: Set(event.uuid.clone()),
         device_id: Set(event.device_id.clone()),
-        expired_at: Set(token_expire_timestamp(config)),
+        expired_at: Set(expires),
+        auth_level: Set(auth_level),
+        renewable: Set(source_expiry.is_none()),
         created_at: Set(now()),
         updated_at: Set(now()),
         ..Default::default()
     };
-    let ut = ut.insert(db).await?;
+    let ut = ut.insert(&transaction).await?;
 
     let llog = login_log::ActiveModel {
         user_id: Set(u.id),
         client: Set(event.client),
         device_id: Set(event.device_id),
-        uuid: Set(event.uuid.clone()),
+        uuid: Set(event.uuid),
         ip: Set(event.ip),
         r#type: Set(event.login_type),
         platform: Set(event.platform),
@@ -145,7 +301,8 @@ pub async fn login(
         updated_at: Set(now()),
         ..Default::default()
     };
-    llog.insert(db).await?;
+    llog.insert(&transaction).await?;
+    transaction.commit().await?;
 
     Ok(ut)
 }
@@ -160,17 +317,36 @@ pub async fn logout(db: &DatabaseConnection, user_id: i32, token: &str) -> Resul
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum SessionLifetime {
+    Admin,
+    User,
+}
+
 /// Refresh the token when it has less than ~1/3 of its lifetime remaining.
 pub async fn auto_refresh_access_token(
     db: &DatabaseConnection,
     config: &Config,
     ut: &user_token::Model,
+    lifetime: SessionLifetime,
 ) -> Result<(), DbErr> {
+    if ut.auth_level == AUTH_ENROLLMENT || !ut.renewable {
+        return Ok(());
+    }
     let third = (config.app.token_expire_duration().as_secs() / 3) as i64;
     if ut.expired_at - Utc::now().timestamp() < third {
-        let mut am: user_token::ActiveModel = ut.clone().into();
-        am.expired_at = Set(token_expire_timestamp(config));
-        am.update(db).await?;
+        let mut expires = token_expire_timestamp(config);
+        if let SessionLifetime::Admin = lifetime {
+            let Some(created) = ut.created_at else {
+                return Ok(());
+            };
+            expires = expires.min(created.and_utc().timestamp() + ADMIN_SESSION_SECONDS);
+        }
+        if expires > ut.expired_at {
+            let mut am: user_token::ActiveModel = ut.clone().into();
+            am.expired_at = Set(expires);
+            am.update(db).await?;
+        }
     }
     Ok(())
 }
@@ -251,7 +427,7 @@ pub async fn list_by_ids(db: &DatabaseConnection, ids: &[i32]) -> Result<Vec<use
         .await
 }
 
-fn format_username(username: &str) -> String {
+pub(crate) fn format_username(username: &str) -> String {
     username.replace(' ', "").to_lowercase()
 }
 
@@ -320,30 +496,6 @@ pub async fn create(
 
 pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), String> {
     let current = info_by_id(db, model.id).await.map_err(|e| e.to_string())?;
-    let must_change_password = current
-        .as_ref()
-        .map(|u| u.must_change_password)
-        .unwrap_or(model.must_change_password);
-    let tfa_secret = current
-        .as_ref()
-        .map(|u| u.tfa_secret.clone())
-        .unwrap_or_else(|| model.tfa_secret.clone());
-    let tfa_enabled = current
-        .as_ref()
-        .map(|u| u.tfa_enabled)
-        .unwrap_or(model.tfa_enabled);
-    let tfa_enforced = current
-        .as_ref()
-        .map(|u| u.tfa_enforced)
-        .unwrap_or(model.tfa_enforced);
-    let email_verification_enabled = current
-        .as_ref()
-        .map(|u| u.email_verification_enabled)
-        .unwrap_or(model.email_verification_enabled);
-    let login_device_verification_enabled = current
-        .as_ref()
-        .map(|u| u.login_device_verification_enabled)
-        .unwrap_or(model.login_device_verification_enabled);
     if let Some(current) = &current {
         if current.is_admin() {
             let count = admin_user_count(db).await.map_err(|e| e.to_string())?;
@@ -361,12 +513,6 @@ pub async fn update(db: &DatabaseConnection, model: &user::Model) -> Result<(), 
         group_id: Set(model.group_id),
         is_admin: Set(model.is_admin),
         status: Set(model.status),
-        must_change_password: Set(must_change_password),
-        tfa_secret: Set(tfa_secret),
-        tfa_enabled: Set(tfa_enabled),
-        tfa_enforced: Set(tfa_enforced),
-        email_verification_enabled: Set(email_verification_enabled),
-        login_device_verification_enabled: Set(login_device_verification_enabled),
         remark: Set(model.remark.clone()),
         updated_at: Set(now()),
         ..Default::default()
@@ -408,17 +554,48 @@ pub async fn update_password(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-    let mut am: user::ActiveModel = u.clone().into();
-    am.password = Set(hash);
-    am.must_change_password = Set(false);
-    am.updated_at = Set(now());
-    am.update(db).await.map_err(|e| e.to_string())?;
-    // Invalidate existing tokens.
-    user_token::Entity::delete_many()
-        .filter(user_token::Column::UserId.eq(u.id))
-        .exec(db)
+    let transaction = db.begin().await.map_err(|e| e.to_string())?;
+    let updated = user::Entity::update_many()
+        .col_expr(
+            user::Column::Password,
+            sea_orm::sea_query::Expr::value(hash),
+        )
+        .col_expr(
+            user::Column::MustChangePassword,
+            sea_orm::sea_query::Expr::value(false),
+        )
+        .col_expr(
+            user::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(now()),
+        )
+        .filter(user::Column::Id.eq(u.id))
+        .filter(user::Column::Password.eq(&u.password))
+        .filter(match u.updated_at {
+            Some(timestamp) => user::Column::UpdatedAt.eq(timestamp),
+            None => user::Column::UpdatedAt.is_null(),
+        })
+        .exec(&transaction)
         .await
         .map_err(|e| e.to_string())?;
+    if updated.rows_affected != 1 {
+        return Err("account credentials have changed".into());
+    }
+    revoke_credentials(&transaction, u.id)
+        .await
+        .map_err(|e| e.to_string())?;
+    transaction.commit().await.map_err(|e| e.to_string())
+}
+
+/// Invalidate sessions and outstanding challenges in the credential update transaction.
+pub async fn revoke_credentials(db: &DatabaseTransaction, user_id: i32) -> Result<(), DbErr> {
+    user_token::Entity::delete_many()
+        .filter(user_token::Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
+    login_verification::Entity::delete_many()
+        .filter(login_verification::Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
     Ok(())
 }
 
@@ -543,6 +720,7 @@ mod tests {
             schema.create_table_from_entity(user::Entity),
             schema.create_table_from_entity(user_token::Entity),
             schema.create_table_from_entity(login_log::Entity),
+            schema.create_table_from_entity(::entity::system_setting::Entity),
         ] {
             db.execute(db.get_database_backend().build(&statement))
                 .await
@@ -557,6 +735,7 @@ mod tests {
         .await
         .unwrap();
         let event = LoginEvent {
+            proof: LoginProof::SingleFactor,
             client: login_log::CLIENT_APP.to_string(),
             device_id: String::new(),
             uuid: String::new(),
@@ -571,5 +750,27 @@ mod tests {
         assert_ne!(account.id, token.id);
         assert_eq!(log.user_id, account.id);
         assert_eq!(log.user_token_id, token.id);
+
+        db.execute_unprepared("DROP TABLE login_logs")
+            .await
+            .unwrap();
+        let rejected = login(
+            &db,
+            &jwt,
+            &config,
+            &account,
+            LoginEvent {
+                proof: LoginProof::SingleFactor,
+                client: login_log::CLIENT_APP.to_owned(),
+                device_id: String::new(),
+                uuid: String::new(),
+                ip: "127.0.0.1".to_owned(),
+                login_type: login_log::TYPE_ACCOUNT.to_owned(),
+                platform: "Linux".to_owned(),
+            },
+        )
+        .await;
+        assert!(rejected.is_err());
+        assert_eq!(user_token::Entity::find().count(&db).await.unwrap(), 1);
     }
 }

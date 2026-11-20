@@ -11,6 +11,12 @@ const MAX_ENTRIES: usize = 1024;
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct OauthCacheItem {
     pub user_id: i32,
+    #[serde(skip)]
+    pub source_session_id: Option<i32>,
+    #[serde(skip)]
+    pub poll_secret: String,
+    #[serde(skip)]
+    pub(crate) binding_in_progress: bool,
     pub id: String,
     pub op: String,
     pub action: String,
@@ -87,8 +93,97 @@ impl OauthCache {
         None
     }
 
-    pub fn delete(&self, key: &str) {
-        self.inner.lock().unwrap().remove(key);
+    pub fn get_poll(&self, code: &str) -> Option<OauthCacheItem> {
+        let (key, secret) = code.split_once('.')?;
+        self.get(key)
+            .filter(|item| !item.poll_secret.is_empty() && item.poll_secret == secret)
+    }
+
+    pub fn update_login_callback(&self, key: &str, item: OauthCacheItem) -> bool {
+        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
+        prune_locked(&mut entries);
+        let Some(entry) = entries.get_mut(key) else {
+            return false;
+        };
+        if entry.item.action != ACTION_LOGIN
+            || entry.item.user_id != 0
+            || entry.item.binding_in_progress
+        {
+            return false;
+        }
+        entry.item = item;
+        true
+    }
+
+    pub fn take_binding(&self, key: &str) -> Option<OauthCacheItem> {
+        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
+        prune_locked(&mut entries);
+        if entries.get(key)?.item.action != ACTION_BIND {
+            return None;
+        }
+        entries.remove(key).map(|entry| entry.item)
+    }
+
+    pub fn claim_login_binding(&self, key: &str) -> Option<OauthCacheItem> {
+        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
+        prune_locked(&mut entries);
+        let entry = entries.get_mut(key)?;
+        if entry.item.action != ACTION_LOGIN
+            || entry.item.user_id != 0
+            || entry.item.open_id.is_empty()
+            || entry.item.binding_in_progress
+        {
+            return None;
+        }
+        entry.item.binding_in_progress = true;
+        Some(entry.item.clone())
+    }
+
+    pub fn finish_login_binding(&self, key: &str, linked_user_id: Option<i32>) {
+        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
+        prune_locked(&mut entries);
+        if let Some(entry) = entries
+            .get_mut(key)
+            .filter(|entry| entry.item.binding_in_progress)
+        {
+            entry.item.binding_in_progress = false;
+            if let Some(user_id) = linked_user_id {
+                entry.item.user_id = user_id;
+            }
+        }
+    }
+
+    pub fn take_ready_login(&self, code: &str, console: bool) -> Option<OauthCacheItem> {
+        let (key, secret) = code.split_once('.')?;
+        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
+        prune_locked(&mut entries);
+        let entry = entries.get(key)?;
+        if entry.item.poll_secret.is_empty()
+            || entry.item.poll_secret != secret
+            || entry.item.user_id == 0
+            || entry.item.action != ACTION_LOGIN
+            || (entry.item.device_type == entity::login_log::CLIENT_WEB_ADMIN) != console
+        {
+            return None;
+        }
+        entries.remove(key).map(|entry| entry.item)
+    }
+
+    pub fn confirm_webauth(&self, key: &str, user_id: i32, session_id: i32) -> bool {
+        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
+        prune_locked(&mut entries);
+        let Some(entry) = entries.get_mut(key) else {
+            return false;
+        };
+        if entry.item.action != ACTION_LOGIN
+            || entry.item.op != entity::oauth::TYPE_WEBAUTH
+            || entry.item.user_id != 0
+        {
+            return false;
+        }
+        entry.item.user_id = user_id;
+        entry.item.source_session_id = Some(session_id);
+        true
     }
 }
 
@@ -116,6 +211,35 @@ mod tests {
             action: ACTION_LOGIN.to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn provider_state_is_not_a_poll_credential_and_ready_login_is_single_use() {
+        let cache = OauthCache::new();
+        cache.set(
+            "provider-state",
+            OauthCacheItem {
+                user_id: 1,
+                poll_secret: "client-secret".into(),
+                device_type: entity::login_log::CLIENT_WEB_ADMIN.into(),
+                ..item()
+            },
+            0,
+        );
+        assert!(cache.get_poll("provider-state").is_none());
+        assert!(cache
+            .take_ready_login("provider-state.bad-secret", true)
+            .is_none());
+        assert!(cache
+            .take_ready_login("provider-state.client-secret", false)
+            .is_none());
+        assert!(cache
+            .take_ready_login("provider-state.client-secret", true)
+            .is_some());
+        assert!(cache
+            .take_ready_login("provider-state.client-secret", true)
+            .is_none());
+        assert!(!cache.update_login_callback("provider-state", item()));
     }
 
     #[test]

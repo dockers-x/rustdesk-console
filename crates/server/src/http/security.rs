@@ -142,10 +142,12 @@ mod tests {
             schema.create_table_from_entity(address_book_collection_rule::Entity),
             schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(entity::login_log::Entity),
+            schema.create_table_from_entity(entity::login_verification::Entity),
             schema.create_table_from_entity(entity::strategy_assignment::Entity),
             schema.create_table_from_entity(entity::trusted_login_device::Entity),
             schema.create_table_from_entity(entity::audit_conn::Entity),
             schema.create_table_from_entity(entity::share_record::Entity),
+            schema.create_table_from_entity(entity::tag::Entity),
         ] {
             db.execute(db.get_database_backend().build(&table))
                 .await
@@ -157,6 +159,7 @@ mod tests {
                 username: Set(format!("user-{id}")),
                 group_id: Set(id),
                 is_admin: Set(Some(id == 3)),
+                tfa_enabled: Set(id == 3),
                 status: Set(1),
                 ..Default::default()
             }
@@ -167,6 +170,12 @@ mod tests {
                 user_id: Set(id),
                 token: Set(format!("token-{id}")),
                 expired_at: Set(chrono::Utc::now().timestamp() + 3600),
+                created_at: Set(services::now()),
+                auth_level: Set(if id == 3 {
+                    services::user::AUTH_TOTP
+                } else {
+                    0
+                }),
                 ..Default::default()
             }
             .insert(&db)
@@ -516,6 +525,7 @@ mod tests {
             &state.config,
             &attacker,
             services::user::LoginEvent {
+                proof: services::user::LoginProof::SingleFactor,
                 client: "app".into(),
                 device_id: "device-1".into(),
                 uuid: "device-uuid".into(),
@@ -742,6 +752,187 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    async fn json_request(
+        state: &AppState,
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+        token: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            request = request
+                .header("api-token", token)
+                .header("authorization", format!("Bearer {token}"));
+        }
+        let response = super::super::router::build(state.clone())
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let json =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn legacy_address_book_push_accepts_stock_client_peer_records() {
+        let state = fixture().await;
+        let other = address_book::ActiveModel {
+            id: Set("other-account-peer".into()),
+            user_id: Set(2),
+            collection_id: Set(0),
+            tags: Set(json!([])),
+            ..Default::default()
+        }
+        .insert(&state.db)
+        .await
+        .unwrap();
+        let mut peer = json!({
+            "id": "stock-client-42",
+            "username": "remote-user",
+            "hostname": "desktop",
+            "platform": "Linux",
+            "alias": "Office",
+            "tags": ["Team"],
+            "hash": "",
+        });
+        for with_server_row in [false, true] {
+            if with_server_row {
+                peer["row_id"] = json!(other.row_id);
+                peer["alias"] = json!("New alias");
+            }
+            let inner = json!({
+                "peers": [&peer],
+                "tags": ["Team"],
+                "tag_colors": r#"{"Team":4290123456}"#,
+            });
+            let (status, body) = json_request(
+                &state,
+                "POST",
+                "/api/ab",
+                json!({"data": inner.to_string()}),
+                Some("token-1"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(body.is_null());
+        }
+        let (_, pulled) =
+            json_request(&state, "GET", "/api/ab", json!(null), Some("token-1")).await;
+        let contents: serde_json::Value =
+            serde_json::from_str(pulled["data"].as_str().unwrap()).unwrap();
+        assert_eq!(contents["peers"][0]["id"], "stock-client-42");
+        assert_eq!(contents["peers"][0]["alias"], "New alias");
+        assert_ne!(contents["peers"][0]["row_id"], other.row_id);
+        assert_eq!(contents["tags"], json!(["Team"]));
+        assert_eq!(
+            address_book::Entity::find_by_id(other.row_id)
+                .one(&state.db)
+                .await
+                .unwrap(),
+            Some(other),
+        );
+    }
+
+    #[tokio::test]
+    async fn administrator_enrollment_and_totp_are_enforced_across_session_entry_points() {
+        let state = fixture().await;
+        user::ActiveModel {
+            id: Set(3),
+            password: Set(crate::support::password::md5_hex(
+                "local-passwordrustdesk-api",
+            )),
+            tfa_enabled: Set(false),
+            ..Default::default()
+        }
+        .update(&state.db)
+        .await
+        .unwrap();
+        let credentials = json!({"username":"user-3", "password":"local-password"});
+        let (status, native) =
+            json_request(&state, "POST", "/api/login", credentials.clone(), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(native["access_token"].is_null());
+
+        let (_, admin) = json_request(
+            &state,
+            "POST",
+            "/api/admin/login",
+            credentials.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(admin["data"]["must_enroll_totp"], true, "{admin}");
+        let limited = admin["data"]["token"].as_str().unwrap();
+        let (_, blocked) = json_request(
+            &state,
+            "GET",
+            "/api/admin/user/list",
+            json!(null),
+            Some(limited),
+        )
+        .await;
+        assert_eq!(blocked["code"], 114);
+        let (blocked, _) =
+            json_request(&state, "GET", "/api/user/info", json!(null), Some(limited)).await;
+        assert_eq!(blocked, StatusCode::UNAUTHORIZED);
+
+        let (_, setup) = json_request(
+            &state,
+            "POST",
+            "/api/admin/user/myTfaSetup",
+            json!(null),
+            Some(limited),
+        )
+        .await;
+        let secret = setup["data"]["secret"].as_str().unwrap();
+        let code = services::login_security::test_totp_code(secret);
+        let (_, enrolled) = json_request(
+            &state,
+            "POST",
+            "/api/admin/user/myTfaEnable",
+            json!({"secret": secret, "code": code}),
+            Some(limited),
+        )
+        .await;
+        assert_eq!(enrolled["code"], 0, "{enrolled}");
+        for token in [limited, "token-3"] {
+            assert!(services::user::session_by_token(&state.db, token)
+                .await
+                .unwrap()
+                .is_none());
+        }
+
+        let (_, challenge) =
+            json_request(&state, "POST", "/api/admin/login", credentials, None).await;
+        assert_eq!(challenge["data"]["tfa_type"], "tfa_check");
+        assert!(challenge["data"]["token"].is_null());
+        let completion = json!({
+            "secret": challenge["data"]["secret"],
+            "tfaCode": services::login_security::test_totp_code(secret),
+        });
+        let (_, login) =
+            json_request(&state, "POST", "/api/admin/login", completion.clone(), None).await;
+        assert_eq!(login["data"]["must_enroll_totp"], false, "{login}");
+        let verified = login["data"]["token"].as_str().unwrap();
+        let (_, list) = json_request(
+            &state,
+            "GET",
+            "/api/admin/user_token/list",
+            json!(null),
+            Some(verified),
+        )
+        .await;
+        assert_eq!(list["code"], 0, "{list}");
+        assert!(!list.to_string().contains(verified));
+        let (_, replay) = json_request(&state, "POST", "/api/admin/login", completion, None).await;
+        assert_ne!(replay["code"], 0);
     }
 
     use std::sync::Arc;

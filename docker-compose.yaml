@@ -7,7 +7,12 @@ services:
     container_name: rustdesk-api
     restart: unless-stopped
     ports:
-      - "21114:21114"
+      - "${RUSTDESK_CONSOLE_BIND_IP:-127.0.0.1}:21114:21114"
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
     volumes:
       - ./data:/app/data
       - ./conf:/app/conf

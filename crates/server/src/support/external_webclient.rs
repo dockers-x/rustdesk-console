@@ -1,8 +1,9 @@
 use std::fs;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context as _};
+use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 const DEFAULT_WEBCLIENT_ZIP: &str = "./data/web.zip";
@@ -14,6 +15,7 @@ const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 pub struct ExternalWebClient {
     root: PathBuf,
     extraction_root: PathBuf,
+    sha256: String,
 }
 
 impl ExternalWebClient {
@@ -25,8 +27,9 @@ impl ExternalWebClient {
         match Self::load_from_zip_path(DEFAULT_WEBCLIENT_ZIP).await {
             Ok(Some(client)) => {
                 tracing::info!(
-                    zip = DEFAULT_WEBCLIENT_ZIP,
-                    root = %client.root.display(),
+                    target: "security_audit",
+                    event = "webclient.loaded",
+                    sha256 = %client.sha256,
                     "external WebClient loaded"
                 );
                 Some(client)
@@ -34,10 +37,11 @@ impl ExternalWebClient {
             Ok(None) => None,
             Err(err) => {
                 tracing::warn!(
-                    zip = DEFAULT_WEBCLIENT_ZIP,
-                    error = %err,
-                    "external WebClient unavailable; falling back to embedded resources"
+                    target: "security_audit",
+                    event = "webclient.load_failed",
+                    "external WebClient v2 unavailable"
                 );
+                tracing::warn!(error = %err, "external WebClient load failed");
                 None
             }
         }
@@ -102,15 +106,26 @@ fn extract_zip(zip_path: &Path, root: &Path) -> anyhow::Result<ExternalWebClient
     if result.is_err() {
         let _ = fs::remove_dir_all(root);
     }
-    result.map(|content_root| ExternalWebClient {
+    result.map(|(content_root, sha256)| ExternalWebClient {
         root: content_root,
         extraction_root: root.to_path_buf(),
+        sha256,
     })
 }
 
-fn extract_zip_inner(zip_path: &Path, root: &Path) -> anyhow::Result<PathBuf> {
-    let file =
+fn extract_zip_inner(zip_path: &Path, root: &Path) -> anyhow::Result<(PathBuf, String)> {
+    let mut file =
         fs::File::open(zip_path).with_context(|| format!("open zip {}", zip_path.display()))?;
+    let mut digest = Sha256::new();
+    let size = io::copy(
+        &mut Read::by_ref(&mut file).take(MAX_ZIP_BYTES + 1),
+        &mut digest,
+    )?;
+    if size > MAX_ZIP_BYTES {
+        bail!("zip exceeds max size of {MAX_ZIP_BYTES} bytes");
+    }
+    let sha256 = format!("{:x}", digest.finalize());
+    file.seek(SeekFrom::Start(0))?;
     let mut archive = ZipArchive::new(file).context("open zip archive")?;
     let mut total_size = 0_u64;
 
@@ -169,11 +184,11 @@ fn extract_zip_inner(zip_path: &Path, root: &Path) -> anyhow::Result<PathBuf> {
 
     // Preserve the flat layout's precedence when both entry points are present.
     if root.join("index.html").is_file() {
-        return Ok(root.to_path_buf());
+        return Ok((root.to_path_buf(), sha256));
     }
     let web_root = root.join("web");
     if web_root.join("index.html").is_file() {
-        return Ok(web_root);
+        return Ok((web_root, sha256));
     }
     bail!("external WebClient zip must contain index.html or web/index.html");
 }

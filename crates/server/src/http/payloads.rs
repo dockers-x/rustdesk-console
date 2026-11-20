@@ -184,6 +184,7 @@ pub struct AdminLoginPayload {
     pub route_names: Vec<String>,
     pub nickname: String,
     pub must_change_password: bool,
+    pub must_enroll_totp: bool,
     pub tfa_enabled: bool,
     pub tfa_enforced: bool,
     pub email_verification_enabled: bool,
@@ -191,8 +192,10 @@ pub struct AdminLoginPayload {
 }
 
 impl AdminLoginPayload {
-    pub fn from_user(u: &user::Model, token: String) -> Self {
-        let route_names = if u.is_admin() {
+    pub fn from_user(u: &user::Model, token: String, must_enroll_totp: bool) -> Self {
+        let route_names = if must_enroll_totp {
+            Vec::new()
+        } else if u.is_admin() {
             vec!["*".to_string()]
         } else {
             vec![
@@ -216,6 +219,7 @@ impl AdminLoginPayload {
             route_names,
             nickname: u.nickname.clone(),
             must_change_password: u.must_change_password,
+            must_enroll_totp,
             tfa_enabled: u.tfa_enabled,
             tfa_enforced: u.tfa_enforced,
             email_verification_enabled: u.email_verification_enabled,

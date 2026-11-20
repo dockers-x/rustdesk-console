@@ -383,31 +383,45 @@ pub async fn login(
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
+    audit: super::security_audit::AuditContext,
     Json(mut form): Json<LoginForm>,
 ) -> Response {
     let avatar_base_url = request_public_base(&headers, &state);
-    if state.config.app.disable_pwd_login {
+    if state.config.app.disable_pwd_login && form.secret.trim().is_empty() {
+        audit.decision("password", "rejected", "password_login_disabled");
         return resp::error(state.tr(&lang, "PwdLoginDisabled"));
     }
     if state.limiter.check_security_status(&ip).0 {
+        audit.decision("login", "rejected", "source_banned");
         return resp::error(state.tr(&lang, "LoginBanned"));
     }
     if !form.secret.trim().is_empty() {
-        let (user, device) = match services::login_security::verify_login_challenge(
+        let verified = match services::login_security::verify_login_challenge(
             &state.db,
             &form.secret,
             Some(&form.verification_code),
             Some(&form.tfa_code),
+            if state.config.app.disable_pwd_login {
+                services::login_security::ChallengeSources::FederatedOnly
+            } else {
+                services::login_security::ChallengeSources::All
+            },
         )
         .await
         {
             Ok(result) => result,
             Err(e) => {
+                audit.decision("challenge", "rejected", "challenge_invalid");
                 state.limiter.record_failed_attempt(&ip);
                 return resp::error(e);
             }
         };
+        let user = verified.account;
+        let device = verified.device;
+        let method = super::admin::challenge_method(verified.federated, verified.kind);
+        audit.subject(user.id);
         if !user.is_enabled() {
+            audit.decision(method, "rejected", "account_disabled");
             return resp::error(state.tr(&lang, "UserDisabled"));
         }
         let ut = match services::user::login(
@@ -416,31 +430,38 @@ pub async fn login(
             &state.config,
             &user,
             services::user::LoginEvent {
+                proof: verified.kind.into(),
                 client: device.client_type,
                 device_id: device.id,
                 uuid: device.uuid,
                 ip,
-                login_type: login_log::TYPE_ACCOUNT.to_string(),
+                login_type: if verified.federated {
+                    login_log::TYPE_OAUTH
+                } else {
+                    login_log::TYPE_ACCOUNT
+                }
+                .to_owned(),
                 platform: device.os,
             },
         )
         .await
         {
             Ok(ut) => ut,
-            Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+            Err(_) => {
+                audit.decision(method, "rejected", "session_issue_denied");
+                return resp::error(state.tr(&lang, "OperationFailed"));
+            }
         };
-        return Json(LoginRes {
-            r#type: "access_token".into(),
-            access_token: ut.token,
-            user: UserPayload::from_user_with_avatar_base(&user, &avatar_base_url),
-            secret: String::new(),
-            tfa_type: String::new(),
-        })
-        .into_response();
+        return client_session_response(&audit, method, &user, ut, &avatar_base_url);
     }
-    if form.username.len() < 2 || form.password.len() < 4 {
+    if !(2..=256).contains(&form.username.len()) || form.password.len() < 4 {
+        audit.decision("password", "rejected", "invalid_input");
         state.limiter.record_failed_attempt(&ip);
         return resp::error(state.tr(&lang, "ParamsError"));
+    }
+    if !state.limiter.reserve_password_attempt(&ip, &form.username) {
+        audit.decision("password", "rejected", "rate_limited");
+        return resp::error(state.tr(&lang, "LoginBanned"));
     }
     let user = match services::user::info_by_username_password(
         &state.db,
@@ -451,12 +472,19 @@ pub async fn login(
     .await
     {
         Ok(Some(u)) => u,
-        _ => {
+        Ok(None) => {
+            audit.decision("password", "rejected", "invalid_credentials");
             state.limiter.record_failed_attempt(&ip);
             return resp::error(state.tr(&lang, "UsernameOrPasswordError"));
         }
+        Err(_) => {
+            audit.decision("password", "error", "credential_store_unavailable");
+            return resp::error(state.tr(&lang, "OperationFailed"));
+        }
     };
+    audit.subject(user.id);
     if !user.is_enabled() {
+        audit.decision("password", "rejected", "account_disabled");
         return resp::error(state.tr(&lang, "UserDisabled"));
     }
     // referer => web client login
@@ -472,19 +500,19 @@ pub async fn login(
             .await
             {
                 Ok(challenge) => challenge,
-                Err(e) => return resp::error(e),
+                Err(e) => {
+                    audit.decision("password", "rejected", "challenge_unavailable");
+                    return resp::error(e);
+                }
             };
-            return Json(LoginRes {
-                r#type: "email_check".into(),
-                access_token: String::new(),
-                user: UserPayload::from_user_with_avatar_base(&user, &avatar_base_url),
-                secret: challenge.secret,
-                tfa_type: challenge.kind.response_tfa_type().to_string(),
-            })
-            .into_response();
+            audit.decision("password", "pending", "challenge_issued");
+            return client_challenge_response(&user, challenge, &avatar_base_url);
         }
         Ok(None) => {}
-        Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        Err(_) => {
+            audit.decision("password", "error", "policy_unavailable");
+            return resp::error(state.tr(&lang, "OperationFailed"));
+        }
     }
     let ut = match services::user::login(
         &state.db,
@@ -492,6 +520,7 @@ pub async fn login(
         &state.config,
         &user,
         services::user::LoginEvent {
+            proof: services::user::LoginProof::SingleFactor,
             client: form.device_info.r#type.clone(),
             device_id: form.id.clone(),
             uuid: form.uuid.clone(),
@@ -503,16 +532,50 @@ pub async fn login(
     .await
     {
         Ok(ut) => ut,
-        Err(e) => return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        Err(_) => {
+            audit.decision("password", "rejected", "session_issue_denied");
+            return resp::error(state.tr(&lang, "OperationFailed"));
+        }
     };
-    Json(LoginRes {
-        r#type: "access_token".into(),
-        access_token: ut.token,
-        user: UserPayload::from_user_with_avatar_base(&user, &avatar_base_url),
-        secret: String::new(),
-        tfa_type: String::new(),
-    })
-    .into_response()
+    client_session_response(&audit, "password", &user, ut, &avatar_base_url)
+}
+
+pub(super) fn client_challenge_response(
+    user: &user::Model,
+    challenge: services::login_security::LoginChallenge,
+    avatar_base_url: &str,
+) -> Response {
+    resp::no_store(
+        Json(LoginRes {
+            r#type: "email_check".into(),
+            access_token: String::new(),
+            user: UserPayload::from_user_with_avatar_base(user, avatar_base_url),
+            secret: challenge.secret,
+            tfa_type: challenge.kind.response_tfa_type().to_owned(),
+        })
+        .into_response(),
+    )
+}
+
+pub(super) fn client_session_response(
+    audit: &super::security_audit::AuditContext,
+    method: &'static str,
+    user: &user::Model,
+    session: entity::user_token::Model,
+    avatar_base_url: &str,
+) -> Response {
+    audit.principal(user.id, session.id);
+    audit.decision(method, "accepted", "session_issued");
+    resp::no_store(
+        Json(LoginRes {
+            r#type: "access_token".into(),
+            access_token: session.token,
+            user: UserPayload::from_user_with_avatar_base(user, avatar_base_url),
+            secret: String::new(),
+            tfa_type: String::new(),
+        })
+        .into_response(),
+    )
 }
 
 fn client_login_device_info(
@@ -961,6 +1024,7 @@ pub async fn device_deploy(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     auth: DeploymentAuth,
+    audit: super::security_audit::AuditContext,
     Json(f): Json<DeviceDeployForm>,
 ) -> Response {
     if f.id.trim().is_empty() || f.uuid.trim().is_empty() {
@@ -975,6 +1039,7 @@ pub async fn device_deploy(
             &ip,
         )
         .await;
+        audit.decision("device_deploy", "rejected", "invalid_input");
         return Json(json!({ "result": "INVALID_INPUT" })).into_response();
     }
     if !auth.has_scope(deployment_token::SCOPE_DEPLOY) {
@@ -989,6 +1054,7 @@ pub async fn device_deploy(
             &ip,
         )
         .await;
+        audit.decision("device_deploy", "rejected", "authorization_denied");
         return Json(json!({ "error": "Unauthorized" })).into_response();
     }
     if let Some(token) = &auth.deployment_token {
@@ -999,6 +1065,7 @@ pub async fn device_deploy(
                 false
             });
         if !claimed {
+            audit.decision("device_deploy", "rejected", "authorization_denied");
             return Json(json!({ "error": "Unauthorized" })).into_response();
         }
     }
@@ -1030,6 +1097,7 @@ pub async fn device_deploy(
                 &ip,
             )
             .await;
+            audit.decision("device_deploy", "accepted", "device_deployed");
             Json(json!({ "result": "OK" })).into_response()
         }
         Err(DeviceDeployError::IdTaken) => {
@@ -1044,6 +1112,7 @@ pub async fn device_deploy(
                 &ip,
             )
             .await;
+            audit.decision("device_deploy", "rejected", "device_id_taken");
             Json(json!({ "result": "ID_TAKEN" })).into_response()
         }
         Err(DeviceDeployError::InvalidInput) => {
@@ -1058,6 +1127,7 @@ pub async fn device_deploy(
                 &ip,
             )
             .await;
+            audit.decision("device_deploy", "rejected", "invalid_input");
             Json(json!({ "result": "INVALID_INPUT" })).into_response()
         }
         Err(DeviceDeployError::Other(e)) => {
@@ -1072,6 +1142,7 @@ pub async fn device_deploy(
                 &ip,
             )
             .await;
+            audit.decision("device_deploy", "error", "deployment_failed");
             Json(json!({ "error": e })).into_response()
         }
     }
@@ -1118,6 +1189,7 @@ pub async fn device_cli(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     auth: DeploymentAuth,
+    audit: super::security_audit::AuditContext,
     Json(f): Json<DeviceCliForm>,
 ) -> Response {
     if !auth.has_scope(deployment_token::SCOPE_ASSIGN) {
@@ -1132,6 +1204,7 @@ pub async fn device_cli(
             &ip,
         )
         .await;
+        audit.decision("device_assignment", "rejected", "authorization_denied");
         return "UNAUTHORIZED".into_response();
     }
     if let Some(token) = &auth.deployment_token {
@@ -1142,6 +1215,7 @@ pub async fn device_cli(
                 false
             });
         if !claimed {
+            audit.decision("device_assignment", "rejected", "authorization_denied");
             return "UNAUTHORIZED".into_response();
         }
     }
@@ -1158,6 +1232,7 @@ pub async fn device_cli(
                 &ip,
             )
             .await;
+            audit.decision("device_assignment", "accepted", "device_assigned");
             message.into_response()
         }
         Err(message) => {
@@ -1172,6 +1247,7 @@ pub async fn device_cli(
                 &ip,
             )
             .await;
+            audit.decision("device_assignment", "rejected", "assignment_failed");
             message.into_response()
         }
     }
@@ -3559,6 +3635,12 @@ pub(crate) mod deployment_tests {
         )
         .await
         .unwrap();
+        db.execute(
+            db.get_database_backend()
+                .build(&schema.create_table_from_entity(entity::system_setting::Entity)),
+        )
+        .await
+        .unwrap();
         entity::user_token::ActiveModel {
             user_id: Set(7),
             token: Set("existing-token".to_string()),
@@ -3642,6 +3724,7 @@ pub(crate) mod deployment_tests {
                 AcceptLang("en".into()),
                 ClientIp("test-ip".into()),
                 HeaderMap::new(),
+                crate::http::security_audit::AuditContext::default(),
                 Json(LoginForm {
                     secret: secret.into(),
                     ..Default::default()
@@ -3657,6 +3740,7 @@ pub(crate) mod deployment_tests {
                 State(state.clone()),
                 AcceptLang("en".into()),
                 ClientIp("test-ip".into()),
+                crate::http::security_audit::AuditContext::default(),
                 Json(crate::http::admin::LoginForm {
                     secret: secret.into(),
                     ..Default::default()
@@ -3768,6 +3852,7 @@ pub(crate) mod deployment_tests {
                 State(state.clone()),
                 ClientIp("127.0.0.1".to_string()),
                 deployment_auth(),
+                crate::http::security_audit::AuditContext::default(),
                 Json(DeviceDeployForm {
                     id: "deploy-1".into(),
                     uuid: "uuid-1".into(),
@@ -3778,6 +3863,7 @@ pub(crate) mod deployment_tests {
                 State(state),
                 ClientIp("127.0.0.1".to_string()),
                 deployment_auth(),
+                crate::http::security_audit::AuditContext::default(),
                 Json(DeviceCliForm {
                     id: "assign-2".into(),
                     uuid: "uuid-2".into(),

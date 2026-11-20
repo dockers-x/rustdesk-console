@@ -202,7 +202,7 @@ pub async fn config_view(
     Ok(LoginSecurityConfigView { login })
 }
 
-pub async fn login_settings(db: &DatabaseConnection) -> Result<LoginSecuritySettings, DbErr> {
+pub async fn login_settings(db: &impl ConnectionTrait) -> Result<LoginSecuritySettings, DbErr> {
     load_json_setting(db, LOGIN_SECURITY_KEY)
         .await
         .map(|v| v.unwrap_or_default())
@@ -389,13 +389,17 @@ pub async fn send_test_email(
     send_email(&settings, to, title, body).await
 }
 
+pub fn totp_required(u: &user::Model, settings: &LoginSecuritySettings) -> bool {
+    u.is_admin() || u.tfa_enabled || u.tfa_enforced || settings.require_totp
+}
+
 pub async fn required_verification(
     db: &DatabaseConnection,
     u: &user::Model,
     _device: &DeviceLoginInfo,
 ) -> Result<Option<VerificationKind>, DbErr> {
     let settings = login_settings(db).await?;
-    if u.tfa_enabled && (u.tfa_enforced || settings.require_totp) {
+    if u.tfa_enabled && totp_required(u, &settings) {
         return Ok(Some(VerificationKind::Totp));
     }
     if settings.require_email_verification || u.email_verification_enabled {
@@ -413,6 +417,25 @@ pub async fn create_login_challenge(
     u: &user::Model,
     device: &DeviceLoginInfo,
     kind: VerificationKind,
+) -> Result<LoginChallenge, String> {
+    create_challenge(db, u, device, kind, false).await
+}
+
+pub async fn create_federated_challenge(
+    db: &DatabaseConnection,
+    u: &user::Model,
+    device: &DeviceLoginInfo,
+    kind: VerificationKind,
+) -> Result<LoginChallenge, String> {
+    create_challenge(db, u, device, kind, true).await
+}
+
+async fn create_challenge(
+    db: &DatabaseConnection,
+    u: &user::Model,
+    device: &DeviceLoginInfo,
+    kind: VerificationKind,
+    federated: bool,
 ) -> Result<LoginChallenge, String> {
     let secret = crate::support::random::random_string(40);
     let mut code_hash = String::new();
@@ -444,6 +467,18 @@ pub async fn create_login_challenge(
         .exec(&transaction)
         .await
         .map_err(|e| e.to_string())?;
+    let current = user::Entity::find_by_id(u.id)
+        .one(&transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !current.is_some_and(|current| {
+        current.is_enabled()
+            && current.password == u.password
+            && current.tfa_secret == u.tfa_secret
+            && current.tfa_enabled == u.tfa_enabled
+    }) {
+        return Err("account changed during authentication".into());
+    }
     let recent = login_verification::Entity::find()
         .filter(login_verification::Column::UserId.eq(u.id))
         .filter(login_verification::Column::Kind.is_in([
@@ -462,6 +497,7 @@ pub async fn create_login_challenge(
         user_id: Set(u.id),
         secret: Set(secret.clone()),
         kind: Set(kind.as_str().to_string()),
+        federated: Set(federated),
         code_hash: Set(code_hash),
         device_id: Set(device.id.clone()),
         device_uuid: Set(device.uuid.clone()),
@@ -517,19 +553,6 @@ pub async fn request_password_reset(
     if !u.is_enabled() || u.email.trim().is_empty() {
         return Ok(secret);
     }
-    if login_verification::Entity::find()
-        .filter(login_verification::Column::UserId.eq(u.id))
-        .filter(login_verification::Column::Kind.eq(login_verification::KIND_PASSWORD_RESET))
-        .filter(login_verification::Column::VerifiedAt.eq(0))
-        .filter(login_verification::Column::ExpiresAt.gt(Utc::now().timestamp()))
-        .order_by_desc(login_verification::Column::Id)
-        .one(db)
-        .await
-        .map_err(|e| e.to_string())?
-        .is_some()
-    {
-        return Ok(secret);
-    }
     let email = match email_settings(db).await {
         Ok(email) if email.is_configured() => email,
         Ok(_) => return Ok(secret),
@@ -543,11 +566,39 @@ pub async fn request_password_reset(
     let body = format!(
         "Your RustDesk Console password reset code is: {code}\n\nThis code expires in 15 minutes. If you did not request a password reset, ignore this email."
     );
-    if let Err(e) = send_email(&email, &u.email, "RustDesk Console password reset", &body).await {
-        tracing::warn!("failed to send password reset email: {e}");
+    let transaction = db.begin().await.map_err(|e| e.to_string())?;
+    user::Entity::update_many()
+        .col_expr(user::Column::Id, Expr::col(user::Column::Id).into())
+        .filter(user::Column::Id.eq(u.id))
+        .exec(&transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+    let current = user::Entity::find_by_id(u.id)
+        .one(&transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !current.is_some_and(|current| {
+        current.is_enabled()
+            && current.password == u.password
+            && current.updated_at == u.updated_at
+            && current.email == u.email
+    }) {
         return Ok(secret);
     }
-    login_verification::ActiveModel {
+    if login_verification::Entity::find()
+        .filter(login_verification::Column::UserId.eq(u.id))
+        .filter(login_verification::Column::Kind.eq(login_verification::KIND_PASSWORD_RESET))
+        .filter(login_verification::Column::VerifiedAt.eq(0))
+        .filter(login_verification::Column::ExpiresAt.gt(Utc::now().timestamp()))
+        .order_by_desc(login_verification::Column::Id)
+        .one(&transaction)
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Ok(secret);
+    }
+    let challenge = login_verification::ActiveModel {
         user_id: Set(u.id),
         secret: Set(secret.clone()),
         kind: Set(login_verification::KIND_PASSWORD_RESET.to_string()),
@@ -558,9 +609,21 @@ pub async fn request_password_reset(
         updated_at: Set(now()),
         ..Default::default()
     }
-    .insert(db)
+    .insert(&transaction)
     .await
     .map_err(|e| e.to_string())?;
+    transaction.commit().await.map_err(|e| e.to_string())?;
+    if send_email(&email, &u.email, "RustDesk Console password reset", &body)
+        .await
+        .is_err()
+    {
+        tracing::warn!("failed to send password reset email");
+        login_verification::Entity::delete_by_id(challenge.id)
+            .exec(db)
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(crate::support::random::random_string(40));
+    }
     Ok(secret)
 }
 
@@ -569,7 +632,7 @@ pub async fn confirm_password_reset(
     secret: &str,
     code: &str,
     new_password: &str,
-) -> Result<(), String> {
+) -> Result<i32, String> {
     if new_password.len() < 4 {
         return Err("Password must be at least 4 characters".to_string());
     }
@@ -585,6 +648,11 @@ pub async fn confirm_password_reset(
     if challenge.expires_at < now_ts {
         return Err("The verification code is incorrect or has expired".to_string());
     }
+    let u = user::Entity::find_by_id(challenge.user_id)
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "UserNotFound".to_string())?;
     let claimed = login_verification::Entity::update_many()
         .col_expr(login_verification::Column::VerifiedAt, Expr::value(now_ts))
         .filter(login_verification::Column::Id.eq(challenge.id))
@@ -595,17 +663,23 @@ pub async fn confirm_password_reset(
     if claimed.rows_affected != 1 || hash_code(&challenge.secret, code) != challenge.code_hash {
         return Err("The verification code is incorrect or has expired".to_string());
     }
-    let u = user::Entity::find_by_id(challenge.user_id)
-        .one(db)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "UserNotFound".to_string())?;
+
     crate::services::user::update_password(db, &u, new_password).await?;
-    let mut am: login_verification::ActiveModel = challenge.into();
-    am.verified_at = Set(now_ts);
-    am.updated_at = Set(now());
-    am.update(db).await.map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(u.id)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ChallengeSources {
+    All,
+    FederatedOnly,
+}
+
+#[derive(Debug)]
+pub struct VerifiedChallenge {
+    pub account: user::Model,
+    pub device: DeviceLoginInfo,
+    pub kind: VerificationKind,
+    pub federated: bool,
 }
 
 pub async fn verify_login_challenge(
@@ -613,11 +687,20 @@ pub async fn verify_login_challenge(
     secret: &str,
     email_code: Option<&str>,
     totp_code: Option<&str>,
-) -> Result<(user::Model, DeviceLoginInfo), String> {
+    sources: ChallengeSources,
+) -> Result<VerifiedChallenge, String> {
     let now_ts = Utc::now().timestamp();
-    let challenge = login_verification::Entity::find()
+    let mut query = login_verification::Entity::find()
         .filter(login_verification::Column::Secret.eq(secret.trim()))
-        .filter(login_verification::Column::VerifiedAt.eq(0))
+        .filter(login_verification::Column::Kind.is_in([
+            login_verification::KIND_EMAIL,
+            login_verification::KIND_TOTP,
+        ]))
+        .filter(login_verification::Column::VerifiedAt.eq(0));
+    if let ChallengeSources::FederatedOnly = sources {
+        query = query.filter(login_verification::Column::Federated.eq(true));
+    }
+    let challenge = query
         .one(db)
         .await
         .map_err(|e| e.to_string())?
@@ -625,6 +708,11 @@ pub async fn verify_login_challenge(
     if challenge.expires_at < now_ts {
         return Err("The verification code is incorrect or has expired".to_string());
     }
+    let u = user::Entity::find_by_id(challenge.user_id)
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "UserNotFound".to_string())?;
     let claimed = login_verification::Entity::update_many()
         .col_expr(
             login_verification::Column::VerifiedAt,
@@ -639,12 +727,7 @@ pub async fn verify_login_challenge(
         return Err("The verification code is incorrect or has expired".to_string());
     }
 
-    let u = user::Entity::find_by_id(challenge.user_id)
-        .one(db)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "UserNotFound".to_string())?;
-    match challenge.kind.as_str() {
+    let kind = match challenge.kind.as_str() {
         login_verification::KIND_TOTP => {
             let code = totp_code
                 .map(str::trim)
@@ -653,6 +736,7 @@ pub async fn verify_login_challenge(
             if !verify_totp(&u.tfa_secret, code) {
                 return Err("The verification code is incorrect or has expired".to_string());
             }
+            VerificationKind::Totp
         }
         login_verification::KIND_EMAIL => {
             let code = email_code
@@ -662,9 +746,10 @@ pub async fn verify_login_challenge(
             if hash_code(&challenge.secret, code) != challenge.code_hash {
                 return Err("The verification code is incorrect or has expired".to_string());
             }
+            VerificationKind::Email
         }
         _ => return Err("The verification code is incorrect or has expired".to_string()),
-    }
+    };
 
     let device = DeviceLoginInfo {
         id: challenge.device_id,
@@ -679,7 +764,12 @@ pub async fn verify_login_challenge(
     if settings.allow_trusted_login_devices && device.auto_login {
         let _ = trust_device(db, u.id, &device).await;
     }
-    Ok((u, device))
+    Ok(VerifiedChallenge {
+        account: u,
+        device,
+        kind,
+        federated: challenge.federated,
+    })
 }
 
 pub fn generate_totp_secret() -> String {
@@ -707,20 +797,42 @@ pub fn verify_totp(secret: &str, code: &str) -> bool {
     (-1..=1).any(|offset| totp_at(&secret_bytes, counter + offset) == code)
 }
 
+#[cfg(test)]
+pub(crate) fn test_totp_code(secret: &str) -> String {
+    totp_at(
+        &base32_decode(secret).unwrap(),
+        Utc::now().timestamp() / TOTP_PERIOD,
+    )
+}
+
 pub async fn enable_user_totp(
     db: &DatabaseConnection,
     u: &user::Model,
     secret: &str,
     code: &str,
 ) -> Result<(), String> {
-    if !verify_totp(secret, code) {
+    if !base32_decode(secret).is_ok_and(|decoded| decoded.len() == 20) || !verify_totp(secret, code)
+    {
         return Err("The verification code is incorrect or has expired".to_string());
     }
-    let mut am: user::ActiveModel = u.clone().into();
-    am.tfa_secret = Set(secret.trim().to_string());
-    am.tfa_enabled = Set(true);
-    am.updated_at = Set(now());
-    am.update(db).await.map(|_| ()).map_err(|e| e.to_string())
+    let transaction = db.begin().await.map_err(|e| e.to_string())?;
+    let updated = user::Entity::update_many()
+        .col_expr(user::Column::TfaSecret, Expr::value(secret.trim()))
+        .col_expr(user::Column::TfaEnabled, Expr::value(true))
+        .col_expr(user::Column::UpdatedAt, Expr::value(now()))
+        .filter(user::Column::Id.eq(u.id))
+        .filter(user::Column::TfaEnabled.eq(false))
+        .filter(user::Column::Password.eq(&u.password))
+        .exec(&transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+    if updated.rows_affected != 1 {
+        return Err("TOTP is already configured or the account has changed".to_string());
+    }
+    super::user::revoke_credentials(&transaction, u.id)
+        .await
+        .map_err(|e| e.to_string())?;
+    transaction.commit().await.map_err(|e| e.to_string())
 }
 
 pub async fn disable_user_totp(
@@ -728,7 +840,8 @@ pub async fn disable_user_totp(
     u: &user::Model,
     code: Option<&str>,
 ) -> Result<(), String> {
-    if u.tfa_enforced {
+    let settings = login_settings(db).await.map_err(|e| e.to_string())?;
+    if u.is_admin() || u.tfa_enforced || settings.require_totp {
         return Err("Two-factor authentication is enforced for this user".to_string());
     }
     if u.tfa_enabled && !verify_totp(&u.tfa_secret, code.unwrap_or_default()) {
@@ -738,12 +851,16 @@ pub async fn disable_user_totp(
 }
 
 pub async fn reset_user_totp(db: &DatabaseConnection, u: &user::Model) -> Result<(), String> {
+    let transaction = db.begin().await.map_err(|e| e.to_string())?;
     let mut am: user::ActiveModel = u.clone().into();
     am.tfa_secret = Set(String::new());
     am.tfa_enabled = Set(false);
-    am.tfa_enforced = Set(false);
     am.updated_at = Set(now());
-    am.update(db).await.map(|_| ()).map_err(|e| e.to_string())
+    am.update(&transaction).await.map_err(|e| e.to_string())?;
+    super::user::revoke_credentials(&transaction, u.id)
+        .await
+        .map_err(|e| e.to_string())?;
+    transaction.commit().await.map_err(|e| e.to_string())
 }
 
 pub async fn update_user_login_security(
@@ -847,7 +964,7 @@ async fn trust_device(
 }
 
 async fn load_json_setting<T: for<'de> Deserialize<'de>>(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     key: &str,
 ) -> Result<Option<T>, DbErr> {
     let Some(row) = system_setting::Entity::find()
@@ -1090,16 +1207,24 @@ mod tests {
         .insert(&db)
         .await
         .unwrap();
-        assert!(
-            verify_login_challenge(&db, "challenge", Some("wrong"), None)
-                .await
-                .is_err()
-        );
-        assert!(
-            verify_login_challenge(&db, "challenge", Some("123456"), None)
-                .await
-                .is_err()
-        );
+        assert!(verify_login_challenge(
+            &db,
+            "challenge",
+            Some("wrong"),
+            None,
+            ChallengeSources::All
+        )
+        .await
+        .is_err());
+        assert!(verify_login_challenge(
+            &db,
+            "challenge",
+            Some("123456"),
+            None,
+            ChallengeSources::All
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
@@ -1136,11 +1261,15 @@ mod tests {
             let challenge = create_login_challenge(&db, &account, &device, VerificationKind::Totp)
                 .await
                 .unwrap();
-            assert!(
-                verify_login_challenge(&db, &challenge.secret, None, Some("invalid"))
-                    .await
-                    .is_err()
-            );
+            assert!(verify_login_challenge(
+                &db,
+                &challenge.secret,
+                None,
+                Some("invalid"),
+                ChallengeSources::All
+            )
+            .await
+            .is_err());
         }
         assert!(
             create_login_challenge(&db, &account, &device, VerificationKind::Totp)

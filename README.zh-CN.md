@@ -48,7 +48,7 @@ docker compose up -d --build
 ### 预构建镜像
 
 ```bash
-docker run -d --name rustdesk-console -p 21114:21114 \
+docker run -d --name rustdesk-console -p 127.0.0.1:21114:21114 \
   -e TZ=Asia/Shanghai \
   -v $PWD/data:/app/data -v $PWD/conf:/app/conf \
   ghcr.io/dockers-x/rustdesk-console:latest
@@ -128,6 +128,19 @@ rustdesk-console reset-admin-pwd <新密码>
 容器镜像默认设置 `TZ=Asia/Shanghai`，`docker-compose.yaml` 也支持用标准 `TZ`
 环境变量覆盖。非中国时区部署时可改成对应 IANA 时区，例如 `TZ=Europe/Berlin`。
 业务时间戳仍按 UTC 保存；`TZ` 用于服务端本地日志/启动时间，以及管理后台界面的本地时间显示。
+
+### 认证与安全日志
+
+升级后，管理员需要重新登录。尚未绑定 TOTP 的管理员须先在 Console 完成绑定。
+验证器丢失时，可在有 Console 数据库访问权的主机上运行
+`rustdesk-console -c ./conf/config.yaml reset-totp <用户 ID>`，再登录并重新绑定。
+
+认证和敏感管理操作以 `security_audit` 目标输出 JSON 到 stdout，独立于
+`logger.level` 和 `RUST_LOG`。请将事件归集到容器外。反代访问日志记录上游响应的
+`X-Request-Id` 和不带查询串的路径。Compose 示例只向回环地址发布端口。反代和 Console
+同在 Docker 网络时，可以取消端口发布，让反代访问服务名，并在 `gin.trust-proxy`
+填入实际代理 IP 或 CIDR。详情见[安全升级说明](docs/security-upgrade.zh-CN.md)。
+
 
 ### Geo Relay 数据目录
 

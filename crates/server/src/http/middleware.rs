@@ -116,6 +116,15 @@ fn trusted_proxy(ip: IpAddr, configured: &str) -> bool {
     })
 }
 
+fn audit_principal(parts: &Parts, actor_id: i32, session_id: i32) {
+    if let Some(audit) = parts
+        .extensions
+        .get::<super::security_audit::AuditContext>()
+    {
+        audit.principal(actor_id, session_id);
+    }
+}
+
 fn header(parts: &Parts, name: &str) -> Option<String> {
     parts
         .headers
@@ -162,13 +171,14 @@ impl FromRequestParts<AppState> for DeploymentAuth {
             .filter(|v| !v.is_empty())
             .ok_or_else(response::unauthorized)?
             .to_string();
-        if let Ok(Some((user, _ut))) =
+        if let Ok(Some((user, ut))) =
             crate::services::user::info_by_access_token(&state.db, &token).await
         {
             if user.must_change_password {
                 let lang = header(parts, "Accept-Language").unwrap_or_default();
                 return Err(response::error(state.tr(&lang, "PasswordChangeRequired")));
             }
+            audit_principal(parts, user.id, ut.id);
             return Ok(DeploymentAuth {
                 user: Some(user),
                 token,
@@ -176,11 +186,19 @@ impl FromRequestParts<AppState> for DeploymentAuth {
             });
         }
         match crate::services::deployment::verify_token(&state.db, &token).await {
-            Ok(Some(deployment_token)) => Ok(DeploymentAuth {
-                user: None,
-                token,
-                deployment_token: Some(deployment_token),
-            }),
+            Ok(Some(deployment_token)) => {
+                if let Some(audit) = parts
+                    .extensions
+                    .get::<super::security_audit::AuditContext>()
+                {
+                    audit.deployment_token(deployment_token.id);
+                }
+                Ok(DeploymentAuth {
+                    user: None,
+                    token,
+                    deployment_token: Some(deployment_token),
+                })
+            }
             _ => Err(response::unauthorized()),
         }
     }
@@ -206,7 +224,8 @@ impl FromRequestParts<AppState> for RustClientUser {
             .ok_or_else(response::unauthorized)?
             .to_string();
         match crate::services::user::info_by_access_token(&state.db, &token).await {
-            Ok(Some((user, _ut))) => {
+            Ok(Some((user, ut))) => {
+                audit_principal(parts, user.id, ut.id);
                 if user.must_change_password
                     && !matches!(
                         parts.uri.path(),
@@ -244,28 +263,43 @@ impl FromRequestParts<AppState> for BackendUser {
             .ok_or_else(|| {
                 response::fail(response::CODE_NEED_LOGIN, state.tr(&lang, "NeedLogin"))
             })?;
-        let (user, ut) = match crate::services::user::info_by_access_token(&state.db, &token).await
-        {
-            Ok(Some(pair)) => pair,
-            _ => {
-                return Err(response::fail(
-                    response::CODE_NEED_LOGIN,
-                    state.tr(&lang, "NeedLogin"),
-                ))
-            }
-        };
-        if !user.is_enabled() {
-            return Err(response::unauthorized());
-        }
+        use crate::services::user::{self, SessionLifetime, AUTH_ENROLLMENT, AUTH_TOTP};
+
+        let need_login = || response::fail(response::CODE_NEED_LOGIN, state.tr(&lang, "NeedLogin"));
+        let (user, ut) = user::session_by_token(&state.db, &token)
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(need_login)?;
+        audit_principal(parts, user.id, ut.id);
         if user.must_change_password && !password_change_allowed_path(parts.uri.path()) {
             return Err(response::fail(
                 112,
                 state.tr(&lang, "PasswordChangeRequired"),
             ));
         }
-        // auto-refresh token if close to expiry
-        let _ =
-            crate::services::user::auto_refresh_access_token(&state.db, &state.config, &ut).await;
+        if ut.auth_level == AUTH_ENROLLMENT {
+            if !enrollment_allowed_path(parts.uri.path()) {
+                return Err(response::fail(114, "TOTP enrollment required"));
+            }
+        } else {
+            if ut.auth_level != AUTH_TOTP
+                && user::requires_totp(&state.db, &user).await.unwrap_or(true)
+            {
+                return Err(need_login());
+            }
+            let lifetime = if user.is_admin() {
+                SessionLifetime::Admin
+            } else {
+                SessionLifetime::User
+            };
+            if user::auto_refresh_access_token(&state.db, &state.config, &ut, lifetime)
+                .await
+                .is_err()
+            {
+                tracing::warn!(session_id = ut.id, "session renewal failed");
+            }
+        }
         Ok(BackendUser {
             user,
             token,
@@ -279,6 +313,16 @@ fn password_change_allowed_path(path: &str) -> bool {
         path,
         "/api/admin/user/current" | "/api/admin/user/changeCurPwd" | "/api/admin/logout"
     )
+}
+
+fn enrollment_allowed_path(path: &str) -> bool {
+    password_change_allowed_path(path)
+        || matches!(
+            path,
+            "/api/admin/user/mySecurity"
+                | "/api/admin/user/myTfaSetup"
+                | "/api/admin/user/myTfaEnable"
+        )
 }
 
 /// Admin-only: a [`BackendUser`] that is also an admin.
@@ -296,11 +340,19 @@ impl FromRequestParts<AppState> for AdminUser {
     ) -> Result<Self, Self::Rejection> {
         let lang = header(parts, "Accept-Language").unwrap_or_default();
         let backend = BackendUser::from_request_parts(parts, state).await?;
-        if !backend.user.is_admin() {
+        if !backend.user.is_admin()
+            || backend.user_token.auth_level != crate::services::user::AUTH_TOTP
+        {
             return Err(response::fail(
                 response::CODE_NO_ACCESS,
                 state.tr(&lang, "NoAccess"),
             ));
+        }
+        if let Some(audit) = parts
+            .extensions
+            .get::<super::security_audit::AuditContext>()
+        {
+            audit.admin_access();
         }
         Ok(AdminUser {
             user: backend.user,
@@ -352,6 +404,7 @@ mod tests {
         for statement in [
             schema.create_table_from_entity(user::Entity),
             schema.create_table_from_entity(user_token::Entity),
+            schema.create_table_from_entity(entity::system_setting::Entity),
         ] {
             db.execute(db.get_database_backend().build(&statement))
                 .await

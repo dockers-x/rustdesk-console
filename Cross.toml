@@ -1,0 +1,2 @@
+[build.env]
+passthrough = ["RUSTDESK_CONSOLE_BUILD_REVISION"]

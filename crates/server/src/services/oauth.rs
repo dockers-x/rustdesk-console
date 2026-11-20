@@ -432,6 +432,9 @@ pub async fn begin_auth(
         chrono::Utc::now().timestamp()
     );
     if op == oauth::TYPE_WEBAUTH {
+        if !cfg.app.web_sso {
+            return Err("Web SSO is disabled".into());
+        }
         let url = format!("{}/_admin/#/oauth/{}", cfg.rustdesk.api_server, state);
         return Ok((state, String::new(), String::new(), url));
     }
@@ -798,6 +801,9 @@ pub async fn register_or_login(
             .one(db)
             .await
         {
+            if u.is_admin() {
+                return Err("Bind the OAuth identity from an authenticated Console session".into());
+            }
             bind_user(db, u.id, ou, &oauth_type, op)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -857,8 +863,51 @@ async fn generate_unique_username(db: &DatabaseConnection, base: &str) -> String
     }
 }
 
-pub async fn bind_user(
+/// Add a provider credential only while the session approving it is live.
+pub async fn bind_user_with_session(
     db: &DatabaseConnection,
+    user_id: i32,
+    session_id: i32,
+    identity: &OauthUser,
+    op: &str,
+) -> Result<(), DbErr> {
+    let transaction = db.begin().await?;
+    let Some(account) = super::user::lock_account(&transaction, user_id).await? else {
+        return Err(DbErr::RecordNotFound("user not found".into()));
+    };
+    super::user::lock_full_session(&transaction, &account, session_id).await?;
+    // Serialize linking for the same provider across accounts.
+    oauth::Entity::update_many()
+        .col_expr(
+            oauth::Column::Id,
+            sea_orm::sea_query::Expr::col(oauth::Column::Id).into(),
+        )
+        .filter(oauth::Column::Op.eq(op))
+        .exec(&transaction)
+        .await?;
+    let provider = oauth::Entity::find()
+        .filter(oauth::Column::Op.eq(op))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("OAuth provider not found".into()))?;
+    let duplicate = user_third::Entity::find()
+        .filter(user_third::Column::Op.eq(op))
+        .filter(
+            Condition::any()
+                .add(user_third::Column::OpenId.eq(&identity.open_id))
+                .add(user_third::Column::UserId.eq(user_id)),
+        )
+        .one(&transaction)
+        .await?;
+    if duplicate.is_some() {
+        return Err(DbErr::Custom("OAuth identity is already linked".into()));
+    }
+    bind_user(&transaction, user_id, identity, &provider.oauth_type, op).await?;
+    transaction.commit().await
+}
+
+async fn bind_user(
+    db: &impl ConnectionTrait,
     user_id: i32,
     ou: &OauthUser,
     oauth_type: &str,

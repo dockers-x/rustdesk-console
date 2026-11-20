@@ -265,12 +265,16 @@ mod tests {
         db.execute(backend.build(&schema.create_table_from_entity(entity::user_token::Entity)))
             .await
             .unwrap();
+        db.execute(backend.build(&schema.create_table_from_entity(entity::system_setting::Entity)))
+            .await
+            .unwrap();
         for (user_id, is_admin, token) in [(1, true, "feature-admin"), (2, false, "feature-user")] {
             entity::user::ActiveModel {
                 id: Set(user_id),
                 username: Set(token.to_string()),
                 status: Set(entity::user::STATUS_ENABLE),
                 is_admin: Set(Some(is_admin)),
+                tfa_enabled: Set(is_admin),
                 ..Default::default()
             }
             .insert(&db)
@@ -280,6 +284,12 @@ mod tests {
                 user_id: Set(user_id),
                 token: Set(token.to_string()),
                 expired_at: Set(chrono::Utc::now().timestamp() + 86400),
+                created_at: Set(crate::services::now()),
+                auth_level: Set(if is_admin {
+                    crate::services::user::AUTH_TOTP
+                } else {
+                    0
+                }),
                 ..Default::default()
             }
             .insert(&db)

@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "address_books")]
 pub struct Model {
+    // Legacy RustDesk sync sends the device ID only. Reconciliation resolves its own row ID.
     #[sea_orm(primary_key)]
+    #[serde(default)]
     pub row_id: i32,
     #[sea_orm(default_value = "")]
     #[serde(default)]

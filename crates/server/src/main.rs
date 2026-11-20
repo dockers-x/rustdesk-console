@@ -36,9 +36,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Reset the admin (user id 1) password.
-    ResetAdminPwd { pwd: String },
+    #[command(name = "reset-admin-pwd")]
+    AdminPassword { pwd: String },
     /// Reset a user's password by id.
-    ResetPwd { user_id: i32, pwd: String },
+    #[command(name = "reset-pwd")]
+    Password { user_id: i32, pwd: String },
+    /// Reset a lost TOTP factor and revoke the user's sessions and challenges.
+    #[command(name = "reset-totp")]
+    Totp { user_id: i32 },
 }
 
 #[tokio::main]
@@ -56,14 +61,15 @@ async fn main() {
     logging::init(&cfg);
 
     let result = match cli.command {
-        Some(Command::ResetAdminPwd { pwd }) => reset_password(&cfg, 1, &pwd).await,
-        Some(Command::ResetPwd { user_id, pwd }) => {
+        Some(Command::AdminPassword { pwd }) => reset_password(&cfg, 1, &pwd).await,
+        Some(Command::Password { user_id, pwd }) => {
             if user_id <= 0 {
                 tracing::warn!("userId must be greater than 0!");
                 return;
             }
             reset_password(&cfg, user_id, &pwd).await
         }
+        Some(Command::Totp { user_id }) => reset_totp(&cfg, user_id).await,
         None => serve(cfg, PathBuf::from(cli.config)).await,
     };
 
@@ -91,6 +97,13 @@ async fn serve(cfg: config::Config, config_path: PathBuf) -> anyhow::Result<()> 
     let addr: SocketAddr = addr_str.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("listening on http://{addr}");
+    tracing::info!(
+        target: "security_audit",
+        event = "console.started",
+        version = env!("CARGO_PKG_VERSION"),
+        revision = option_env!("RUSTDESK_CONSOLE_BUILD_REVISION").unwrap_or("unknown"),
+        listen = %addr,
+    );
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -107,9 +120,32 @@ async fn reset_password(cfg: &config::Config, user_id: i32, pwd: &str) -> anyhow
             services::user::update_password(&db, &u, pwd)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
-            tracing::info!("reset password success!");
+            tracing::info!(
+                target: "security_audit",
+                event = "console.password_reset",
+                actor = "local_cli",
+                subject_id = user_id,
+            );
         }
         _ => tracing::warn!("user not found!"),
     }
+    Ok(())
+}
+
+/// Recover access to the enrollment flow using local database access.
+async fn reset_totp(cfg: &config::Config, user_id: i32) -> anyhow::Result<()> {
+    let db = bootstrap::connect(cfg).await?;
+    let account = services::user::info_by_id(&db, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user {user_id} not found"))?;
+    services::login_security::reset_user_totp(&db, &account)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    tracing::info!(
+        target: "security_audit",
+        event = "console.totp_reset",
+        actor = "local_cli",
+        subject_id = user_id,
+    );
     Ok(())
 }

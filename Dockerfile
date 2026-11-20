@@ -21,13 +21,16 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY . .
 COPY --from=webui /app/resources/admin ./resources/admin
-RUN cargo build --release -p rustdesk-console
+ARG BUILD_REVISION=unknown
+RUN RUSTDESK_CONSOLE_BUILD_REVISION="$BUILD_REVISION" cargo build --locked --release -p rustdesk-console
 
 # ---------------------------------------------------------------------------
 # Stage 3: minimal runtime. The binary is self-contained (frontend + i18n +
 # templates are embedded); only config and the sqlite data dir live on disk.
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim
+ARG BUILD_REVISION=unknown
+LABEL org.opencontainers.image.revision="$BUILD_REVISION"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*

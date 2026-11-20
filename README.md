@@ -52,7 +52,7 @@ Then open `http://<host>:21114/_admin/`.
 ### Pre-built image
 
 ```bash
-docker run -d --name rustdesk-console -p 21114:21114 \
+docker run -d --name rustdesk-console -p 127.0.0.1:21114:21114 \
   -e TZ=Asia/Shanghai \
   -v $PWD/data:/app/data -v $PWD/conf:/app/conf \
   ghcr.io/dockers-x/rustdesk-console:latest
@@ -137,6 +137,23 @@ override it with the standard `TZ` environment variable. Set it to your IANA tim
 zone, for example `TZ=Europe/Berlin`, if you do not want Asia/Shanghai local time.
 Business timestamps remain stored in UTC; `TZ` is used for server-local logs/start
 time and for the admin UI's local-time display.
+
+### Authentication and security logs
+
+Administrators must enroll in TOTP and sign in again after upgrading. Their existing
+sessions require a new sign-in. To recover a lost factor, run
+`rustdesk-console -c ./conf/config.yaml reset-totp <user-id>` on the Console host
+with access to its database, then enroll again. See the
+[security upgrade guide](docs/security-upgrade.zh-CN.md) for deployment details.
+
+Authentication and sensitive administration events always emit JSON on stdout
+with target `security_audit`, independently of `logger.level` and `RUST_LOG`.
+Forward them to a collector outside the container. Log the upstream `X-Request-Id`
+and the request path without the query string at the reverse proxy.
+The Compose example publishes Console on loopback. For a proxy on the same Docker network,
+remove the published port and use the service address; set `gin.trust-proxy` to the actual
+proxy addresses or CIDRs.
+
 
 ### Geo relay data directory
 

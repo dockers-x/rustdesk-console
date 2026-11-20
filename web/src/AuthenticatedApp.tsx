@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GeoRoutingPage } from "./pages/GeoRoutingPage";
 import { MessageCenterPage } from "./pages/MessageCenterPage";
+import { EnrollTotpPage } from "./pages/EnrollTotpPage";
 import { MyProfilePage } from "./pages/MyProfilePage";
 import { NotificationRoutingPage } from "./pages/NotificationRoutingPage";
 import { OAuthActionPage } from "./pages/OAuthActionPage";
@@ -27,6 +28,7 @@ import {
 
 interface CurrentUserAccess {
   route_names?: string[];
+  must_enroll_totp?: boolean;
 }
 
 export default function AuthenticatedApp() {
@@ -60,6 +62,8 @@ export default function AuthenticatedApp() {
       </div>
     );
   }
+
+  if (currentUser.data.must_enroll_totp) return <EnrollTotpPage />;
 
   const isAdmin = hasAdminAccess(currentUser.data.route_names);
   const home = authenticatedHome(isAdmin);

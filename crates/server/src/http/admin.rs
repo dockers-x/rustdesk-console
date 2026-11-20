@@ -17,7 +17,10 @@ use entity::{group, peer, user};
 use crate::http::middleware::{AcceptLang, AdminUser, BackendUser, ClientIp};
 use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
+use crate::http::security_audit::AuditContext;
 use crate::services;
+use crate::services::login_security::{ChallengeSources, VerificationKind};
+use crate::services::user::{LoginProof, AUTH_ENROLLMENT};
 use crate::state::AppState;
 use crate::support::admin_config::AdminPanelConfig;
 use crate::support::record_storage_config::RecordStorageConfigForm;
@@ -63,58 +66,91 @@ pub async fn login(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
+    audit: AuditContext,
     Json(f): Json<LoginForm>,
 ) -> Response {
-    if state.config.app.disable_pwd_login {
+    if state.config.app.disable_pwd_login && f.secret.trim().is_empty() {
+        audit.decision("password", "rejected", "password_login_disabled");
         return resp::fail(101, state.tr(&lang, "PwdLoginDisabled"));
     }
     let (banned, need_captcha) = state.limiter.check_security_status(&ip);
     if banned {
+        audit.decision("login", "rejected", "source_banned");
         return resp::fail(101, state.tr(&lang, "LoginBanned"));
     }
     if !f.secret.trim().is_empty() {
-        let (user, device) = match services::login_security::verify_login_challenge(
+        let verified = match services::login_security::verify_login_challenge(
             &state.db,
             &f.secret,
             Some(&f.verification_code),
             Some(&f.tfa_code),
+            if state.config.app.disable_pwd_login {
+                ChallengeSources::FederatedOnly
+            } else {
+                ChallengeSources::All
+            },
         )
         .await
         {
             Ok(result) => result,
             Err(e) => {
+                audit.decision("challenge", "rejected", "challenge_invalid");
                 state.limiter.record_failed_attempt(&ip);
                 return resp::fail(101, e);
             }
         };
+        let user = verified.account;
+        let device = verified.device;
+        let method = challenge_method(verified.federated, verified.kind);
+        audit.subject(user.id);
         if !user.is_enabled() {
+            audit.decision(method, "rejected", "account_disabled");
             return resp::fail(101, state.tr(&lang, "UserDisabled"));
         }
+        let proof = if verified.kind == VerificationKind::Email {
+            match console_login_proof(&state, &user).await {
+                Ok(proof) => proof,
+                Err(message) => {
+                    audit.decision(method, "error", "policy_unavailable");
+                    return resp::fail(101, message);
+                }
+            }
+        } else {
+            LoginProof::Totp
+        };
         let ut = match services::user::login(
             &state.db,
             &state.jwt,
             &state.config,
             &user,
             services::user::LoginEvent {
+                proof,
                 client: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
                 device_id: device.id,
                 uuid: device.uuid,
                 ip: ip.clone(),
-                login_type: entity::login_log::TYPE_ACCOUNT.to_string(),
+                login_type: if verified.federated {
+                    entity::login_log::TYPE_OAUTH
+                } else {
+                    entity::login_log::TYPE_ACCOUNT
+                }
+                .to_owned(),
                 platform: device.os,
             },
         )
         .await
         {
             Ok(ut) => ut,
-            Err(e) => {
-                return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e))
+            Err(_) => {
+                audit.decision(method, "error", "session_issue_failed");
+                return resp::fail(101, state.tr(&lang, "OperationFailed"));
             }
         };
         state.limiter.remove_attempts(&ip);
-        return resp::success(AdminLoginPayload::from_user(&user, ut.token));
+        return console_session_response(&audit, method, &user, ut);
     }
-    if f.username.len() < 2 || f.password.len() < 4 {
+    if !(2..=256).contains(&f.username.len()) || f.password.len() < 4 {
+        audit.decision("password", "rejected", "invalid_input");
         state.limiter.record_failed_attempt(&ip);
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
@@ -123,7 +159,12 @@ pub async fn login(
             || f.captcha.is_empty()
             || !state.limiter.verify_captcha(&f.captcha_id, &f.captcha))
     {
+        audit.decision("password", "rejected", "captcha_required_or_invalid");
         return resp::fail(101, state.tr(&lang, "CaptchaError"));
+    }
+    if !state.limiter.reserve_password_attempt(&ip, &f.username) {
+        audit.decision("password", "rejected", "rate_limited");
+        return resp::fail(101, state.tr(&lang, "LoginBanned"));
     }
 
     let user = match services::user::info_by_username_password(
@@ -135,14 +176,21 @@ pub async fn login(
     .await
     {
         Ok(Some(u)) => u,
-        _ => {
+        Ok(None) => {
+            audit.decision("password", "rejected", "invalid_credentials");
             state.limiter.record_failed_attempt(&ip);
             let (_b, nc) = state.limiter.check_security_status(&ip);
             let code = if nc { 110 } else { 101 };
             return resp::fail(code, state.tr(&lang, "UsernameOrPasswordError"));
         }
+        Err(_) => {
+            audit.decision("password", "error", "credential_store_unavailable");
+            return resp::fail(101, state.tr(&lang, "OperationFailed"));
+        }
     };
+    audit.subject(user.id);
     if !user.is_enabled() {
+        audit.decision("password", "rejected", "account_disabled");
         let code = if need_captcha { 110 } else { 101 };
         return resp::fail(code, state.tr(&lang, "UserDisabled"));
     }
@@ -163,27 +211,34 @@ pub async fn login(
             .await
             {
                 Ok(challenge) => challenge,
-                Err(e) => return resp::fail(101, e),
-            };
-            return resp::success(json!({
-                "type": "email_check",
-                "tfa_type": challenge.kind.response_tfa_type(),
-                "secret": challenge.secret,
-                "user": {
-                    "username": user.username,
-                    "email": user.email,
+                Err(e) => {
+                    audit.decision("password", "rejected", "challenge_unavailable");
+                    return resp::fail(101, e);
                 }
-            }));
+            };
+            audit.decision("password", "pending", "challenge_issued");
+            return console_challenge_response(&user, challenge);
         }
         Ok(None) => {}
-        Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        Err(_) => {
+            audit.decision("password", "error", "policy_unavailable");
+            return resp::fail(101, state.tr(&lang, "OperationFailed"));
+        }
     }
+    let proof = match console_login_proof(&state, &user).await {
+        Ok(proof) => proof,
+        Err(message) => {
+            audit.decision("password", "error", "policy_unavailable");
+            return resp::fail(101, message);
+        }
+    };
     let ut = match services::user::login(
         &state.db,
         &state.jwt,
         &state.config,
         &user,
         services::user::LoginEvent {
+            proof,
             client: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
             device_id: String::new(),
             uuid: String::new(),
@@ -195,10 +250,70 @@ pub async fn login(
     .await
     {
         Ok(ut) => ut,
-        Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        Err(_) => {
+            audit.decision("password", "error", "session_issue_failed");
+            return resp::fail(101, state.tr(&lang, "OperationFailed"));
+        }
     };
     state.limiter.remove_attempts(&ip);
-    resp::success(AdminLoginPayload::from_user(&user, ut.token))
+    console_session_response(&audit, "password", &user, ut)
+}
+
+pub(super) fn challenge_method(federated: bool, kind: VerificationKind) -> &'static str {
+    match (federated, kind) {
+        (false, VerificationKind::Totp) => "password_totp",
+        (false, VerificationKind::Email) => "password_email",
+        (true, VerificationKind::Totp) => "federated_totp",
+        (true, VerificationKind::Email) => "federated_email",
+    }
+}
+
+pub(super) async fn console_login_proof(
+    state: &AppState,
+    user: &user::Model,
+) -> Result<LoginProof, &'static str> {
+    match services::user::requires_totp(&state.db, user).await {
+        Ok(true) if !user.tfa_enabled => Ok(LoginProof::Enrollment),
+        Ok(false) => Ok(LoginProof::SingleFactor),
+        Ok(true) => Err("TOTP verification required"),
+        Err(_) => Err("Login policy unavailable"),
+    }
+}
+
+pub(super) fn console_challenge_response(
+    user: &user::Model,
+    challenge: services::login_security::LoginChallenge,
+) -> Response {
+    resp::no_store(resp::success(json!({
+        "type": "email_check",
+        "tfa_type": challenge.kind.response_tfa_type(),
+        "secret": challenge.secret,
+        "user": { "username": user.username, "email": user.email },
+    })))
+}
+
+pub(super) fn console_session_response(
+    audit: &AuditContext,
+    method: &'static str,
+    user: &user::Model,
+    session: entity::user_token::Model,
+) -> Response {
+    let enrollment_only = session.auth_level == AUTH_ENROLLMENT;
+    audit.principal(user.id, session.id);
+    audit.decision(
+        method,
+        "accepted",
+        if enrollment_only {
+            "enrollment_session_issued"
+        } else {
+            "session_issued"
+        },
+    );
+    resp::no_store(resp::success(AdminLoginPayload::from_user(
+        user,
+        session.token,
+        enrollment_only,
+    )))
 }
 
 pub async fn captcha(
@@ -289,6 +404,7 @@ pub async fn password_reset_confirm(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
+    audit: AuditContext,
     Json(f): Json<PasswordResetConfirmForm>,
 ) -> Response {
     if state.limiter.check_security_status(&ip).0 {
@@ -309,8 +425,13 @@ pub async fn password_reset_confirm(
     )
     .await
     {
-        Ok(_) => resp::success(Value::Null),
+        Ok(user_id) => {
+            audit.subject(user_id);
+            audit.decision("password_reset", "accepted", "password_reset_completed");
+            resp::success(Value::Null)
+        }
         Err(e) => {
+            audit.decision("password_reset", "rejected", "reset_denied");
             state.limiter.record_failed_attempt(&ip);
             resp::fail(101, e)
         }
@@ -344,6 +465,7 @@ pub async fn setup_initialize(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
+    audit: AuditContext,
     Json(f): Json<SetupInitializeForm>,
 ) -> Response {
     if services::user::has_admin(&state.db).await.unwrap_or(true) {
@@ -386,6 +508,7 @@ pub async fn setup_initialize(
         &state.config,
         &user,
         services::user::LoginEvent {
+            proof: LoginProof::Enrollment,
             client: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
             device_id: String::new(),
             uuid: String::new(),
@@ -399,7 +522,7 @@ pub async fn setup_initialize(
         Ok(ut) => ut,
         Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     };
-    resp::success(AdminLoginPayload::from_user(&user, ut.token))
+    console_session_response(&audit, "setup", &user, ut)
 }
 
 // ---------- config ----------
@@ -1060,8 +1183,10 @@ pub async fn user_update(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     _user: AdminUser,
+    audit: AuditContext,
     Json(f): Json<UserForm>,
 ) -> Response {
+    audit.subject(f.id);
     if f.id == 0 {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
@@ -1075,8 +1200,10 @@ pub async fn user_delete(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     _user: AdminUser,
+    audit: AuditContext,
     Json(f): Json<IdForm>,
 ) -> Response {
+    audit.subject(f.id);
     if f.id <= 0 {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
@@ -1101,8 +1228,10 @@ pub async fn user_change_pwd(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     _user: AdminUser,
+    audit: AuditContext,
     Json(f): Json<UserPasswordForm>,
 ) -> Response {
+    audit.subject(f.id);
     if f.password.len() < 4 {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
@@ -1116,7 +1245,11 @@ pub async fn user_change_pwd(
 }
 
 pub async fn user_current(State(_state): State<AppState>, user: BackendUser) -> Response {
-    resp::success(AdminLoginPayload::from_user(&user.user, user.token))
+    resp::no_store(resp::success(AdminLoginPayload::from_user(
+        &user.user,
+        user.token,
+        user.user_token.auth_level == AUTH_ENROLLMENT,
+    )))
 }
 
 #[derive(Deserialize, Default)]
@@ -1168,13 +1301,14 @@ pub async fn my_security(
     resp::success(json!({
         "tfa_enabled": user.user.tfa_enabled,
         "tfa_enforced": user.user.tfa_enforced,
+        "tfa_enforced_for_account": user.user.is_admin() || user.user.tfa_enforced || settings.require_totp,
         "email_verification_enabled": user.user.email_verification_enabled,
         "login_device_verification_enabled": user.user.login_device_verification_enabled,
         "system_require_totp": settings.require_totp,
         "system_require_email_verification": settings.require_email_verification,
         "system_require_device_verification": settings.require_device_verification,
         "system_allow_trusted_login_devices": settings.allow_trusted_login_devices,
-        "effective_tfa_required": user.user.tfa_enabled && (user.user.tfa_enforced || settings.require_totp),
+        "effective_tfa_required": services::login_security::totp_required(&user.user, &settings),
         "effective_email_verification_enabled": settings.require_email_verification || user.user.email_verification_enabled,
         "effective_login_device_verification_enabled": settings.require_device_verification || user.user.login_device_verification_enabled,
         "trusted_device_count": trusted_devices.len(),
@@ -1183,10 +1317,13 @@ pub async fn my_security(
 
 pub async fn my_tfa_setup(State(_state): State<AppState>, user: BackendUser) -> Response {
     let secret = services::login_security::generate_totp_secret();
-    resp::success(json!({
+    if user.user.tfa_enabled {
+        return resp::fail(101, "TOTP is already configured");
+    }
+    resp::no_store(resp::success(json!({
         "secret": secret,
         "uri": services::login_security::totp_uri(&user.user.username, &secret),
-    }))
+    })))
 }
 
 #[derive(Deserialize, Default)]
@@ -1201,8 +1338,10 @@ pub async fn my_tfa_enable(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     user: BackendUser,
+    audit: AuditContext,
     Json(f): Json<TfaCodeForm>,
 ) -> Response {
+    audit.subject(user.user.id);
     if f.secret.trim().is_empty() || f.code.trim().is_empty() {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
@@ -1222,8 +1361,10 @@ pub async fn my_tfa_enable(
 pub async fn my_tfa_disable(
     State(state): State<AppState>,
     user: BackendUser,
+    audit: AuditContext,
     Json(f): Json<TfaCodeForm>,
 ) -> Response {
+    audit.subject(user.user.id);
     match services::login_security::disable_user_totp(&state.db, &user.user, Some(&f.code)).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, e),
@@ -1278,8 +1419,10 @@ pub async fn user_security_update(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     _user: AdminUser,
+    audit: AuditContext,
     Json(f): Json<UserSecurityForm>,
 ) -> Response {
+    audit.subject(f.id);
     let target = match services::user::info_by_id(&state.db, f.id).await {
         Ok(Some(user)) => user,
         _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
@@ -1302,8 +1445,10 @@ pub async fn user_tfa_reset(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     _user: AdminUser,
+    audit: AuditContext,
     Json(f): Json<IdForm>,
 ) -> Response {
+    audit.subject(f.id);
     let target = match services::user::info_by_id(&state.db, f.id).await {
         Ok(Some(user)) => user,
         _ => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
@@ -2947,6 +3092,7 @@ pub async fn user_token_delete(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     user: BackendUser,
+    audit: AuditContext,
     Json(f): Json<IdForm>,
 ) -> Response {
     let t = services::user::token_info_by_id(&state.db, f.id)
@@ -2959,6 +3105,7 @@ pub async fn user_token_delete(
     if !user.user.is_admin() && t.user_id != user.user.id {
         return resp::fail(101, state.tr(&lang, "NoAccess"));
     }
+    audit.subject(t.user_id);
     match services::user::delete_token(&state.db, f.id).await {
         Ok(_) => resp::success(Value::Null),
         Err(e) => resp::fail(101, e.to_string()),
@@ -4151,6 +4298,7 @@ pub async fn user_register(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
+    audit: AuditContext,
     Json(f): Json<RegisterForm>,
 ) -> Response {
     if !services::login_security::registration_enabled(&state.db, state.config.app.register)
@@ -4173,12 +4321,17 @@ pub async fn user_register(
     if status == user::STATUS_DISABLED {
         return resp::fail(101, state.tr(&lang, "RegisterSuccessWaitAdminConfirm"));
     }
+    let proof = match console_login_proof(&state, &u).await {
+        Ok(proof) => proof,
+        Err(message) => return resp::fail(101, message),
+    };
     let ut = match services::user::login(
         &state.db,
         &state.jwt,
         &state.config,
         &u,
         services::user::LoginEvent {
+            proof,
             client: entity::login_log::CLIENT_WEB_ADMIN.to_string(),
             device_id: String::new(),
             uuid: String::new(),
@@ -4192,7 +4345,7 @@ pub async fn user_register(
         Ok(ut) => ut,
         Err(e) => return resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
     };
-    resp::success(AdminLoginPayload::from_user(&u, ut.token))
+    console_session_response(&audit, "registration", &u, ut)
 }
 
 #[cfg(test)]

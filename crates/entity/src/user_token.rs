@@ -13,9 +13,14 @@ pub struct Model {
     #[sea_orm(default_value = "")]
     pub device_id: String,
     #[sea_orm(default_value = "")]
+    #[serde(skip_serializing)]
     pub token: String,
     #[sea_orm(default_value = 0)]
     pub expired_at: i64,
+    #[sea_orm(default_value = 0)]
+    pub auth_level: i32,
+    #[sea_orm(default_value = true)]
+    pub renewable: bool,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

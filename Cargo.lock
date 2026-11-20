@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "entity"
-version = "0.2.44"
+version = "0.2.45"
 dependencies = [
  "chrono",
  "sea-orm",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-client-config"
-version = "0.2.44"
+version = "0.2.45"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -2654,7 +2654,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-console"
-version = "0.2.44"
+version = "0.2.45"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2703,7 +2703,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-server-control"
-version = "0.2.44"
+version = "0.2.45"
 dependencies = [
  "serde",
  "tokio",
@@ -2711,7 +2711,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-uri"
-version = "0.2.44"
+version = "0.2.45"
 dependencies = [
  "urlencoding",
 ]
@@ -3867,6 +3867,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3876,12 +3886,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]

@@ -18,6 +18,7 @@ const ONLINE_WINDOW_SECONDS: i64 = 90;
 struct HealthResponse {
     status: &'static str,
     version: String,
+    revision: &'static str,
     start_time: String,
     uptime_seconds: i64,
     database: ComponentHealth,
@@ -56,6 +57,7 @@ pub async fn health(State(state): State<AppState>) -> Response {
         Json(HealthResponse {
             status,
             version: state.version.as_str().to_owned(),
+            revision: option_env!("RUSTDESK_CONSOLE_BUILD_REVISION").unwrap_or("unknown"),
             start_time: state.start_time.as_str().to_owned(),
             uptime_seconds: uptime_seconds(state.start_time.as_str()),
             database: ComponentHealth {

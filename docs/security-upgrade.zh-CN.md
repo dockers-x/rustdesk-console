@@ -51,3 +51,19 @@ security:
 WebClient 共享链接在每次取回凭据时复查创建者和目标设备是否启用、设备是否仍归其管理。已经获取的远控密码无法通过撤销链接收回，应在被控端更换密码。强制登录模式不会为匿名共享链接绕过设备连接授权。
 
 当前原版客户端控制端的 `send_note` 仅发送设备 ID、session_id 和备注，不带 UUID 或账号凭据。此路径即使开启兼容上报也会被拒绝；不能宣称所有原版审计备注都已恢复。已登录且有设备权限的客户端可使用原有 `/api/audit` 备注接口。
+
+## Console v0.2.45 认证和审计
+
+- 管理员始终需要 TOTP。升级后原有管理员会话需要重新登录。未绑定的管理员须从 Console 登录并在 10 分钟内完成绑定，随后重新登录。修改密码、启用或重置 TOTP 后，既有会话和认证挑战同时撤销。
+- 启用全局 TOTP 后，未绑定的普通账号也须在 Console 完成绑定。管理端 OIDC 支持本地补验。stock RustDesk 的 OIDC 轮询只处理 access token，涉及本地二次验证时，请使用密码登录，或在启用 Web SSO 的部署中从已完成二次验证的 Console 会话授权。Web SSO 审批依赖对应会话仍然有效。
+- 管理会话有效期上限为签发后 12 小时，Web SSO 派生会话沿用授权会话的有效期上限。会话管理接口只返回会话元数据。登录接口保持原有客户端响应协议。
+- 密码登录在两个入口共享单进程限流，每个 60 秒固定窗口最多接受同一账号 10 次、同一来源 60 次密码校验。多副本部署在受控入口额外实施跨实例限流。普通设备的兼容上报继续使用现有策略。
+- 安全事件使用 stdout 上的 JSON，目标为 `security_audit`，适合使用容器日志驱动或日志代理归集。用 `request_id` 关联反代记录，用 `session_id` 关联签发与后续请求。认证结果以 `outcome` 和 `reason` 为准，管理端 HTTP 200 仍可能携带业务拒绝。将日志归集到 Console 管理权限之外，并按部署需要配置保留期。
+- 反代日志记录上游响应的 `X-Request-Id`。Nginx 可使用 `$upstream_http_x_request_id` 配合 `$uri`。公网入口应覆盖来自不可信请求的转发头，Console 的 `gin.trust-proxy` 只包含实际代理地址。反代和 Console 同在 Docker 网络时取消宿主机端口发布。需要内网直连时将样例中的 `RUSTDESK_CONSOLE_BIND_IP` 指向受控的内网地址。
+- 按镜像 digest 固定部署，保留镜像标签 `org.opencontainers.image.revision`。Console 启动审计包含源码 revision，加载外部 WebClient v2 时还会记录 `data/web.zip` 的 SHA-256。安装外部 ZIP 前从信任的渠道取得并核对归档，在 Console 停止时替换。在维护窗口完成首次管理账号初始化及 TOTP 绑定。
+
+如果唯一管理员丢失验证器，持有 Console 数据库访问权的主机管理员可执行
+`rustdesk-console -c ./conf/config.yaml reset-totp <用户 ID>` 来撤销原会话并开始重新绑定。
+请在受控入口完成恢复，保留本地 CLI 输出的安全事件。
+
+开发者 API 密钥有独立的 scope、到期和撤销策略。处置账号失陷时，在检查和撤销交互会话之外，也要检查该账号签发的密钥。

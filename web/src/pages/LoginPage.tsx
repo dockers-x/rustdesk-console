@@ -197,6 +197,19 @@ export function LoginPage() {
     navigate(changeRequired ? "/change-password" : target, { replace: true });
   };
 
+  const beginVerification = (res: LoginResult) => {
+    if (res.type !== "email_check" || !res.secret) return false;
+    setChallenge({
+      secret: res.secret,
+      tfaType: res.tfa_type || "email_check",
+      username: res.user?.username || username,
+      email: res.user?.email,
+    });
+    setVerificationCode("");
+    setMessage(t(res.tfa_type === "tfa_check" ? "totpChallengeHint" : "emailChallengeHint"));
+    return true;
+  };
+
   const queryOidc = async (code: string) => {
     setError("");
     setMessage("");
@@ -206,7 +219,7 @@ export function LoginPage() {
         code,
       });
       clearOidcCode();
-      finishLogin(res, "/");
+      if (!beginVerification(res)) finishLogin(res, "/");
     } catch (err) {
       clearOidcCode();
       const ae = err as ApiError;
@@ -302,21 +315,7 @@ export function LoginPage() {
         captchaId: captchaInfo?.id ?? "",
         platform: platformName(),
       });
-      if (res.type === "email_check" && res.secret) {
-        setChallenge({
-          secret: res.secret,
-          tfaType: res.tfa_type || "email_check",
-          username: res.user?.username || username,
-          email: res.user?.email,
-        });
-        setVerificationCode("");
-        setMessage(
-          res.tfa_type === "tfa_check"
-            ? t("totpChallengeHint")
-            : t("emailChallengeHint"),
-        );
-        return;
-      }
+      if (beginVerification(res)) return;
       finishLogin(res, "/overview");
     } catch (err) {
       const ae = err as ApiError;

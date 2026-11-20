@@ -210,6 +210,7 @@ pub async fn revoke_key(db: &DatabaseConnection, owner_id: i32, id: i32) -> Resu
 }
 
 pub struct Principal {
+    pub key_id: i32,
     pub owner: user::Model,
     scopes: Vec<String>,
 }
@@ -248,7 +249,11 @@ pub async fn authenticate(db: &DatabaseConnection, key: &str) -> Result<Option<P
     }
     let scopes = serde_json::from_str(&row.scopes)
         .map_err(|_| DbErr::Custom("Invalid API key scopes".into()))?;
-    Ok(Some(Principal { owner, scopes }))
+    Ok(Some(Principal {
+        key_id: row.id,
+        owner,
+        scopes,
+    }))
 }
 
 fn hash_key(key: &str) -> String {

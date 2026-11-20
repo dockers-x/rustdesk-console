@@ -12,6 +12,16 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 
 const MAX_CAPTCHAS: usize = 4096;
+const MAX_PASSWORD_KEYS: usize = 8192;
+const PASSWORD_SOURCE_LIMIT: u16 = 60;
+const PASSWORD_ACCOUNT_LIMIT: u16 = 10;
+const PASSWORD_WINDOW: Duration = Duration::from_secs(60);
+
+#[derive(Hash, PartialEq, Eq)]
+enum PasswordKey {
+    Source(String),
+    Account(String),
+}
 
 #[derive(Clone, Copy)]
 pub struct SecurityPolicy {
@@ -36,6 +46,9 @@ pub struct Captcha {
 
 struct Inner {
     attempts: HashMap<String, Vec<Instant>>,
+    password_counts: HashMap<PasswordKey, u16>,
+    password_window_start: Instant,
+    failure_pruned_at: Instant,
     captchas: HashMap<String, CaptchaMetaInternal>,
     banned: HashMap<String, Instant>,
 }
@@ -53,10 +66,36 @@ impl LoginLimiter {
             captcha_expiration: Duration::from_secs(5 * 60),
             inner: Mutex::new(Inner {
                 attempts: HashMap::new(),
+                password_counts: HashMap::new(),
+                password_window_start: Instant::now(),
+                failure_pruned_at: Instant::now(),
                 captchas: HashMap::new(),
                 banned: HashMap::new(),
             }),
         }
+    }
+
+    /// Reserve both budgets before any expensive password verification starts.
+    pub fn reserve_password_attempt(&self, ip: &str, username: &str) -> bool {
+        let mut inner = self.inner.lock().expect("login limiter mutex poisoned");
+        if inner.password_window_start.elapsed() >= PASSWORD_WINDOW {
+            inner.password_counts.clear();
+            inner.password_window_start = Instant::now();
+        }
+        let source = PasswordKey::Source(ip.to_owned());
+        let account = PasswordKey::Account(crate::services::user::format_username(username));
+        let source_count = inner.password_counts.get(&source).copied().unwrap_or(0);
+        let account_count = inner.password_counts.get(&account).copied().unwrap_or(0);
+        let new_keys = usize::from(source_count == 0) + usize::from(account_count == 0);
+        if source_count >= PASSWORD_SOURCE_LIMIT
+            || account_count >= PASSWORD_ACCOUNT_LIMIT
+            || inner.password_counts.len() + new_keys > MAX_PASSWORD_KEYS
+        {
+            return false;
+        }
+        inner.password_counts.insert(source, source_count + 1);
+        inner.password_counts.insert(account, account_count + 1);
+        true
     }
 
     fn is_disabled(&self) -> bool {
@@ -73,6 +112,17 @@ impl LoginLimiter {
         }
         let now = Instant::now();
         let cutoff = now.checked_sub(self.policy.attempts_window).unwrap_or(now);
+        if g.failure_pruned_at.elapsed() >= PASSWORD_WINDOW {
+            g.attempts.retain(|_, attempts| {
+                attempts.retain(|attempt| *attempt > cutoff);
+                !attempts.is_empty()
+            });
+            g.banned.retain(|_, expires| *expires > now);
+            g.failure_pruned_at = now;
+        }
+        if !g.attempts.contains_key(ip) && g.attempts.len() + g.banned.len() >= MAX_PASSWORD_KEYS {
+            return;
+        }
         let mut valid = Self::prune_attempts(&mut g, ip, cutoff);
         valid.push(now);
         g.attempts.insert(ip.to_string(), valid.clone());
@@ -196,6 +246,23 @@ impl LoginLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn password_budget_is_shared_by_normalized_account_across_sources() {
+        let limiter = LoginLimiter::new(SecurityPolicy {
+            captcha_threshold: -1,
+            ban_threshold: 0,
+            attempts_window: PASSWORD_WINDOW,
+            ban_duration: PASSWORD_WINDOW,
+        });
+        for source in 0..PASSWORD_ACCOUNT_LIMIT {
+            assert!(limiter.reserve_password_attempt(&format!("test-{source}"), "Admin"));
+        }
+        assert!(!limiter.reserve_password_attempt("another-source", " a d m i n "));
+        assert!(limiter.reserve_password_attempt("another-source", "different-account"));
+        limiter.inner.lock().unwrap().password_window_start = Instant::now() - PASSWORD_WINDOW;
+        assert!(limiter.reserve_password_attempt("another-source", "admin"));
+    }
 
     #[test]
     fn captcha_capacity_rejects_requests_until_entries_expire() {

@@ -140,14 +140,20 @@ impl FromRequestParts<AppState> for ApiAuth {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
             .unwrap_or_default();
-        developer::authenticate(&state.db, key)
+        let principal = developer::authenticate(&state.db, key)
             .await?
-            .map(Self)
             .ok_or(ApiError {
                 status: StatusCode::UNAUTHORIZED,
                 code: "unauthorized",
                 message: "A valid API key is required",
-            })
+            })?;
+        if let Some(audit) = parts
+            .extensions
+            .get::<super::security_audit::AuditContext>()
+        {
+            audit.api_key(principal.owner.id, principal.key_id);
+        }
+        Ok(Self(principal))
     }
 }
 
@@ -730,6 +736,7 @@ mod tests {
         for statement in [
             schema.create_table_from_entity(user::Entity),
             schema.create_table_from_entity(user_token::Entity),
+            schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(developer_key::Entity),
             schema.create_table_from_entity(peer::Entity),
             schema.create_table_from_entity(address_book::Entity),
@@ -744,6 +751,7 @@ mod tests {
             id: Set(1),
             username: Set("admin".into()),
             is_admin: Set(Some(true)),
+            tfa_enabled: Set(true),
             status: Set(1),
             ..Default::default()
         }
@@ -765,6 +773,12 @@ mod tests {
                 user_id: Set(id),
                 token: Set(format!("session-{id}")),
                 expired_at: Set(chrono::Utc::now().timestamp() + 3600),
+                created_at: Set(crate::services::now()),
+                auth_level: Set(if id == 1 {
+                    crate::services::user::AUTH_TOTP
+                } else {
+                    0
+                }),
                 ..Default::default()
             }
             .insert(&db)

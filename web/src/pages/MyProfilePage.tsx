@@ -77,6 +77,7 @@ interface MessageLatest {
 interface SecurityStatus {
   tfa_enabled: boolean;
   tfa_enforced: boolean;
+  tfa_enforced_for_account?: boolean;
   email_verification_enabled: boolean;
   login_device_verification_enabled: boolean;
   system_require_totp?: boolean;
@@ -253,10 +254,9 @@ export function MyProfilePage() {
     onSuccess: () => {
       setTfaSetup(null);
       setTfaCode("");
-      setSecurityMessage(t("totpEnabled"));
-      setSecurityError("");
-      void qc.invalidateQueries({ queryKey: ["my-security"] });
-      void qc.invalidateQueries({ queryKey: ["current-user"] });
+      clearToken();
+      qc.clear();
+      navigate("/login", { replace: true, state: { message: t("totpEnabledLoginAgain") } });
     },
     onError: (err) => {
       const ae = err as ApiError;
@@ -270,10 +270,9 @@ export function MyProfilePage() {
       }),
     onSuccess: () => {
       setTfaDisableCode("");
-      setSecurityMessage(t("totpDisabled"));
-      setSecurityError("");
-      void qc.invalidateQueries({ queryKey: ["my-security"] });
-      void qc.invalidateQueries({ queryKey: ["current-user"] });
+      clearToken();
+      qc.clear();
+      navigate("/login", { replace: true, state: { message: t("totpDisabled") } });
     },
     onError: (err) => {
       const ae = err as ApiError;
@@ -389,7 +388,7 @@ export function MyProfilePage() {
       ? t("enabled")
       : t("disabled");
   const totpVerificationLabel = securityData?.tfa_enabled
-    ? securityData.system_require_totp || securityData.tfa_enforced
+    ? securityData.effective_tfa_required
       ? t("enforced")
       : t("enabled")
     : t("disabled");
@@ -696,7 +695,7 @@ export function MyProfilePage() {
 
                   {security.data.tfa_enabled && (
                     <div className="mt-4 space-y-3">
-                      {security.data.tfa_enforced && (
+                      {security.data.tfa_enforced_for_account && (
                         <p className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm leading-6 text-kumo-subtle">
                           {t("totpEnforcedSelfHint")}
                         </p>
@@ -710,7 +709,7 @@ export function MyProfilePage() {
                           value={tfaDisableCode}
                           inputMode="numeric"
                           autoComplete="one-time-code"
-                          disabled={security.data.tfa_enforced}
+                          disabled={security.data.tfa_enforced_for_account}
                           onChange={(e) => {
                             setTfaDisableCode(e.target.value);
                             setSecurityError("");
@@ -722,7 +721,7 @@ export function MyProfilePage() {
                         variant="secondary-destructive"
                         loading={disableTfa.isPending}
                         disabled={
-                          security.data.tfa_enforced || !tfaDisableCode.trim()
+                          security.data.tfa_enforced_for_account || !tfaDisableCode.trim()
                         }
                         onClick={() => disableTfa.mutate()}
                       >

@@ -6,7 +6,6 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
-use tower_http::trace::TraceLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::http::{admin, api, file, my, oauth, observability, pro_api, static_files, switch_grant};
@@ -211,7 +210,10 @@ pub fn build(state: AppState) -> Router {
     );
 
     app.layer(cors)
-        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::security_audit::trace,
+        ))
         .with_state(state)
 }
 

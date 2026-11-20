@@ -11,9 +11,11 @@ use serde_json::json;
 
 use crate::http::api::request_public_base;
 use crate::http::middleware::{AcceptLang, BackendUser, ClientIp};
-use crate::http::payloads::{AdminLoginPayload, LoginRes, UserPayload};
 use crate::http::response as resp;
+use crate::http::security_audit::AuditContext;
 use crate::services;
+use crate::services::login_security::{DeviceLoginInfo, LoginChallenge};
+use crate::services::user::LoginProof;
 use crate::state::AppState;
 use crate::support::oauth_cache::{OauthCacheItem, ACTION_BIND, ACTION_LOGIN};
 
@@ -41,8 +43,8 @@ pub struct OidcAuthRequest {
 
 async fn begin(state: &AppState, f: &OidcAuthRequest, device_type: &str) -> Response {
     match begin_value(state, f, device_type).await {
-        Ok(v) => Json(v).into_response(),
-        Err(r) => r,
+        Ok(v) => resp::no_store(Json(v).into_response()),
+        Err(message) => resp::error(message),
     }
 }
 
@@ -50,16 +52,16 @@ async fn begin_value(
     state: &AppState,
     f: &OidcAuthRequest,
     device_type: &str,
-) -> Result<serde_json::Value, Response> {
+) -> Result<serde_json::Value, String> {
     let (st, verifier, nonce, url) =
-        match services::oauth::begin_auth(&state.config, &state.db, &f.op).await {
-            Ok(v) => v,
-            Err(e) => return Err(resp::error(e)),
-        };
+        services::oauth::begin_auth(&state.config, &state.db, &f.op).await?;
+    let poll_secret = crate::support::random::random_string(40);
+    let code = format!("{st}.{poll_secret}");
     state.oauth_cache.set(
         &st,
         OauthCacheItem {
             action: ACTION_LOGIN.into(),
+            poll_secret,
             id: f.id.clone(),
             op: f.op.clone(),
             uuid: f.uuid.clone(),
@@ -72,7 +74,7 @@ async fn begin_value(
         },
         5 * 60,
     );
-    Ok(json!({ "code": st, "url": url }))
+    Ok(json!({ "code": code, "url": url }))
 }
 
 // ---------- client ----------
@@ -87,55 +89,145 @@ pub struct OidcAuthQuery {
     pub code: String,
 }
 
-/// Poll for completion: once the callback set `user_id`, log the device in.
-/// Returns Ok((user, token)) or Err(response) (error / still-waiting).
+#[derive(Clone, Copy, Debug)]
+enum OidcClient {
+    Console,
+    Native,
+}
+
+enum OidcLogin {
+    Session(entity::user::Model, entity::user_token::Model, &'static str),
+    Challenge(entity::user::Model, LoginChallenge),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PollError {
+    Expired,
+    Invalid,
+    Pending,
+    Failed,
+    NativeMfa,
+    ConsolePolicy(&'static str),
+}
+
+impl PollError {
+    fn response(self, state: &AppState, lang: &str) -> Response {
+        match self {
+            Self::Expired => resp::error(state.tr(lang, "OauthExpired")),
+            Self::Invalid => resp::error(state.tr(lang, "ParamsError")),
+            Self::Pending => Json(json!({
+                "message": "Authorization in progress, please login and bind",
+                "error": "No authed oidc is found"
+            }))
+            .into_response(),
+            Self::Failed => resp::error(state.tr(lang, "LoginFailed")),
+            Self::NativeMfa => {
+                resp::error("Use password sign-in or approve sign-in through the console")
+            }
+            Self::ConsolePolicy(message) => resp::fail(101, message),
+        }
+    }
+}
+
+/// Redeem an approved attempt once, then satisfy local authentication policy.
 async fn auth_query_pre(
     state: &AppState,
-    lang: &str,
     ip: &str,
     code: &str,
-) -> Result<(entity::user::Model, entity::user_token::Model), Response> {
-    let Some(v) = state.oauth_cache.get(code) else {
-        return Err(resp::error(state.tr(lang, "OauthExpired")));
+    client: OidcClient,
+    audit: &AuditContext,
+) -> Result<OidcLogin, PollError> {
+    let Some(pending) = state.oauth_cache.get_poll(code) else {
+        audit.decision("federated", "rejected", "attempt_expired");
+        return Err(PollError::Expired);
     };
-    if v.action != ACTION_LOGIN {
-        return Err(resp::error(state.tr(lang, "ParamsError")));
+    let console = matches!(client, OidcClient::Console);
+    if pending.action != ACTION_LOGIN
+        || (pending.device_type == entity::login_log::CLIENT_WEB_ADMIN) != console
+    {
+        audit.decision("federated", "rejected", "invalid_attempt");
+        return Err(PollError::Invalid);
     }
-    if v.user_id == 0 {
-        return Err(Json(json!({
-            "message": "Authorization in progress, please login and bind",
-            "error": "No authed oidc is found"
-        }))
-        .into_response());
+    if pending.user_id == 0 {
+        audit.decision("federated", "pending", "awaiting_provider");
+        return Err(PollError::Pending);
     }
-    let Some(u) = services::user::info_by_id(&state.db, v.user_id)
+    let Some(v) = state.oauth_cache.take_ready_login(code, console) else {
+        audit.decision("federated", "rejected", "attempt_expired");
+        return Err(PollError::Expired);
+    };
+    let Some(account) = services::user::info_by_id(&state.db, v.user_id)
         .await
-        .ok()
-        .flatten()
+        .map_err(|_| PollError::Failed)?
+        .filter(entity::user::Model::is_enabled)
     else {
-        return Err(resp::error(state.tr(lang, "UserNotFound")));
+        audit.decision("federated", "rejected", "account_unavailable");
+        return Err(PollError::Failed);
     };
-    if !u.is_enabled() {
-        return Err(resp::error(state.tr(lang, "UserDisabled")));
-    }
-    state.oauth_cache.delete(code);
-    let ut = services::user::login(
+    audit.subject(account.id);
+    let device = DeviceLoginInfo {
+        id: v.id,
+        uuid: v.uuid,
+        name: v.device_name,
+        os: v.device_os,
+        client_type: v.device_type,
+        ip: ip.to_owned(),
+        auto_login: false,
+    };
+    let webauth = v.op == entity::oauth::TYPE_WEBAUTH;
+    let proof = if webauth {
+        let Some(session_id) = v.source_session_id.filter(|_| state.config.app.web_sso) else {
+            audit.decision("webauth", "rejected", "approval_unavailable");
+            return Err(PollError::Failed);
+        };
+        LoginProof::WebSso { session_id }
+    } else {
+        let kind = services::login_security::required_verification(&state.db, &account, &device)
+            .await
+            .map_err(|_| PollError::Failed)?;
+        if let Some(kind) = kind {
+            if !console {
+                audit.decision("federated", "rejected", "native_challenge_unsupported");
+                return Err(PollError::NativeMfa);
+            }
+            let challenge = services::login_security::create_federated_challenge(
+                &state.db, &account, &device, kind,
+            )
+            .await
+            .map_err(|_| PollError::Failed)?;
+            audit.decision("federated", "pending", "challenge_issued");
+            return Ok(OidcLogin::Challenge(account, challenge));
+        }
+        if console {
+            super::admin::console_login_proof(state, &account)
+                .await
+                .map_err(PollError::ConsolePolicy)?
+        } else {
+            LoginProof::SingleFactor
+        }
+    };
+    let method = if webauth { "webauth" } else { "federated" };
+    let session = services::user::login(
         &state.db,
         &state.jwt,
         &state.config,
-        &u,
+        &account,
         services::user::LoginEvent {
-            client: v.device_type.clone(),
-            device_id: v.id.clone(),
-            uuid: v.uuid.clone(),
-            ip: ip.to_string(),
-            login_type: entity::login_log::TYPE_OAUTH.to_string(),
-            platform: v.device_os.clone(),
+            proof,
+            client: device.client_type,
+            device_id: device.id,
+            uuid: device.uuid,
+            ip: device.ip,
+            login_type: entity::login_log::TYPE_OAUTH.to_owned(),
+            platform: device.os,
         },
     )
     .await
-    .map_err(|_| resp::error(state.tr(lang, "LoginFailed")))?;
-    Ok((u, ut))
+    .map_err(|_| {
+        audit.decision(method, "rejected", "session_issue_denied");
+        PollError::Failed
+    })?;
+    Ok(OidcLogin::Session(account, session, method))
 }
 
 pub async fn oidc_auth_query(
@@ -143,19 +235,16 @@ pub async fn oidc_auth_query(
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
+    audit: AuditContext,
     Query(q): Query<OidcAuthQuery>,
 ) -> Response {
     let avatar_base_url = request_public_base(&headers, &state);
-    match auth_query_pre(&state, &lang, &ip, &q.code).await {
-        Ok((u, ut)) => Json(LoginRes {
-            r#type: "access_token".into(),
-            access_token: ut.token,
-            user: UserPayload::from_user_with_avatar_base(&u, &avatar_base_url),
-            secret: String::new(),
-            tfa_type: String::new(),
-        })
-        .into_response(),
-        Err(r) => r,
+    match auth_query_pre(&state, &ip, &q.code, OidcClient::Native, &audit).await {
+        Ok(OidcLogin::Session(u, ut, method)) => {
+            super::api::client_session_response(&audit, method, &u, ut, &avatar_base_url)
+        }
+        Ok(OidcLogin::Challenge(_, _)) => resp::error(state.tr(&lang, "LoginFailed")),
+        Err(error) => error.response(&state, &lang),
     }
 }
 
@@ -180,8 +269,10 @@ fn render_template(state: &AppState, name: &str, message: &str, sub: &str) -> Re
 
 pub async fn oauth_callback(
     State(state): State<AppState>,
+    audit: AuditContext,
     Query(q): Query<CallbackQuery>,
 ) -> Response {
+    audit.decision("federated", "rejected", "callback_denied");
     if q.state.is_empty() {
         return render_template(&state, "oauth_fail.html", "ParamIsEmpty", "state");
     }
@@ -204,38 +295,26 @@ pub async fn oauth_callback(
     let openid = oauth_user.open_id.clone();
 
     if cache.action == ACTION_BIND {
-        if let Ok(Some(ut)) = services::oauth::user_third_info(&state.db, &cache.op, &openid).await
-        {
-            if ut.user_id > 0 {
-                return render_template(&state, "oauth_fail.html", "OauthHasBindOtherUser", "");
-            }
-        }
-        if services::user::info_by_id(&state.db, cache.user_id)
-            .await
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            return render_template(&state, "oauth_fail.html", "ItemNotFound", "");
-        }
-        let oauth_type = services::oauth::info_by_op(&state.db, &cache.op)
-            .await
-            .ok()
-            .flatten()
-            .map(|o| o.oauth_type)
-            .unwrap_or_else(|| cache.op.clone());
-        if services::oauth::bind_user(
+        let Some(binding) = state.oauth_cache.take_binding(&q.state) else {
+            return render_template(&state, "oauth_fail.html", "OauthExpired", "");
+        };
+        let Some(session_id) = binding.source_session_id else {
+            return render_template(&state, "oauth_fail.html", "BindFail", "");
+        };
+        if services::oauth::bind_user_with_session(
             &state.db,
-            cache.user_id,
+            binding.user_id,
+            session_id,
             &oauth_user,
-            &oauth_type,
-            &cache.op,
+            &binding.op,
         )
         .await
         .is_err()
         {
             return render_template(&state, "oauth_fail.html", "BindFail", "");
         }
+        audit.subject(cache.user_id);
+        audit.decision("federated", "accepted", "provider_bound");
         return render_template(&state, "oauth_success.html", "BindSuccess", "");
     }
 
@@ -267,7 +346,10 @@ pub async fn oauth_callback(
                     cache.username = oauth_user.username.clone();
                     cache.name = oauth_user.name.clone();
                     cache.email = oauth_user.email.clone();
-                    state.oauth_cache.set(&q.state, cache.clone(), 5 * 60);
+                    if !state.oauth_cache.update_login_callback(&q.state, cache) {
+                        return render_template(&state, "oauth_fail.html", "OauthExpired", "");
+                    }
+                    audit.decision("federated", "pending", "binding_required");
                     return Redirect::to(&format!("/_admin/#/oauth/bind/{}", q.state))
                         .into_response();
                 }
@@ -290,8 +372,13 @@ pub async fn oauth_callback(
             }
         };
         cache.user_id = user.id;
-        state.oauth_cache.set(&q.state, cache.clone(), 5 * 60);
-        if cache.device_type == entity::login_log::CLIENT_WEB_ADMIN {
+        let console = cache.device_type == entity::login_log::CLIENT_WEB_ADMIN;
+        if !state.oauth_cache.update_login_callback(&q.state, cache) {
+            return render_template(&state, "oauth_fail.html", "OauthExpired", "");
+        }
+        audit.subject(user.id);
+        audit.decision("federated", "pending", "provider_identity_verified");
+        if console {
             return Redirect::to("/_admin/#/").into_response();
         }
         return render_template(&state, "oauth_success.html", "OauthSuccess", "");
@@ -334,8 +421,8 @@ pub async fn admin_oidc_auth(
     Json(f): Json<OidcAuthRequest>,
 ) -> Response {
     match begin_value(&state, &f, entity::login_log::CLIENT_WEB_ADMIN).await {
-        Ok(v) => resp::success(v),
-        Err(r) => r,
+        Ok(v) => resp::no_store(resp::success(v)),
+        Err(message) => resp::error(message),
     }
 }
 
@@ -343,11 +430,17 @@ pub async fn admin_oidc_auth_query(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
+    audit: AuditContext,
     Query(q): Query<OidcAuthQuery>,
 ) -> Response {
-    match auth_query_pre(&state, &lang, &ip, &q.code).await {
-        Ok((u, ut)) => resp::success(AdminLoginPayload::from_user(&u, ut.token)),
-        Err(r) => r,
+    match auth_query_pre(&state, &ip, &q.code, OidcClient::Console, &audit).await {
+        Ok(OidcLogin::Session(u, ut, method)) => {
+            super::admin::console_session_response(&audit, method, &u, ut)
+        }
+        Ok(OidcLogin::Challenge(u, challenge)) => {
+            super::admin::console_challenge_response(&u, challenge)
+        }
+        Err(error) => error.response(&state, &lang),
     }
 }
 
@@ -364,18 +457,14 @@ pub async fn admin_confirm(
     user: BackendUser,
     Json(f): Json<CodeForm>,
 ) -> Response {
-    if f.code.is_empty() {
-        return resp::fail(101, state.tr(&lang, "ParamsError"));
-    }
-    let Some(mut v) = state.oauth_cache.get(&f.code) else {
+    if !state.config.app.web_sso
+        || !state
+            .oauth_cache
+            .confirm_webauth(&f.code, user.user.id, user.user_token.id)
+    {
         return resp::fail(101, state.tr(&lang, "OauthExpired"));
-    };
-    if v.action != ACTION_LOGIN || v.user_id != 0 {
-        return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
-    v.user_id = user.user.id;
-    state.oauth_cache.set(&f.code, v.clone(), 0);
-    resp::success(v)
+    resp::success(serde_json::Value::Null)
 }
 
 #[derive(Deserialize, Default)]
@@ -404,6 +493,7 @@ pub async fn admin_to_bind(
         &st,
         OauthCacheItem {
             action: ACTION_BIND.into(),
+            source_session_id: Some(user.user_token.id),
             op: f.op.clone(),
             user_id: user.user.id,
             verifier,
@@ -412,7 +502,7 @@ pub async fn admin_to_bind(
         },
         5 * 60,
     );
-    resp::success(json!({ "code": st, "url": url }))
+    resp::no_store(resp::success(json!({ "code": st, "url": url })))
 }
 
 pub async fn admin_bind_confirm(
@@ -424,55 +514,42 @@ pub async fn admin_bind_confirm(
     if f.code.is_empty() {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
     }
-    let Some(mut v) = state.oauth_cache.get(&f.code) else {
+    if state.oauth_cache.get(&f.code).is_none() {
         return resp::fail(101, state.tr(&lang, "OauthExpired"));
-    };
-    if v.action != ACTION_LOGIN || v.open_id.is_empty() || v.user_id != 0 {
+    }
+    let Some(v) = state.oauth_cache.claim_login_binding(&f.code) else {
         return resp::fail(101, state.tr(&lang, "ParamsError"));
-    }
-    match services::oauth::user_third_info(&state.db, &v.op, &v.open_id).await {
-        Ok(Some(_)) => return resp::fail(101, state.tr(&lang, "OauthHasBindOtherUser")),
-        Ok(None) => {}
-        Err(error) => {
-            tracing::warn!(%error, "failed to look up OAuth identity before binding");
-            return resp::fail(101, state.tr(&lang, "BindFail"));
-        }
-    }
-    match services::oauth::user_third_by_user_and_op(&state.db, user.user.id, &v.op).await {
-        Ok(Some(_)) => return resp::fail(101, state.tr(&lang, "OauthHasBindOtherUser")),
-        Ok(None) => {}
-        Err(error) => {
-            tracing::warn!(%error, "failed to look up user OAuth binding");
-            return resp::fail(101, state.tr(&lang, "BindFail"));
-        }
-    }
-    let ou = services::oauth::OauthUser {
-        open_id: v.open_id.clone(),
-        username: v.username.clone(),
-        name: v.name.clone(),
-        email: v.email.clone(),
+    };
+    let identity = services::oauth::OauthUser {
+        open_id: v.open_id,
+        username: v.username,
+        name: v.name,
+        email: v.email,
         ..Default::default()
     };
-    let oauth_type = services::oauth::info_by_op(&state.db, &v.op)
-        .await
-        .ok()
-        .flatten()
-        .map(|o| o.oauth_type)
-        .unwrap_or_else(|| v.op.clone());
-    if services::oauth::bind_user(&state.db, user.user.id, &ou, &oauth_type, &v.op)
-        .await
-        .is_err()
-    {
-        return resp::fail(101, state.tr(&lang, "BindFail"));
+    let linked = services::oauth::bind_user_with_session(
+        &state.db,
+        user.user.id,
+        user.user_token.id,
+        &identity,
+        &v.op,
+    )
+    .await
+    .is_ok();
+    state
+        .oauth_cache
+        .finish_login_binding(&f.code, linked.then_some(user.user.id));
+    if linked {
+        resp::success(serde_json::Value::Null)
+    } else {
+        resp::fail(101, state.tr(&lang, "BindFail"))
     }
-    v.user_id = user.user.id;
-    state.oauth_cache.set(&f.code, v.clone(), 0);
-    resp::success(v)
 }
 
 pub async fn admin_info(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
+    _user: BackendUser,
     Query(q): Query<OidcAuthQuery>,
 ) -> Response {
     if q.code.is_empty() {
@@ -541,6 +618,7 @@ mod tests {
         let schema = Schema::new(DbBackend::Sqlite);
         for statement in [
             schema.create_table_from_entity(entity::user::Entity),
+            schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(entity::user_token::Entity),
             schema.create_table_from_entity(entity::user_third::Entity),
             schema.create_table_from_entity(entity::oauth::Entity),
@@ -560,6 +638,15 @@ mod tests {
         let token = entity::user_token::ActiveModel {
             user_id: Set(1),
             token: Set("token".into()),
+            expired_at: Set(chrono::Utc::now().timestamp() + 3600),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        entity::oauth::ActiveModel {
+            op: Set("oidc".into()),
+            oauth_type: Set("oidc".into()),
             ..Default::default()
         }
         .insert(&db)
@@ -571,16 +658,23 @@ mod tests {
             OauthCacheItem {
                 action: ACTION_BIND.into(),
                 user_id: 1,
+                poll_secret: "test".into(),
                 ..Default::default()
             },
             300,
         );
-        let response = auth_query_pre(&state, "en", "ip", "bind")
-            .await
-            .err()
-            .unwrap();
+        let response = auth_query_pre(
+            &state,
+            "ip",
+            "bind.test",
+            OidcClient::Native,
+            &AuditContext::default(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(
-            response_body(response).await["error"],
+            response_body(response.response(&state, "en")).await["error"],
             state.tr("en", "ParamsError")
         );
         for item in [

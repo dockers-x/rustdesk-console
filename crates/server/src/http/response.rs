@@ -21,7 +21,20 @@ pub fn success<T: Serialize>(data: T) -> Response {
 
 /// `{ code, message, data: null }` at HTTP 200 with a non-zero code.
 pub fn fail(code: i32, message: impl Into<String>) -> Response {
-    Json(json!({ "code": code, "message": message.into(), "data": Value::Null })).into_response()
+    (
+        axum::Extension(super::security_audit::BusinessCode(code)),
+        Json(json!({ "code": code, "message": message.into(), "data": Value::Null })),
+    )
+        .into_response()
+}
+
+/// Prevent credentials and challenge material from being cached.
+pub fn no_store(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 /// `{ error }` at HTTP 400.

@@ -12,5 +12,6 @@ pub mod pro_api;
 pub mod response;
 pub mod router;
 pub mod security;
+pub(crate) mod security_audit;
 pub mod static_files;
 pub mod switch_grant;

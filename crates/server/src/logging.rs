@@ -3,7 +3,10 @@
 
 use std::path::Path;
 
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::config::Config;
 
@@ -23,9 +26,21 @@ pub fn init(config: &Config) {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(level_filter(&config.logger.level)));
 
+    let operational = filter_fn(|metadata| metadata.target() != "security_audit");
+    let audit = tracing_subscriber::fmt::layer()
+        .json()
+        .with_ansi(false)
+        .with_filter(filter_fn(|metadata| metadata.target() == "security_audit"));
+    let registry = tracing_subscriber::registry().with(audit);
     let path = config.logger.path.trim();
     if path.is_empty() {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_filter(filter)
+                    .with_filter(operational),
+            )
+            .init();
         return;
     }
 
@@ -41,9 +56,13 @@ pub fn init(config: &Config) {
     let dir = dir.map(|d| d.to_path_buf()).unwrap_or_else(|| ".".into());
 
     let appender = tracing_appender::rolling::never(dir, file_name);
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(appender)
-        .with_ansi(false)
+    registry
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(appender)
+                .with_ansi(false)
+                .with_filter(filter)
+                .with_filter(operational),
+        )
         .init();
 }
