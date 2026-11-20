@@ -144,8 +144,9 @@ Notification Routing supports ntfy, Bark, Server Chan and Webhook. A device can 
 
 ### Authentication and security logs
 
-Administrators must enroll in TOTP and sign in again after upgrading. Their existing
-sessions require a new sign-in. To recover a lost factor, run
+Administrators who have enrolled still verify TOTP at sign-in. Console permits
+unenrolled administrators to sign in with a persistent security reminder when
+account and global rules allow it. To recover a lost factor, run
 `rustdesk-console -c ./conf/config.yaml reset-totp <user-id>` on the Console host
 with access to its database, then enroll again. See the
 [security upgrade guide](docs/security-upgrade.zh-CN.md) for deployment details.
