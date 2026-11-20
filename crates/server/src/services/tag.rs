@@ -131,10 +131,20 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
     Ok(())
 }
 
+#[cfg(test)]
 pub async fn rename_with_peers(
     db: &DatabaseConnection,
     model: &tag::Model,
     new_name: &str,
+) -> Result<(), DbErr> {
+    rename_and_recolor(db, model, new_name, None).await
+}
+
+pub async fn rename_and_recolor(
+    db: &DatabaseConnection,
+    model: &tag::Model,
+    new_name: &str,
+    color: Option<i64>,
 ) -> Result<(), DbErr> {
     let transaction = db.begin().await?;
     let current = tag::Entity::find_by_id(model.id)
@@ -146,12 +156,15 @@ pub async fn rename_with_peers(
     tag::ActiveModel {
         id: Set(current.id),
         name: Set(new_name.to_string()),
+        color: Set(color.unwrap_or(current.color)),
         updated_at: Set(now()),
         ..Default::default()
     }
     .update(&transaction)
     .await?;
-    update_peer_tags(&transaction, &current, Some(new_name)).await?;
+    if current.name != new_name {
+        update_peer_tags(&transaction, &current, Some(new_name)).await?;
+    }
     transaction.commit().await
 }
 

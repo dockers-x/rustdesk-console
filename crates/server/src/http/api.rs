@@ -2899,6 +2899,7 @@ pub async fn ab_tag_add(
 pub struct TagRenameForm {
     pub old: String,
     pub new: String,
+    pub color: Option<i64>,
 }
 
 pub async fn ab_tag_rename(
@@ -2923,12 +2924,17 @@ pub async fn ab_tag_rename(
             Ok(Some(tag)) => tag,
             _ => return resp::error(state.tr(&lang, "ItemNotFound")),
         };
-    if let Ok(Some(_)) =
-        services::tag::info_by_user_name_collection(&state.db, uid, &t.new, cid).await
+    let name = t.new.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return resp::error(state.tr(&lang, "ParamsError"));
+    }
+    if name != tag.name
+        && services::tag::info_by_user_name_collection(&state.db, uid, name, cid)
+            .await.is_ok_and(|known| known.is_some())
     {
         return resp::error(state.tr(&lang, "ItemExists"));
     }
-    if let Err(e) = services::tag::rename_with_peers(&state.db, &tag, &t.new).await {
+    if let Err(e) = services::tag::rename_and_recolor(&state.db, &tag, name, t.color).await {
         return resp::error(format!("{}{}", state.tr(&lang, "OperationFailed"), e));
     }
     "".into_response()

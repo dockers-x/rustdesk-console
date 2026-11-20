@@ -288,7 +288,8 @@ function BookDevices({ book }: { book: Book }) {
   const [tagFilter, setTagFilter] = useState<string>();
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<BookPeer | "new" | null>(null);
-  const [tagEditor, setTagEditor] = useState(false);
+  const [tagEditor, setTagEditor] = useState<BookTag | "new" | null>(null);
+  const [deleteTag, setDeleteTag] = useState<BookTag>();
   const [importOpen, setImportOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [deletePeer, setDeletePeer] = useState<BookPeer>();
@@ -311,6 +312,17 @@ function BookDevices({ book }: { book: Book }) {
     },
   });
 
+  const selectedTag = tags.data?.find((tag) => tag.name === tagFilter);
+  const deleteBookTag = useMutation({
+    mutationFn: (tag: BookTag) => remove(`/api/ab/tag/${guid}`, [tag.name]),
+    onSuccess: () => {
+      setDeleteTag(undefined);
+      setTagFilter(undefined);
+      setPage(1);
+      void qc.invalidateQueries({ queryKey: [...bookKey, book.guid] });
+    },
+  });
+
   return (
     <>
       {book.owner && (
@@ -329,9 +341,13 @@ function BookDevices({ book }: { book: Book }) {
             {tag === undefined ? t("bookAllTags") : tag || t("bookNoTags")}
           </Button>
         ))}
-        {writable && <Button size="sm" variant="ghost" onClick={() => setTagEditor(true)}>
+        {writable && <Button size="sm" variant="ghost" onClick={() => setTagEditor("new")}>
           <Plus size={16} />{t("bookAddTag")}
         </Button>}
+        {writable && selectedTag && <Button size="sm" variant="ghost" onClick={() => setTagEditor(selectedTag)}>{t("edit")}</Button>}
+        {fullControl && selectedTag && <Button size="sm" variant="ghost" onClick={() => {
+          deleteBookTag.reset(); setDeleteTag(selectedTag);
+        }}>{t("delete")}</Button>}
       </section>
       <form className={`${surface} grid items-end gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3`}
         onSubmit={(event) => { event.preventDefault(); setPage(1); setApplied(filters); }}>
@@ -380,7 +396,15 @@ function BookDevices({ book }: { book: Book }) {
         {peers.data && <Pager page={page} total={peers.data.total} setPage={setPage} />}
       </section>
       {editing && <PeerDialog book={book} peer={editing} tags={tags.data ?? []} onClose={() => setEditing(null)} />}
-      {tagEditor && <TagDialog book={book} onClose={() => setTagEditor(false)} />}
+      {tagEditor && <TagDialog book={book} tag={tagEditor === "new" ? undefined : tagEditor}
+        onSaved={(name) => { if (tagEditor !== "new") { setTagFilter(name); setPage(1); } }}
+        onClose={() => setTagEditor(null)} />}
+      {deleteTag && <ConfirmDialog open title={t("confirmDeleteTitle")}
+        description={t("bookDeleteTagDescription", { name: deleteTag.name })}
+        confirmLabel={t("delete")} cancelLabel={t("cancel")} loading={deleteBookTag.isPending}
+        error={deleteBookTag.error ? message(deleteBookTag.error, t("operationFailed")) : undefined}
+        onOpenChange={(open) => { if (!open) setDeleteTag(undefined); }}
+        onConfirm={() => deleteBookTag.mutate(deleteTag)} />}
       {importOpen && <ImportDialog book={book} onClose={() => setImportOpen(false)} />}
       {trashOpen && <TrashDialog book={book} onClose={() => setTrashOpen(false)} />}
       {deletePeer && (
@@ -470,19 +494,32 @@ function PeerDialog({ book, peer, tags, onClose }: {
   );
 }
 
-function TagDialog({ book, onClose }: { book: Book; onClose: () => void }) {
+function TagDialog({ book, tag, onSaved, onClose }: {
+  book: Book;
+  tag?: BookTag;
+  onSaved: (name: string) => void;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [name, setName] = useState("");
-  const [color, setColor] = useState("#2b70cc");
+  const [name, setName] = useState(tag?.name ?? "");
+  const [color, setColor] = useState(tag ? `#${(tag.color & 0xffffff).toString(16).padStart(6, "0")}` : "#2b70cc");
   const save = useMutation({
-    mutationFn: () => apiPost(`/api/ab/tag/add/${encodeURIComponent(book.guid)}`, {
-      name: name.trim(), color: Number.parseInt(`ff${color.slice(1)}`, 16),
-    }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: [...bookKey, book.guid, "tags"] }); onClose(); },
+    mutationFn: () => {
+      const guid = encodeURIComponent(book.guid);
+      const value = Number.parseInt(`ff${color.slice(1)}`, 16);
+      return tag
+        ? apiPut(`/api/ab/tag/rename/${guid}`, { old: tag.name, new: name.trim(), color: value })
+        : apiPost(`/api/ab/tag/add/${guid}`, { name: name.trim(), color: value });
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...bookKey, book.guid] });
+      onSaved(name.trim());
+      onClose();
+    },
   });
   return (
-    <BookDialog title={t("bookAddTag")} pending={save.isPending}
+    <BookDialog title={t(tag ? "edit" : "bookAddTag")} pending={save.isPending}
       error={save.error ? message(save.error, t("operationFailed")) : undefined}
       onClose={onClose} onSubmit={(event) => { event.preventDefault(); if (name.trim()) save.mutate(); }}>
       <Input label={t("name")} value={name} required maxLength={80} onChange={(event) => setName(event.target.value)} />
