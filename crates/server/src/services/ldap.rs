@@ -26,7 +26,6 @@ struct DirectoryUser {
     username: String,
     email: String,
     nickname: String,
-    member_of: Vec<String>,
 }
 
 fn attribute<'a>(value: &'a str, default: &'a str) -> &'a str {
@@ -231,7 +230,6 @@ async fn search_user(
         email_attr,
         first_attr,
         last_attr,
-        "memberOf",
         identity_attr,
     ];
     if !user.enable_attr.is_empty() {
@@ -310,7 +308,6 @@ async fn search_user(
         nickname: format!("{} {}", get(first_attr), get(last_attr))
             .trim()
             .to_owned(),
-        member_of: attr_values(&entry.attrs, "memberOf").to_vec(),
     })
 }
 
@@ -318,11 +315,14 @@ async fn in_group(ldap: &mut Ldap, user: &DirectoryUser, group: &str) -> bool {
     if group.is_empty() {
         return false;
     }
-    if !user.member_of.is_empty() {
-        return user
-            .member_of
-            .iter()
-            .any(|dn| dn.eq_ignore_ascii_case(group));
+    let membership = format!("(memberOf={})", ldap3::ldap_escape(group));
+    if ldap.with_timeout(LDAP_TIMEOUT)
+        .search(&user.dn, Scope::Base, &membership, vec!["1.1"])
+        .await
+        .and_then(|result| result.success())
+        .is_ok_and(|(entries, _)| !entries.is_empty())
+    {
+        return true;
     }
     let filter = format!("(member={})", ldap3::ldap_escape(&user.dn));
     ldap.with_timeout(LDAP_TIMEOUT)
@@ -447,7 +447,6 @@ mod tests {
             subject: subject.to_owned(),
             email: format!("{username}@directory.test"),
             nickname: "Directory Display Name".to_owned(),
-            member_of: vec!["cn=directory-admins,dc=example".to_owned()],
         }
     }
 

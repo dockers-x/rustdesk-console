@@ -18,6 +18,16 @@ const NON_HEARTBEAT_OPTIONS: &[&str] = &[
     "proxy-url", "proxy-username", "proxy-password",
 ];
 
+// An empty value can override a deployment default on the client. Only
+// reset presentation and encoding options that cannot loosen access policy.
+const SAFE_RESET_OPTIONS: &[&str] = &[
+    "allow-remove-wallpaper",
+    "allow-always-software-render",
+    "enable-hwcodec",
+    "enable-directx-capture",
+    "enable-android-software-encoding-half-scale",
+];
+
 pub const ALLOWED_CONFIG_OPTIONS: &[&str] = &[
     "access-mode",
     "enable-keyboard",
@@ -488,13 +498,16 @@ pub async fn options_for_delivery(
     let (revision, mut options) = effective
         .map(|policy| (policy.modified_at, policy.config_options.clone()))
         .unwrap_or_default();
-    let current: BTreeSet<_> = options.keys().cloned().collect();
+    let current: BTreeSet<_> = options.keys()
+        .filter(|key| SAFE_RESET_OPTIONS.contains(&key.as_str()))
+        .cloned()
+        .collect();
     let keys = if revision == reported_revision {
         options.clear();
         current
     } else {
         for key in previous.difference(&current) {
-            if ALLOWED_CONFIG_OPTIONS.contains(&key.as_str()) && !NON_HEARTBEAT_OPTIONS.contains(&key.as_str()) {
+            if SAFE_RESET_OPTIONS.contains(&key.as_str()) {
                 options.insert(key.clone(), String::new());
             }
         }
@@ -665,6 +678,8 @@ mod tests {
         }.insert(&db).await.unwrap();
         let mut options = HashMap::new();
         options.insert("enable-file-transfer".to_string(), "N".to_string());
+        options.insert("allow-remove-wallpaper".into(), "Y".into());
+        options.insert("whitelist".into(), "192.0.2.0/24".into());
         let strategy = create(
             &db,
             "restricted",
@@ -719,7 +734,7 @@ mod tests {
         let (_, delta) = options_for_delivery(&db, &peer, Some(&effective), old_revision)
             .await.unwrap().unwrap();
         assert_eq!(delta, HashMap::from([
-            ("enable-file-transfer".into(), String::new()),
+            ("allow-remove-wallpaper".into(), String::new()),
             ("enable-clipboard".into(), "N".into()),
         ]));
         let (_, acknowledged) = options_for_delivery(&db, &peer, Some(&effective), effective.modified_at)

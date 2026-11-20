@@ -228,6 +228,18 @@ fn management_action(route: &str, method: &Method) -> Option<&'static str> {
         (Method::POST, "/api/admin/strategy_assignment/delete") => {
             Some("strategy_assignments.delete")
         }
+        (Method::POST, "/api/strategies/assign") => Some("strategies.assign"),
+        (Method::PUT, "/api/strategies/:guid/status") => Some("strategies.update"),
+        (Method::POST, "/api/users" | "/api/users/invite") => Some("users.create"),
+        (Method::POST, "/api/users/:guid/enable" | "/api/users/:guid/disable") => Some("users.update"),
+        (Method::DELETE, "/api/users/:guid") => Some("users.delete"),
+        (Method::POST, "/api/users/force-logout") => Some("login_security.account"),
+        (Method::PUT, "/api/users/tfa/totp/enforce" | "/api/users/disable_login_verification") => Some("login_security.account"),
+        (Method::POST, "/api/devices/:guid/assign" | "/api/devices/:guid/enable" | "/api/devices/:guid/disable") => Some("devices.update"),
+        (Method::DELETE, "/api/devices/:guid") => Some("devices.delete"),
+        (Method::POST, "/api/device-groups") | (Method::POST | Method::PATCH | Method::DELETE, "/api/device-groups/:guid")
+        | (Method::DELETE, "/api/device-groups/:guid/devices") => Some("roles.device_group"),
+        (Method::POST, "/api/user-groups") | (Method::POST | Method::PATCH | Method::DELETE, "/api/user-groups/:guid") => Some("roles.user_group"),
         (Method::POST, _) if route.starts_with("/api/admin/user/trusted-login-device/") => {
             Some("login_security.account")
         }
