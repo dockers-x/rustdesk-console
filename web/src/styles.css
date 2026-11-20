@@ -153,6 +153,11 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
     width: min(56rem, calc(100vw - 2rem)) !important;
     max-width: min(56rem, calc(100vw - 2rem)) !important;
   }
+
+  .admin-dialog-panel--notification-rule {
+    width: min(42rem, calc(100vw - 2rem)) !important;
+    max-width: min(42rem, calc(100vw - 2rem)) !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -8,10 +8,14 @@ import {
 } from "@tanstack/react-query";
 import { Badge, type BadgeVariant } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
+import { Checkbox } from "@cloudflare/kumo/components/checkbox";
+import { Collapsible } from "@cloudflare/kumo/components/collapsible";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { Input, Textarea } from "@cloudflare/kumo/components/input";
 import { Select } from "@cloudflare/kumo/components/select";
+import { Switch } from "@cloudflare/kumo/components/switch";
 import { Table } from "@cloudflare/kumo/components/table";
+import { CaretDownIcon } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   DialogBody,
@@ -192,6 +196,7 @@ export function NotificationRoutingPage() {
   const eventTypes =
     form.event_types ??
     (form.channel === "webhook" ? EVENT_TYPES : ONLINE_EVENTS);
+  const deviceIds = useMemo(() => splitDeviceIds(form.device_ids_text), [form.device_ids_text]);
   const usesUrl = form.channel !== "server_chan";
   const usesTopic = form.channel === "ntfy";
   const requiresSecret = form.channel === "bark" || form.channel === "server_chan";
@@ -200,6 +205,9 @@ export function NotificationRoutingPage() {
     form.secret_set &&
     (!secretScopedToUrl || form.url.trim() === form.stored_url);
   const clearingStoredSecret = canKeepStoredSecret && form.clear_secret;
+  const secretHint = canKeepStoredSecret && !clearingStoredSecret
+    ? t("keepExistingSecret")
+    : form.channel === "webhook" ? t("webhookDialogHint") : undefined;
   const configComplete =
     form.name.trim() !== "" &&
     (!usesUrl || form.url.trim() !== "") &&
@@ -217,7 +225,7 @@ export function NotificationRoutingPage() {
     secret: form.secret,
     clear_secret: form.clear_secret && !form.secret.trim(),
     event_types: eventTypes,
-    device_ids: splitDeviceIds(form.device_ids_text),
+    device_ids: deviceIds,
     device_group_ids: form.device_group_ids,
     enabled: form.enabled,
   });
@@ -287,11 +295,21 @@ export function NotificationRoutingPage() {
     !configComplete || save.isPending || draftTest.isPending;
   const showDraftResult = testedDrafts.current.has(form);
 
-  const groupNameById = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const group of groups.data?.list ?? []) map.set(group.id, group.name);
-    return map;
-  }, [groups.data]);
+  const groupOptions = useMemo(() => {
+    const labels = new Map(groups.data?.list.map(({ id, name }) => [id, name]));
+    for (const id of form.device_group_ids) {
+      if (!labels.has(id)) labels.set(id, `#${id}`);
+    }
+    return Array.from(labels, ([value, label]) => ({ value, label }));
+  }, [form.device_group_ids, groups.data]);
+
+  const deviceScope = (deviceCount: number, groupCount: number) => {
+    if (!deviceCount && !groupCount) return t("allDevices");
+    return [
+      deviceCount ? t("deviceFilterCount", { count: deviceCount }) : "",
+      groupCount ? t("groupFilterCount", { count: groupCount }) : "",
+    ].filter(Boolean).join(" · ");
+  };
 
   const openCreate = () => {
     setForm(emptyForm);
@@ -416,25 +434,7 @@ export function NotificationRoutingPage() {
                   </Table.Cell>
                   <Table.Cell>
                     <span className="text-xs text-kumo-default/80">
-                      {row.device_ids.length === 0 &&
-                      row.device_group_ids.length === 0
-                        ? t("allDevices")
-                        : [
-                            row.device_ids.length
-                              ? t("deviceFilterCount").replace(
-                                  "{{count}}",
-                                  String(row.device_ids.length),
-                                )
-                              : "",
-                            row.device_group_ids.length
-                              ? t("groupFilterCount").replace(
-                                  "{{count}}",
-                                  String(row.device_group_ids.length),
-                                )
-                              : "",
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
+                      {deviceScope(row.device_ids.length, row.device_group_ids.length)}
                     </span>
                   </Table.Cell>
                   <Table.Cell>
@@ -573,7 +573,11 @@ export function NotificationRoutingPage() {
           if (!open && !save.isPending) closeForm();
         }}
       >
-        <Dialog size="lg" className={dialogPanelClass} style={{ overflow: "visible" }}>
+        <Dialog
+          size="lg"
+          className={`${dialogPanelClass} admin-dialog-panel--notification-rule`}
+          style={{ overflow: "visible" }}
+        >
           <DialogHeader
             title={
               form.id ? t("editNotificationRule") : t("createNotificationRule")
@@ -583,7 +587,7 @@ export function NotificationRoutingPage() {
             <form
               id="notification-rule-form"
               ref={formRef}
-              className="grid gap-3"
+              className="grid gap-4"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (formActionDisabled) return;
@@ -591,18 +595,16 @@ export function NotificationRoutingPage() {
                 save.mutate();
               }}
             >
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1 block text-sm">{t("name")}</span>
-                  <Input
-                    className="w-full"
-                    required
-                    value={form.name}
-                    onChange={(e) =>
-                      setForm((state) => ({ ...state, name: e.target.value }))
-                    }
-                  />
-                </label>
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                <Input
+                  label={t("name")}
+                  className="w-full"
+                  required
+                  value={form.name}
+                  onChange={(e) =>
+                    setForm((state) => ({ ...state, name: e.target.value }))
+                  }
+                />
                 <Select<Channel>
                   className="w-full"
                   container={pickerPortal}
@@ -617,220 +619,185 @@ export function NotificationRoutingPage() {
                   }))}
                 />
               </div>
+
               {usesUrl && (
-                <div className={usesTopic ? "grid gap-3 sm:grid-cols-[2fr_1fr]" : ""}>
-                  <label className="block">
-                    <span className="mb-1 block text-sm">
-                      {t(form.channel === "webhook" ? "webhookUrl" : "notificationBaseUrl")}
-                    </span>
+                <div className={usesTopic ? "grid gap-4 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" : ""}>
+                  <Input
+                    label={t(form.channel === "webhook" ? "webhookUrl" : "notificationBaseUrl")}
+                    className="w-full"
+                    required
+                    type="url"
+                    value={form.url}
+                    placeholder={DEFAULT_URL[form.channel] || "https://example.com/webhook"}
+                    onChange={(e) =>
+                      setForm((state) => ({ ...state, url: e.target.value }))
+                    }
+                  />
+                  {usesTopic && (
                     <Input
+                      label={t("notificationTopic")}
                       className="w-full"
                       required
-                      type="url"
-                      value={form.url}
-                      placeholder={DEFAULT_URL[form.channel] || "https://example.com/webhook"}
+                      value={form.topic}
                       onChange={(e) =>
-                        setForm((state) => ({ ...state, url: e.target.value }))
+                        setForm((state) => ({ ...state, topic: e.target.value }))
                       }
                     />
-                  </label>
-                  {usesTopic && (
-                    <label className="block">
-                      <span className="mb-1 block text-sm">
-                        {t("notificationTopic")}
-                      </span>
-                      <Input
-                        className="w-full"
-                        required
-                        value={form.topic}
-                        onChange={(e) =>
-                          setForm((state) => ({ ...state, topic: e.target.value }))
-                        }
-                      />
-                    </label>
                   )}
                 </div>
               )}
-              <div>
-                <label htmlFor="notification-secret" className="mb-1 block text-sm">
-                  {t(SECRET_LABEL[form.channel])}
-                  {!requiresSecret && (
-                    <span className="text-xs text-kumo-subtle">
-                      {" "}{t("notificationOptional")}
-                    </span>
-                  )}
-                </label>
+
+              <div className="grid gap-2">
                 <Input
-                  id="notification-secret"
+                  label={
+                    <>
+                      {t(SECRET_LABEL[form.channel])}
+                      {!requiresSecret && (
+                        <span className="ml-1 text-xs font-normal text-kumo-default/80">
+                          {t("notificationOptional")}
+                        </span>
+                      )}
+                    </>
+                  }
+                  description={secretHint && <span className="text-kumo-default/80">{secretHint}</span>}
                   className="w-full"
                   type="password"
                   autoComplete="new-password"
-                  required={requiresSecret && !canKeepStoredSecret}
+                  required={requiresSecret && !canKeepStoredSecret ? true : undefined}
                   disabled={clearingStoredSecret}
                   value={form.secret}
-                  aria-describedby={
-                    canKeepStoredSecret && !clearingStoredSecret
-                      ? "notification-keep-secret"
-                      : undefined
-                  }
                   onChange={(e) =>
                     setForm((state) => ({ ...state, secret: e.target.value }))
                   }
                 />
-                {canKeepStoredSecret && !clearingStoredSecret && (
-                  <p id="notification-keep-secret" className="mt-1 text-xs text-kumo-default/80">
-                    {t("keepExistingSecret")}
-                  </p>
+                {form.channel === "server_chan" && (
+                  <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                    <a
+                      className="rounded-sm text-kumo-default underline underline-offset-2 focus-visible:outline-2"
+                      href="https://sc3.ft07.com/sendkey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {t("notificationServerChanAppLink")}
+                    </a>
+                    <a
+                      className="rounded-sm text-kumo-default underline underline-offset-2 focus-visible:outline-2"
+                      href="https://sct.ftqq.com/sendkey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {t("notificationServerChanWeChatLink")}
+                    </a>
+                  </div>
                 )}
-              </div>
-              {form.channel === "server_chan" && (
-                <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
-                  <a
-                    className="rounded-sm text-kumo-default underline underline-offset-2 focus-visible:outline-2"
-                    href="https://sc3.ft07.com/sendkey"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {t("notificationServerChanAppLink")}
-                  </a>
-                  <a
-                    className="rounded-sm text-kumo-default underline underline-offset-2 focus-visible:outline-2"
-                    href="https://sct.ftqq.com/sendkey"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {t("notificationServerChanWeChatLink")}
-                  </a>
-                </div>
-              )}
-              {canKeepStoredSecret && !requiresSecret && (
-                <label className="inline-flex min-h-10 items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                {canKeepStoredSecret && !requiresSecret && (
+                  <Checkbox
+                    label={t(form.channel === "webhook" ? "clearWebhookSecret" : "notificationClearAccessToken")}
                     checked={form.clear_secret}
-                    onChange={(e) =>
+                    onCheckedChange={(checked) =>
                       setForm((state) => ({
                         ...state,
-                        clear_secret: e.target.checked,
-                        secret: e.target.checked ? "" : state.secret,
+                        clear_secret: checked,
+                        secret: checked ? "" : state.secret,
                       }))
                     }
                   />
-                  {t(form.channel === "webhook" ? "clearWebhookSecret" : "notificationClearAccessToken")}
-                </label>
-              )}
-              {form.channel === "webhook" && (
-                <p className="text-xs text-kumo-default/80">{t("webhookDialogHint")}</p>
-              )}
-              <Select<number>
-                className="w-full"
-                container={pickerPortal}
-                label={t("notificationTemplate")}
-                value={form.template_id}
-                onValueChange={(templateId) => {
-                  if (templateId === null) return;
-                  setForm((state) => ({ ...state, template_id: templateId }));
-                }}
-                items={[
-                  { value: 0, label: t("notificationTemplateBuiltIn") },
-                  ...(form.template_id > 0 && !selectedTemplateAvailable
-                    ? [{ value: form.template_id, label: `#${form.template_id}` }]
-                    : []),
-                  ...availableTemplates.map((template) => ({
-                    value: template.id,
-                    label: template.name,
-                  })),
-                ]}
-                description={templates.error ? t("notificationTemplatesUnavailable") : undefined}
-              />
-              <fieldset className="grid gap-2">
-                <legend className="text-sm">{t("events")}</legend>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {EVENT_TYPES.map((event) => (
-                    <label
-                      key={event}
-                      className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 text-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={eventTypes.includes(event)}
-                        onChange={(e) =>
-                          setForm((state) => ({
-                            ...state,
-                            event_types: e.target.checked
-                              ? [...eventTypes, event]
-                              : eventTypes.filter((item) => item !== event),
-                          }))
-                        }
-                      />
-                      {eventLabel(event)}
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-              <div>
-                <label htmlFor="notification-device-ids" className="mb-1 block text-sm">
-                  {t("deviceIdFilter")}
-                </label>
-                <Textarea
-                  id="notification-device-ids"
-                  aria-describedby="notification-device-ids-hint"
-                  className="min-h-24 w-full"
-                  value={form.device_ids_text}
-                  placeholder="123456789&#10;987654321"
-                  onChange={(e) =>
-                    setForm((state) => ({
-                      ...state,
-                      device_ids_text: e.target.value,
-                    }))
-                  }
-                />
-                <p id="notification-device-ids-hint" className="mt-1 text-xs text-kumo-default/80">
-                  {t("deviceIdFilterHint")}
-                </p>
+                )}
               </div>
-              <fieldset className="grid gap-2">
-                <legend className="text-sm">{t("deviceGroupFilter")}</legend>
-                <div className="grid max-h-40 gap-2 overflow-auto rounded-lg border border-kumo-line bg-kumo-base p-2 sm:grid-cols-2">
-                  {(groups.data?.list ?? []).map((group) => (
-                    <label
-                      key={group.id}
-                      className="inline-flex min-h-9 items-center gap-2 px-2 text-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={form.device_group_ids.includes(group.id)}
-                        onChange={(e) =>
-                          setForm((state) => ({
-                            ...state,
-                            device_group_ids: e.target.checked
-                              ? [...state.device_group_ids, group.id]
-                              : state.device_group_ids.filter(
-                                  (item) => item !== group.id,
-                                ),
-                          }))
-                        }
-                      />
-                      {groupNameById.get(group.id) ?? group.name}
-                    </label>
-                  ))}
-                  {(groups.data?.list ?? []).length === 0 && (
-                    <span className="px-2 py-1 text-sm text-kumo-subtle">
-                      {t("noData")}
-                    </span>
+
+              <div className="grid items-start gap-4 border-t border-kumo-line pt-4 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                <Select<number>
+                  className="w-full"
+                  container={pickerPortal}
+                  label={t("notificationTemplate")}
+                  value={form.template_id}
+                  onValueChange={(templateId) => {
+                    if (templateId === null) return;
+                    setForm((state) => ({ ...state, template_id: templateId }));
+                  }}
+                  items={[
+                    { value: 0, label: t("notificationTemplateBuiltIn") },
+                    ...(form.template_id > 0 && !selectedTemplateAvailable
+                      ? [{ value: form.template_id, label: `#${form.template_id}` }]
+                      : []),
+                    ...availableTemplates.map(({ id, name }) => ({ value: id, label: name })),
+                  ]}
+                  description={templates.error && (
+                    <span className="text-kumo-default/80">{t("notificationTemplatesUnavailable")}</span>
                   )}
-                </div>
-              </fieldset>
-              <label className="inline-flex min-h-10 items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={form.enabled}
-                  onChange={(e) =>
-                    setForm((state) => ({ ...state, enabled: e.target.checked }))
-                  }
                 />
-                {t("enabled")}
-              </label>
+                <Checkbox.Group
+                  legend={t("events")}
+                  orientation="horizontal"
+                  value={eventTypes}
+                  onValueChange={(events) =>
+                    setForm((state) => ({ ...state, event_types: events }))
+                  }
+                >
+                  {EVENT_TYPES.map((event) => (
+                    <Checkbox.Item key={event} label={eventLabel(event)} value={event} />
+                  ))}
+                </Checkbox.Group>
+              </div>
+
+              <Switch
+                label={t("notificationEnableRule")}
+                checked={form.enabled}
+                onCheckedChange={(enabled) => setForm((state) => ({ ...state, enabled }))}
+              />
+
+              <Collapsible.Root className="rounded-lg border border-kumo-line">
+                <Collapsible.Trigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      className="group h-auto min-h-10 w-full justify-start px-3 py-2 text-left"
+                    />
+                  }
+                >
+                  <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 whitespace-normal">
+                    <span className="font-medium">{t("notificationDeviceScope")}</span>
+                    <span className="text-xs text-kumo-default/80">
+                      {deviceScope(deviceIds.length, form.device_group_ids.length)}
+                    </span>
+                  </span>
+                  <CaretDownIcon
+                    aria-hidden="true"
+                    size={14}
+                    className="shrink-0 group-aria-expanded:rotate-180 motion-safe:transition-transform motion-safe:duration-150 motion-safe:ease-(--ease-out)"
+                  />
+                </Collapsible.Trigger>
+                <Collapsible.Panel className="grid items-start gap-4 border-t border-kumo-line p-3 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                  <Textarea
+                    label={t("deviceIdFilter")}
+                    description={<span className="text-kumo-default/80">{t("deviceIdFilterHint")}</span>}
+                    className="w-full"
+                    rows={2}
+                    value={form.device_ids_text}
+                    placeholder="123456789"
+                    onChange={(e) =>
+                      setForm((state) => ({ ...state, device_ids_text: e.target.value }))
+                    }
+                  />
+                  <Select<number, true>
+                    multiple
+                    className="w-full [&_[data-placeholder]]:text-kumo-default/80"
+                    container={pickerPortal}
+                    label={t("deviceGroupFilter")}
+                    placeholder={t(groupOptions.length ? "notificationSelectDeviceGroups" : "noData")}
+                    loading={groups.isLoading}
+                    disabled={!groupOptions.length}
+                    description={groups.error && (
+                      <span className="text-kumo-default/80">{t("notificationDeviceGroupsUnavailable")}</span>
+                    )}
+                    value={form.device_group_ids}
+                    onValueChange={(ids) =>
+                      setForm((state) => ({ ...state, device_group_ids: ids }))
+                    }
+                    items={groupOptions}
+                  />
+                </Collapsible.Panel>
+              </Collapsible.Root>
             </form>
           </DialogBody>
           <div className="shrink-0 overflow-hidden rounded-b-xl">
@@ -853,7 +820,7 @@ export function NotificationRoutingPage() {
                   {t("notificationDraftTestSent")}
                 </InlineMessage>
               )}
-              <Button variant="secondary" disabled={save.isPending} onClick={closeForm}>
+              <Button variant="ghost" disabled={save.isPending} onClick={closeForm}>
                 {t("cancel")}
               </Button>
               <Button
