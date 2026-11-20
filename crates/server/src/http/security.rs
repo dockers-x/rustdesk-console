@@ -135,6 +135,7 @@ mod tests {
         let schema = Schema::new(DbBackend::Sqlite);
         for table in [
             schema.create_table_from_entity(user::Entity),
+            schema.create_table_from_entity(entity::ldap_identity::Entity),
             schema.create_table_from_entity(user_token::Entity),
             schema.create_table_from_entity(peer::Entity),
             schema.create_table_from_entity(address_book::Entity),

@@ -1,3 +1,18 @@
+LdapSettingsUnavailable = "LDAP settings are unavailable."
+LdapInvalidSettings = "Check the LDAP settings and search scope."
+LdapInvalidSettingField = "An LDAP setting is unrecognized."
+LdapSettingsChanged = "The settings changed during the save. Reload and try again."
+LdapInvalidUrl = "Enter an LDAP or LDAPS server URL without credentials, a path, or a query."
+LdapInvalidTlsMode = "Use StartTLS with LDAP URLs. Custom CA certificates require TLS and certificate verification."
+LdapInvalidCa = "Check the PEM CA certificates."
+LdapMissingBaseDn = "Enter a base DN or a user search base DN."
+LdapInvalidBindCredentials = "Enter both the bind DN and password, or clear both for anonymous bind."
+LdapInvalidAttribute = "Check the LDAP attribute names."
+LdapInvalidFilter = "Enter an LDAP filter enclosed in parentheses."
+LdapConnectTimedOut = "The directory connection timed out."
+LdapConnectFailed = "Could not connect to the directory. Check the URL, network and TLS settings."
+LdapBindFailed = "The directory bind failed. Check the bind DN and password."
+
 [Test]
 description = "test"
 one = "test1 "

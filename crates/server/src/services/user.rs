@@ -24,21 +24,26 @@ pub async fn info_by_username(
         .await
 }
 
-/// Verify username/password. If LDAP is enabled it is tried first, falling back
-/// to the local database (with legacy MD5 upgrade). Returns the user on success.
+/// Select the password source before authentication. A directory account has
+/// no local password fallback, and an existing local account never uses LDAP.
 pub async fn info_by_username_password(
     db: &DatabaseConnection,
     cfg: &Config,
     username: &str,
     password: &str,
 ) -> Result<Option<user::Model>, DbErr> {
-    if cfg.ldap.enable {
-        match crate::services::ldap::authenticate(cfg, db, username, password).await {
-            Ok(u) => return Ok(Some(u)),
-            Err(_) => tracing::warn!("LDAP authentication failed; checking local credentials"),
-        }
+    let local = info_by_username(db, &format_username(username)).await?;
+    let use_directory = match &local {
+        Some(account) => crate::services::ldap::is_directory_user(db, account.id).await?,
+        None => true,
+    };
+    if use_directory {
+        let Ok(settings) = crate::services::ldap_settings::read(db, &cfg.ldap).await else {
+            return Ok(None);
+        };
+        return crate::services::ldap::authenticate(&settings, db, username, password).await;
     }
-    let Some(u) = info_by_username(db, &format_username(username)).await? else {
+    let Some(u) = local else {
         return Ok(None);
     };
     let hash = u.password.clone();

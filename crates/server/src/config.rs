@@ -365,13 +365,17 @@ pub struct Proxy {
     pub host: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Ldap {
     pub enable: bool,
     pub url: String,
     #[serde(rename = "tls-ca-file")]
     pub tls_ca_file: String,
+    #[serde(rename = "tls-ca-pem")]
+    pub tls_ca_pem: String,
+    #[serde(rename = "start-tls")]
+    pub start_tls: bool,
     #[serde(rename = "tls-verify")]
     pub tls_verify: bool,
     #[serde(rename = "base-dn")]
@@ -393,6 +397,9 @@ pub struct LdapUser {
     #[serde(rename = "enable-attr-value")]
     pub enable_attr_value: String,
     pub filter: String,
+    pub scope: LdapScope,
+    #[serde(rename = "identity-attribute")]
+    pub identity_attribute: LdapIdentityAttribute,
     pub username: String,
     pub email: String,
     #[serde(rename = "first-name")]
@@ -404,6 +411,32 @@ pub struct LdapUser {
     pub admin_group: String,
     #[serde(rename = "allow-group")]
     pub allow_group: String,
+}
+
+impl std::fmt::Debug for Ldap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ldap")
+            .field("enable", &self.enable)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LdapScope {
+    Base,
+    One,
+    #[default]
+    Subtree,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default)]
+pub enum LdapIdentityAttribute {
+    #[default]
+    #[serde(rename = "entryUUID", alias = "entryuuid", alias = "")]
+    EntryUuid,
+    #[serde(rename = "objectGUID", alias = "objectguid")]
+    ObjectGuid,
 }
 
 /// Load configuration from `path`, apply environment overrides, then run the

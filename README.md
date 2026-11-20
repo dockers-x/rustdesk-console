@@ -203,6 +203,28 @@ If both exist, the root `index.html` takes precedence. Either layout is served a
 `/webclient2/` without an extra `web/` URL prefix. The zip is not unpacked into the
 persistent `data` directory.
 
+## LDAP sign-in
+
+Open **System settings → LDAP** to set the directory endpoint, bind credentials,
+TLS trust, search scope, and user mappings. Test connection validates the draft
+and binds to the server without saving settings or creating a user. The console
+stores overrides in the database. Fields without overrides continue to use the
+server configuration file and environment. Re-enter the bind password when
+changing the endpoint, bind DN, or TLS trust settings.
+
+Use LDAP with StartTLS or LDAPS and certificate verification. For a private CA,
+provide PEM certificates in the console or configure `ldap.tls-ca-file` in YAML.
+Use `entryUUID` for OpenLDAP or `objectGUID` for Active Directory. Users provisioned
+by LDAP start as standard users. Manage roles in the console. If an allowed group
+is set, `ldap.user.admin-group` also allows members to sign in.
+
+LDAP accounts created by older versions lack a directory identity. The upgrade
+retains these records as local accounts, including roles and TOTP settings. A
+local administrator can set a console password for such an account. To let its
+owner sign in through LDAP under the original username, first rename the legacy
+account and then review the new directory account’s permissions separately.
+Keep a local administrator account for recovery.
+
 ## OAuth and OIDC
 
 RustDesk clients discover third-party login entries from `GET /api/login-options`.

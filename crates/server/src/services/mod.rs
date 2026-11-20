@@ -13,6 +13,7 @@ pub mod diagnostics;
 pub mod group;
 pub mod geo_relay;
 pub mod ldap;
+pub mod ldap_settings;
 pub mod login_log;
 pub mod login_security;
 pub mod message;

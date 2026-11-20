@@ -29,6 +29,8 @@ import { TableState } from "../components/TableState";
 import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 import { SelfSignedClientFeatureToggle } from "../features/self-signed-client/FeatureToggle";
 
+import { LdapSettingsPanel } from "./LdapSettingsPanel";
+
 interface AdminConfigView {
   title: string;
   hello: string;
@@ -79,7 +81,7 @@ interface EmailSettingsForm {
   from_name: string;
   tls: string;
 }
-type SettingsTab = "site" | "security" | "features";
+type SettingsTab = "site" | "security" | "ldap" | "features";
 
 const emptyForm: AdminConfigForm = {
   title: "",
@@ -410,6 +412,11 @@ export function SystemSettingsPage() {
       hint: t("settingsTabLoginSecurityHint"),
     },
     {
+      key: "ldap",
+      label: t("ldapSettingsTab"),
+      hint: t("ldapSettingsTabHint"),
+    },
+    {
       key: "features",
       label: t("selfSignedFeatureTab"),
       hint: t("selfSignedFeatureTabHint"),
@@ -436,7 +443,7 @@ export function SystemSettingsPage() {
       <div
         role="tablist"
         aria-label={t("systemSettings")}
-        className="grid gap-1 rounded-lg border border-kumo-line bg-kumo-elevated p-1 sm:grid-cols-3"
+        className="grid gap-1 rounded-lg border border-kumo-line bg-kumo-elevated p-1 sm:grid-cols-2 xl:grid-cols-4"
       >
         {tabs.map((tab) => {
           const selected = activeTab === tab.key;
@@ -464,6 +471,7 @@ export function SystemSettingsPage() {
       {activeTab === "site" && message && (
         <InlineMessage tone="success">{message}</InlineMessage>
       )}
+      {activeTab === "ldap" && <LdapSettingsPanel />}
       {activeTab === "features" && <SelfSignedClientFeatureToggle />}
       {activeTab === "site" && error && (
         <InlineMessage tone="error">{error}</InlineMessage>

@@ -3489,6 +3489,9 @@ pub(crate) mod deployment_tests {
         db.execute(backend.build(&schema.create_table_from_entity(entity::user::Entity)))
             .await
             .unwrap();
+        db.execute(backend.build(&schema.create_table_from_entity(entity::ldap_identity::Entity)))
+            .await
+            .unwrap();
         db.execute(backend.build(&schema.create_table_from_entity(peer::Entity)))
             .await
             .unwrap();

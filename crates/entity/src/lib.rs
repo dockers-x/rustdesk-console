@@ -21,6 +21,8 @@ pub mod deployment_token;
 pub mod device_group;
 pub mod device_presence_state;
 pub mod group;
+pub mod ldap_identity;
+pub mod ldap_setting;
 pub mod login_log;
 pub mod login_verification;
 pub mod message;

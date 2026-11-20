@@ -249,6 +249,11 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/diagnostics/run", post(admin::diagnostics_run))
         // config
         .route(
+            "/api/admin/ldap/settings",
+            get(super::ldap_settings::read).put(super::ldap_settings::save),
+        )
+        .route("/api/admin/ldap/test", post(super::ldap_settings::test))
+        .route(
             "/api/admin/config/admin",
             get(admin::config_admin).patch(admin::config_admin_update),
         )

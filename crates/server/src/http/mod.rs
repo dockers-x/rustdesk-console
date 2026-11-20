@@ -3,6 +3,7 @@ pub mod api;
 pub mod developer;
 mod developer_openapi;
 pub mod file;
+mod ldap_settings;
 pub mod middleware;
 pub mod my;
 pub mod oauth;

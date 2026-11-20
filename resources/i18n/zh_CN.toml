@@ -1,3 +1,18 @@
+LdapSettingsUnavailable = "暂时无法读取 LDAP 设置。"
+LdapInvalidSettings = "请检查 LDAP 设置和搜索范围。"
+LdapInvalidSettingField = "存在无法识别的 LDAP 设置。"
+LdapSettingsChanged = "保存期间设置已发生变化。请重新加载后重试。"
+LdapInvalidUrl = "请输入不含凭据、路径或查询参数的 LDAP 或 LDAPS 服务器 URL。"
+LdapInvalidTlsMode = "StartTLS 适用于 LDAP URL。自定义 CA 证书需要启用 TLS 和证书验证。"
+LdapInvalidCa = "请检查 PEM 格式的 CA 证书。"
+LdapMissingBaseDn = "请输入基础 DN 或用户搜索基础 DN。"
+LdapInvalidBindCredentials = "请输入绑定 DN 和密码，或清空两者以进行匿名绑定。"
+LdapInvalidAttribute = "请检查 LDAP 属性名称。"
+LdapInvalidFilter = "请输入带括号的 LDAP 筛选器。"
+LdapConnectTimedOut = "连接目录超时。"
+LdapConnectFailed = "无法连接到目录。请检查 URL、网络和 TLS 设置。"
+LdapBindFailed = "目录绑定失败。请检查绑定 DN 和密码。"
+
 [Test]
 description = "test"
 one = "测试1 {{.P0}}"

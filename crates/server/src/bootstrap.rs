@@ -147,6 +147,8 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
 
     create!(version::Entity);
     create!(user::Entity);
+    create!(entity::ldap_identity::Entity);
+    create!(entity::ldap_setting::Entity);
     create!(user_token::Entity);
     create!(login_verification::Entity);
     create!(trusted_login_device::Entity);

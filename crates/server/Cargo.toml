@@ -50,6 +50,9 @@ sha2 = { workspace = true }
 maxminddb = { workspace = true }
 fs2 = { workspace = true }
 ldap3 = { workspace = true }
+rustls = "0.21"
+rustls-native-certs = "0.6"
+rustls-pemfile = "1"
 urlencoding = { workspace = true }
 url = { workspace = true }
 lettre = { workspace = true }

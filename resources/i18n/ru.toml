@@ -1,3 +1,18 @@
+LdapSettingsUnavailable = "Настройки LDAP недоступны."
+LdapInvalidSettings = "Проверьте настройки LDAP и область поиска."
+LdapInvalidSettingField = "Неизвестный параметр LDAP."
+LdapSettingsChanged = "Настройки изменились во время сохранения. Перезагрузите страницу и повторите попытку."
+LdapInvalidUrl = "Укажите URL сервера LDAP или LDAPS без учётных данных, пути и параметров запроса."
+LdapInvalidTlsMode = "StartTLS применяется с URL LDAP. Для собственных сертификатов УЦ включите TLS и проверку сертификатов."
+LdapInvalidCa = "Проверьте сертификаты УЦ в формате PEM."
+LdapMissingBaseDn = "Введите базовый DN или базовый DN поиска пользователей."
+LdapInvalidBindCredentials = "Введите DN и пароль привязки или очистите оба поля для анонимной привязки."
+LdapInvalidAttribute = "Проверьте имена атрибутов LDAP."
+LdapInvalidFilter = "Введите фильтр LDAP в круглых скобках."
+LdapConnectTimedOut = "Истекло время ожидания подключения к каталогу."
+LdapConnectFailed = "Не удалось подключиться к каталогу. Проверьте URL, сеть и параметры TLS."
+LdapBindFailed = "Не удалось выполнить привязку к каталогу. Проверьте DN и пароль привязки."
+
 [Test]
 description = "test"
 one = "тест 1 {{.P0}}"
