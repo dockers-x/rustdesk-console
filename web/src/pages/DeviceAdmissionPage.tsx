@@ -17,6 +17,7 @@ import { formatDateTime } from "../lib/dateFormat";
 interface AdmissionSettings {
   require_deployment: boolean;
   paired_token_configured: boolean;
+  hbbs_connected: boolean;
 }
 
 interface DeviceReview {
@@ -40,6 +41,7 @@ export function DeviceAdmissionPage() {
   const settings = useQuery({
     queryKey: [...admissionKey, "settings"],
     queryFn: () => apiGet<AdmissionSettings>(`${base}/settings`),
+    refetchInterval: 5_000,
   });
   const devices = useQuery({
     queryKey: [...admissionKey, "devices", search, page],
@@ -67,12 +69,15 @@ export function DeviceAdmissionPage() {
           label={t("requireDeviceDeployment")}
           aria-describedby="device-deployment-hint"
           checked={settings.data?.require_deployment ?? false}
-          disabled={(!settings.data?.paired_token_configured && !settings.data?.require_deployment) || saveSetting.isPending}
+          disabled={(!settings.data?.hbbs_connected && !settings.data?.require_deployment) || saveSetting.isPending}
           onCheckedChange={(value) => { saveSetting.reset(); setEnable(value); }}
         />
         <p id="device-deployment-hint" className="text-sm text-kumo-subtle">{t("requireDeviceDeploymentHint")}</p>
         {settings.data && !settings.data.paired_token_configured && (
           <Banner variant="alert" title={t("admissionPairingRequired")} description={t("admissionPairingHint")} />
+        )}
+        {settings.data?.paired_token_configured && !settings.data.hbbs_connected && (
+          <Banner variant="alert" title={t("admissionPairingWaiting")} description={t("admissionPairingHint")} />
         )}
         {settings.error && <TableState tone="error">{settings.error.message}</TableState>}
       </section>

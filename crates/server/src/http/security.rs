@@ -859,6 +859,12 @@ mod tests {
         assert_eq!(visible["data"][0]["password"], "test-sync-value");
 
         let (status, _) = request("DELETE", "/api/ab/rules".into(),
+            json!([rule_id, "999999"]), "token-1", false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = request("GET", peer_list.clone(), json!(null), "token-2", false).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, _) = request("DELETE", "/api/ab/rules".into(),
             json!([rule_id]), "token-1", false).await;
         assert_eq!(status, StatusCode::OK);
         for native in [false, true] {
@@ -874,6 +880,12 @@ mod tests {
         let mut state = fixture().await;
         const TOKEN: &str = "local-fixture-token-with-32-characters";
         Arc::make_mut(&mut state.config).security.hbbs_admission_token = TOKEN.into();
+        let (_, before) = json_request(&state, "PUT", "/api/admin/device-admission/settings",
+            json!({"require_deployment":true}), Some("token-3")).await;
+        assert_ne!(before["code"], 0, "{before}");
+        let (_, paired) = json_request(&state, "POST", "/api/server/device-admission/hello",
+            json!(null), Some(TOKEN)).await;
+        assert_eq!(paired["allowed"], true);
         let (status, _) = json_request(
             &state, "PUT", "/api/admin/device-admission/settings",
             json!({"require_deployment":true}), Some("token-3"),

@@ -8,7 +8,7 @@ use axum::Json;
 use chrono::{Duration, Utc};
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set,
+    QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -3202,20 +3202,38 @@ pub async fn ab_rules_delete(
     audit: super::security_audit::AuditContext,
     Json(guids): Json<Vec<String>>,
 ) -> Response {
-    for guid in guids {
-        let Some(rule_id) = parse_i32(&guid) else {
-            return resp::error("ParamsError");
-        };
-        let rule = match services::address_book::rule_info_by_id(&state.db, rule_id).await {
+    if guids.is_empty() || guids.len() > 250 {
+        return resp::error("ParamsError");
+    }
+    let Some(ids) = guids.iter().map(|guid| parse_i32(guid)).collect::<Option<std::collections::BTreeSet<_>>>() else {
+        return resp::error("ParamsError");
+    };
+    let mut scope = sea_orm::Condition::any();
+    for id in &ids {
+        let rule = match services::address_book::rule_info_by_id(&state.db, *id).await {
             Ok(Some(row)) => row,
             _ => return resp::error("ItemNotFound"),
         };
         if !can_control_collection_id(&state, &user.user, rule.collection_id).await {
             return resp::error("NoAccess");
         }
-        if let Err(e) = services::address_book::delete_rule(&state.db, rule.id).await {
-            return resp::error(e.to_string());
+        scope = scope.add(sea_orm::Condition::all()
+            .add(address_book_collection_rule::Column::Id.eq(rule.id))
+            .add(address_book_collection_rule::Column::CollectionId.eq(rule.collection_id)));
+    }
+    let Ok(tx) = state.db.begin().await else {
+        return resp::error("OperationFailed");
+    };
+    match address_book_collection_rule::Entity::delete_many().filter(scope).exec(&tx).await {
+        Ok(result) if result.rows_affected == ids.len() as u64 => {
+            if tx.commit().await.is_err() {
+                return resp::error("OperationFailed");
+            }
         }
+        _ => return resp::error("OperationFailed"),
+    }
+    if let Some(subject) = ids.first().filter(|_| ids.len() == 1) {
+        audit.subject(*subject);
     }
     audit.decision("address_book_grant", "accepted", "grant_revoked");
     "".into_response()

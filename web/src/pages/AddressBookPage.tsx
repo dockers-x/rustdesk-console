@@ -21,7 +21,7 @@ import { formatDateTime } from "../lib/dateFormat";
 const pageSize = 20;
 const permissionLabels = ["", "ruleRead", "ruleReadWrite", "ruleFull"];
 const bookKey = ["address-book"];
-const surface = "rounded-lg border border-kumo-line bg-kumo-elevated";
+const surface = "min-w-0 rounded-lg border border-kumo-line bg-kumo-elevated";
 
 interface Page<T> {
   data: T[];
@@ -198,6 +198,7 @@ export function AddressBookPage() {
               <Plus size={16} />{t("bookNewShared")}
             </Button>
           </div>
+          <div className="overflow-x-auto">
           <Table>
             <Table.Header>
               <Table.Row>
@@ -231,6 +232,7 @@ export function AddressBookPage() {
               ))}
             </Table.Body>
           </Table>
+          </div>
           {profiles.isPending && <TableState tone="loading">{t("loading")}</TableState>}
           {profiles.error && <TableState tone="error">{message(profiles.error, t("operationFailed"))}</TableState>}
           {profiles.data?.total === 0 && <TableState tone="empty">{t("noData")}</TableState>}
@@ -400,6 +402,7 @@ function DeviceTable({ rows, actions, trash = false }: {
   const { t } = useTranslation();
   const headers = ["deviceId", "devices", "alias", "tags", "note", ...(trash ? ["bookDeletedAt"] : []), "actions"];
   return (
+    <div className="overflow-x-auto">
     <Table>
       <Table.Header>
         <Table.Row>{headers.map((key) => <Table.Head key={key}>{t(key)}</Table.Head>)}</Table.Row>
@@ -423,6 +426,7 @@ function DeviceTable({ rows, actions, trash = false }: {
         ))}
       </Table.Body>
     </Table>
+    </div>
   );
 }
 

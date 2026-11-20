@@ -63,10 +63,21 @@ pub async fn hbbs_device_check(
     }
 }
 
+pub async fn hbbs_pairing(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authenticated(&state, &headers) {
+        return resp::unauthorized();
+    }
+    match device_admission::record_pairing(&state.db).await {
+        Ok(()) => resp::no_store(Json(json!({ "allowed": true })).into_response()),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 pub async fn settings(State(state): State<AppState>, _user: AdminUser) -> Response {
     match device_admission::required(&state.db).await {
         Ok(required) => resp::success(json!({
             "require_deployment": required,
+            "hbbs_connected": device_admission::ready(&state.db).await.unwrap_or(false),
             "paired_token_configured": device_admission::token_is_configured(
                 &state.config.security.hbbs_admission_token
             ),
@@ -91,6 +102,12 @@ pub async fn update_settings(
         && !device_admission::token_is_configured(&state.config.security.hbbs_admission_token)
     {
         return resp::fail(101, "Configure the shared hbbs admission token first");
+    }
+    if form.require_deployment && !device_admission::ready(&state.db).await.unwrap_or(false) {
+        return resp::fail(
+            101,
+            "Wait for a paired hbbs to connect before enabling device admission",
+        );
     }
     match device_admission::set_required(&state.db, form.require_deployment).await {
         Ok(()) => {

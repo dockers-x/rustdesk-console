@@ -280,10 +280,29 @@ pub async fn replace_assignment(
     {
         return Err(DbErr::Custom("invalid strategy assignment target".to_string()));
     }
+    if strategy_id < 0 {
+        return Err(DbErr::Custom("invalid strategy ID".into()));
+    }
     let tx = db.begin().await?;
     lock_policy_writes(&tx).await?;
     if strategy_id > 0 && info_by_id(&tx, strategy_id).await?.is_none() {
         return Err(DbErr::RecordNotFound("Strategy".into()));
+    }
+    let target_exists = match target_type {
+        strategy_assignment::TARGET_PEER => peer::Entity::find()
+            .filter(peer::Column::Id.eq(target_id))
+            .one(&tx).await?.is_some(),
+        strategy_assignment::TARGET_USER => ::entity::user::Entity::find_by_id(
+            target_id.parse::<i32>().map_err(|e| DbErr::Custom(e.to_string()))?,
+        ).one(&tx).await?.is_some(),
+        strategy_assignment::TARGET_DEVICE_GROUP => ::entity::device_group::Entity::find_by_id(
+            target_id.parse::<i32>().map_err(|e| DbErr::Custom(e.to_string()))?,
+        ).one(&tx).await?.is_some(),
+        strategy_assignment::TARGET_DEFAULT => true,
+        _ => false,
+    };
+    if !target_exists {
+        return Err(DbErr::RecordNotFound("Strategy target".into()));
     }
     if let Some(id) = previous {
         if strategy_assignment::Entity::delete_by_id(id).exec(&tx).await?.rows_affected == 0 {
@@ -639,6 +658,11 @@ mod tests {
         db.execute(db.get_database_backend().build(&schema.create_table_from_entity(strategy_delivery::Entity)))
             .await
             .unwrap();
+        db.execute(db.get_database_backend().build(&schema.create_table_from_entity(::entity::user::Entity)))
+            .await.unwrap();
+        ::entity::user::ActiveModel {
+            id: Set(7), username: Set("strategy-user".into()), ..Default::default()
+        }.insert(&db).await.unwrap();
         let mut options = HashMap::new();
         options.insert("enable-file-transfer".to_string(), "N".to_string());
         let strategy = create(
@@ -682,6 +706,10 @@ mod tests {
         assert_eq!(initial, effective.config_options);
 
         assert!(assign(&db, 999, strategy_assignment::TARGET_USER, "7", 1).await.is_err());
+        assert!(assign(&db, -1, strategy_assignment::TARGET_USER, "7", 1).await.is_err());
+        let original = list_assignments(&db, 1, 5, None, None).await.unwrap().list[0].id;
+        assert!(replace_assignment(&db, Some(original), strategy.id, strategy_assignment::TARGET_USER, "8", 1)
+            .await.is_err());
         assert_eq!(effective_for_peer(&db, &peer).await.unwrap().unwrap().id, strategy.id);
         let changed = HashMap::from([("enable-clipboard".into(), "N".into())]);
         update(&db, strategy.clone(), "restricted", "", strategy::STATUS_ENABLE, changed, HashMap::new())

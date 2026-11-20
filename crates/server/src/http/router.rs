@@ -38,6 +38,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/login", post(api::login))
         .route("/api/server/authorize-connection", post(super::security::authorize_connection))
         .route("/api/server/device-admission", post(super::routing_policy::hbbs_device_check))
+        .route("/api/server/device-admission/hello", post(super::routing_policy::hbbs_pairing))
         .route("/api/admin/device-admission/settings", get(super::routing_policy::settings).put(super::routing_policy::update_settings))
         .route("/api/admin/device-admission/list", get(super::routing_policy::list))
         .route("/api/admin/device-admission/review", post(super::routing_policy::review))

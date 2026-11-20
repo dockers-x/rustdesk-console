@@ -62,10 +62,36 @@ pub async fn required(db: &DatabaseConnection) -> Result<bool, DbErr> {
         .is_some_and(|settings| settings.require_deployment))
 }
 
+pub async fn record_pairing(db: &DatabaseConnection) -> Result<(), DbErr> {
+    routing_settings::Entity::insert(routing_settings::ActiveModel {
+        id: Set(1),
+        require_deployment: Set(false),
+        last_contact_at: Set(now()),
+    })
+    .on_conflict(
+        OnConflict::column(routing_settings::Column::Id)
+            .update_column(routing_settings::Column::LastContactAt)
+            .to_owned(),
+    )
+    .exec_without_returning(db)
+    .await?;
+    Ok(())
+}
+
+pub async fn ready(db: &DatabaseConnection) -> Result<bool, DbErr> {
+    let cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::seconds(45);
+    Ok(routing_settings::Entity::find_by_id(1)
+        .one(db)
+        .await?
+        .and_then(|row| row.last_contact_at)
+        .is_some_and(|last| last >= cutoff))
+}
+
 pub async fn set_required(db: &DatabaseConnection, enabled: bool) -> Result<(), DbErr> {
     routing_settings::Entity::insert(routing_settings::ActiveModel {
         id: Set(1),
         require_deployment: Set(enabled),
+        last_contact_at: Set(None),
     })
     .on_conflict(
         OnConflict::column(routing_settings::Column::Id)
