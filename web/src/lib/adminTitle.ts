@@ -8,6 +8,7 @@ import { apiGet } from "./api";
 interface PublicAdminConfig {
   title?: string;
   timezone?: string;
+  audit_timezone?: string;
   logo_url?: string | null;
 }
 

@@ -104,11 +104,39 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
   }
 }
 
-.login-grid-bg {
+.login-grid-bg,
+.login-brand::before {
   background-image:
     linear-gradient(to right, var(--color-kumo-line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--color-kumo-line) 1px, transparent 1px);
   background-size: 48px 48px;
+}
+
+.login-brand::before {
+  position: absolute;
+  z-index: -1;
+  inset: -12px;
+  pointer-events: none;
+  opacity: 0.58;
+  mask-image: radial-gradient(ellipse at 20% 35%, black, transparent 75%);
+  content: "";
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .login-brand::before {
+    animation: login-grid-enter 260ms var(--ease-out) both;
+  }
+
+  .login-brand-logo {
+    animation: admin-page-enter 200ms var(--ease-out) 40ms both;
+  }
+}
+
+@keyframes login-grid-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
 }
 
 @keyframes admin-page-enter {

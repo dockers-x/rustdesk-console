@@ -2,13 +2,15 @@
 //! assemble the shared [`AppState`]. Mirrors the Go
 //! `InitGlobal` / `DatabaseAutoUpdate` / `Migrate` flow.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fmt, future::Future};
 
+use anyhow::Context;
 use sea_orm::sea_query::{ColumnDef, Table};
 use sea_orm::{
     AccessMode, ActiveModelTrait, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
@@ -37,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 279;
+pub const DATABASE_VERSION: i32 = 280;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -56,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 9] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 10] {
     [
         SchemaMigration {
             version: 271,
@@ -102,6 +104,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 9] {
             version: 279,
             name: "long system setting values",
             apply: migration_279,
+        },
+        SchemaMigration {
+            version: 280,
+            name: "directed group connection grants",
+            apply: migration_280,
         },
     ]
 }
@@ -173,7 +180,7 @@ pub(crate) fn validate_database_options(
     }
 }
 
-fn database_type(config: &Config) -> &'static str {
+pub(crate) fn database_type(config: &Config) -> &'static str {
     match config.db.r#type.as_str() {
         config::DB_TYPE_MYSQL => config::DB_TYPE_MYSQL,
         config::DB_TYPE_POSTGRESQL => config::DB_TYPE_POSTGRESQL,
@@ -236,6 +243,113 @@ pub(crate) struct DatabaseStatus {
 pub(crate) struct MigrationOutcome {
     pub from_schema: Option<i32>,
     pub installed_schema: i32,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct BackupManifest {
+    pub schema_version: u8,
+    pub component: &'static str,
+    pub version: &'static str,
+    pub database_type: &'static str,
+    pub installed_schema: Option<i32>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub file: &'static str,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+pub(crate) async fn backup_sqlite(destination: &Path) -> anyhow::Result<BackupManifest> {
+    use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sha2::{Digest, Sha256};
+
+    anyhow::ensure!(
+        Path::new(SQLITE_DATABASE_PATH).is_file(),
+        "Console SQLite database is missing or is not a regular file"
+    );
+
+    let mut directory = DirBuilder::new();
+    let mut files = OpenOptions::new();
+    files.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        directory.mode(0o700);
+        files.mode(0o600);
+    }
+    directory
+        .create(destination)
+        .context("could not create a new backup directory")?;
+
+    let result = async {
+        const BACKUP_FILE: &str = "rustdeskapi.db";
+        let path = destination.canonicalize()?.join(BACKUP_FILE);
+        let filename = path.to_str().context("backup path must be valid UTF-8")?;
+        let file = files.open(&path)?;
+        let source = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(SQLITE_DATABASE_PATH)
+                    .read_only(true),
+            )
+            .await
+            .context("could not open the Console SQLite database")?;
+        sea_orm::sqlx::query("VACUUM INTO ?")
+            .bind(filename)
+            .execute(&source)
+            .await
+            .context("could not take a consistent SQLite snapshot")?;
+        source.close().await;
+        file.sync_all()?;
+
+        let snapshot = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(&path).read_only(true))
+            .await
+            .context("could not open the SQLite snapshot")?;
+        let snapshot = sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(snapshot);
+        let installed_schema = latest_schema_version(&snapshot)
+            .await
+            .context("could not read the SQLite snapshot schema")?;
+        snapshot.close().await?;
+
+        let mut sha256 = Sha256::new();
+        let bytes = io::copy(&mut File::open(&path)?, &mut sha256)?;
+        let manifest = BackupManifest {
+            schema_version: 1,
+            component: "rustdesk-console",
+            version: env!("CARGO_PKG_VERSION"),
+            database_type: config::DB_TYPE_SQLITE,
+            installed_schema,
+            created_at: chrono::Utc::now(),
+            file: BACKUP_FILE,
+            bytes,
+            sha256: format!("{:x}", sha256.finalize()),
+        };
+        let manifest_path = destination.join("manifest.json");
+        let manifest_temp = destination.join("manifest.json.tmp");
+        let mut manifest_file = files.open(&manifest_temp)?;
+        serde_json::to_writer_pretty(&mut manifest_file, &manifest)?;
+        manifest_file.write_all(b"\n")?;
+        manifest_file.sync_all()?;
+        drop(manifest_file);
+        fs::rename(manifest_temp, manifest_path)?;
+        #[cfg(unix)]
+        {
+            File::open(destination)?.sync_all()?;
+            let parent = destination
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty());
+            File::open(parent.unwrap_or_else(|| Path::new(".")))?.sync_all()?;
+        }
+        Ok(manifest)
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(destination);
+    }
+    result
 }
 
 pub(crate) async fn database_status(config: &Config) -> DatabaseStatus {
@@ -410,6 +524,19 @@ async fn create_tables(db: &impl ConnectionTrait) -> anyhow::Result<()> {
 
 fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
+}
+
+fn migration_280<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let schema = Schema::new(backend);
+        let statement = schema
+            .create_table_from_entity(entity::connection_grant::Entity)
+            .if_not_exists()
+            .to_owned();
+        db.execute(backend.build(&statement)).await?;
+        Ok(())
+    })
 }
 
 fn migration_272<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
@@ -1405,7 +1532,7 @@ mod tests {
 
         assert_eq!(
             versions,
-            vec![271, 272, 273, 274, 275, 276, 277, 278, DATABASE_VERSION]
+            vec![271, 272, 273, 274, 275, 276, 277, 278, 279, DATABASE_VERSION]
         );
     }
 

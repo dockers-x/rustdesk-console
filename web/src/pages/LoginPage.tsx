@@ -1,15 +1,8 @@
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
-import { cn } from "@cloudflare/kumo/utils";
-import {
-  Key,
-  Monitor,
-  PlugsConnected,
-  ShieldCheck,
-} from "@phosphor-icons/react";
 import { InlineMessage } from "../components/InlineMessage";
 import {
   authenticatedHome,
@@ -64,46 +57,6 @@ interface PasswordResetStart {
 }
 
 type PasswordResetStep = "idle" | "request" | "confirm";
-
-type SignalIcon = ComponentType<{
-  size?: number;
-  weight?: "regular" | "fill";
-  className?: string;
-}>;
-
-function AuthSignal({
-  icon: Icon,
-  label,
-  value,
-  active,
-}: {
-  icon: SignalIcon;
-  label: string;
-  value: string;
-  active: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-3 border-t border-kumo-line py-3 first:border-t-0">
-      <Icon
-        size={18}
-        weight={active ? "fill" : "regular"}
-        className={active ? "text-kumo-default" : "text-kumo-subtle"}
-        aria-hidden
-      />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{label}</div>
-        <div className="mt-0.5 truncate text-xs text-kumo-subtle">{value}</div>
-      </div>
-      <span
-        className={cn(
-          "size-2 rounded-full",
-          active ? "bg-kumo-success" : "bg-kumo-fill",
-        )}
-        aria-hidden="true"
-      />
-    </div>
-  );
-}
 
 function platformName() {
   const p = window.navigator.platform;
@@ -161,10 +114,6 @@ export function LoginPage() {
   const [resetCode, setResetCode] = useState("");
   const [resetPassword, setResetPassword] = useState("");
   const [resetConfirmPassword, setResetConfirmPassword] = useState("");
-
-  const passwordEnabled = !options.disable_pwd;
-  const oidcEnabled = options.ops.length > 0;
-  const captchaEnabled = Boolean(options.need_captcha || captchaInfo);
 
   const loadCaptcha = async () => {
     try {
@@ -509,7 +458,7 @@ export function LoginPage() {
       ? t("passwordResetSubtitle")
       : challenge
         ? t("loginVerificationSubtitle")
-        : t("loginFormSubtitle");
+        : null;
 
   return (
     <div className="relative min-h-full overflow-auto bg-kumo-base px-4 py-6 text-kumo-default sm:px-6 lg:px-8">
@@ -517,79 +466,23 @@ export function LoginPage() {
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-kumo-brand/70" />
       <div className="relative z-10 mx-auto grid min-h-[calc(100dvh-3rem)] w-full max-w-6xl items-center">
         <div className="grid overflow-hidden rounded-lg border border-kumo-line bg-kumo-elevated shadow-lg lg:grid-cols-[minmax(0,1fr)_420px]">
-          <section className="relative overflow-hidden p-6 sm:p-8 lg:p-10">
-            <div className="relative flex h-full min-h-[180px] flex-col justify-between gap-6 sm:min-h-[240px] lg:min-h-[280px] lg:gap-10">
-              <div>
-                <img src={largeLogoUrl} alt="" className="size-14 object-contain" />
-                <h1 className="mt-5 max-w-xl break-words text-3xl font-semibold leading-tight sm:text-4xl lg:text-4xl">
-                  {appTitle}
-                </h1>
-                <p className="mt-4 max-w-md text-sm leading-6 text-kumo-subtle sm:text-base">
-                  {t("loginSubtitle")}
-                </p>
-              </div>
-
-              <div className="hidden max-w-md border-y border-kumo-line lg:block">
-                <AuthSignal
-                  icon={PlugsConnected}
-                  label={t("apiServer")}
-                  value={t("available")}
-                  active
-                />
-                {setupMode ? (
-                  <>
-                    <AuthSignal
-                      icon={ShieldCheck}
-                      label={t("initialSetup")}
-                      value={t("setupAdminHint")}
-                      active
-                    />
-                    <AuthSignal
-                      icon={Key}
-                      label={t("passwordAuth")}
-                      value={t("enabled")}
-                      active
-                    />
-                  </>
-                ) : (
-                  <>
-                    <AuthSignal
-                      icon={ShieldCheck}
-                      label={t("passwordAuth")}
-                      value={passwordEnabled ? t("enabled") : t("disabled")}
-                      active={passwordEnabled}
-                    />
-                    <AuthSignal
-                      icon={Key}
-                      label={t("oauthAuth")}
-                      value={oidcEnabled ? t("available") : t("notAvailable")}
-                      active={oidcEnabled}
-                    />
-                    <AuthSignal
-                      icon={Monitor}
-                      label={t("captchaAuth")}
-                      value={captchaEnabled ? t("enabled") : t("disabled")}
-                      active={captchaEnabled}
-                    />
-                  </>
-                )}
-              </div>
-            </div>
+          <section className="login-brand relative isolate min-w-0 overflow-hidden p-6 sm:p-8 lg:flex lg:flex-col lg:justify-center lg:p-10">
+            <img src={largeLogoUrl} alt="" className="login-brand-logo size-14 object-contain" />
+            <h1 className="mt-5 max-w-xl break-words text-3xl font-semibold leading-tight sm:text-4xl">
+              {appTitle}
+            </h1>
+            <p className="mt-4 max-w-md text-sm leading-6 text-kumo-subtle sm:text-base">
+              {t("loginSubtitle")}
+            </p>
           </section>
 
           <form
             onSubmit={submitActiveForm}
             className="auth-form border-t border-kumo-line bg-kumo-base p-6 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
           >
-            <div className="mb-8">
-              <div className="flex min-h-6 items-center gap-2 text-xs font-medium text-kumo-subtle">
-                <Key size={16} aria-hidden />
-                <span>{setupMode ? t("setupWizardTag") : t("adminAccess")}</span>
-              </div>
-              <h2 className="mt-3 text-2xl font-semibold">{formTitle}</h2>
-              <p className="mt-2 text-sm text-kumo-subtle">
-                {formSubtitle}
-              </p>
+            <div className="mb-6">
+              <h2 className="text-2xl font-semibold">{formTitle}</h2>
+              {formSubtitle && <p className="mt-2 text-sm text-kumo-subtle">{formSubtitle}</p>}
             </div>
 
             <div className="space-y-4">

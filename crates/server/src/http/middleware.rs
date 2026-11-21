@@ -378,7 +378,9 @@ fn restricted_console_access(role: &ConsoleRole, method: &Method, path: &str) ->
                     path,
                     "/api/admin/login_log/list"
                         | "/api/admin/audit_conn/list"
+                        | "/api/admin/audit_conn/export"
                         | "/api/admin/audit_file/list"
+                        | "/api/admin/audit_file/export"
                         | "/api/admin/console-audit/list"
                 )
         }

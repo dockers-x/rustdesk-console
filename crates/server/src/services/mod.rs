@@ -31,6 +31,7 @@ pub mod overview;
 pub mod peer;
 pub mod record_file;
 pub mod record_storage;
+pub(crate) mod remote_backup;
 pub mod server_cmd;
 pub mod share_record;
 pub mod strategy;

@@ -1,11 +1,14 @@
 //! Audit service — ports `service/audit.go` (conn + file logs).
 
-use sea_orm::sea_query::Expr;
+use chrono::{LocalResult, NaiveDate, NaiveDateTime, TimeZone};
+use chrono_tz::{GapInfo, Tz};
+use futures_util::{Stream, StreamExt};
+use sea_orm::sea_query::{Alias, Expr, LikeExpr, Query, SimpleExpr};
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use ::entity::{audit_conn, audit_file, peer};
+use ::entity::{active_connection, audit_conn, audit_file, peer};
 
 use crate::services::paginate;
 
@@ -18,6 +21,217 @@ pub struct AuditConnListResult {
     pub total: i64,
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ConnSearch {
+    page: Option<u64>,
+    page_size: Option<u64>,
+    peer_id: Option<String>,
+    from_peer: Option<String>,
+    q: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+/// The site uses an IANA time zone from TZ. Standalone installs default to UTC.
+pub(crate) fn audit_timezone() -> Tz {
+    std::env::var("TZ")
+        .ok()
+        .and_then(|name| name.trim().parse().ok())
+        .unwrap_or(Tz::UTC)
+}
+
+fn parse_date(value: Option<&str>) -> Result<Option<NaiveDate>, &'static str> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        if value.len() == 10 && value == date.format("%Y-%m-%d").to_string() {
+            return Ok(Some(date));
+        }
+    }
+    Err("AuditDateFormat")
+}
+
+fn start_of_day(date: NaiveDate, zone: Tz) -> Result<NaiveDateTime, &'static str> {
+    let midnight = date.and_time(chrono::NaiveTime::MIN);
+    match zone.from_local_datetime(&midnight) {
+        LocalResult::Single(time) => Some(time),
+        LocalResult::Ambiguous(first, second) => Some(first.min(second)),
+        LocalResult::None => GapInfo::new(&midnight, &zone).and_then(|gap| gap.end),
+    }
+    .map(|time| time.naive_utc())
+    .ok_or("AuditDateFormat")
+}
+
+impl ConnSearch {
+    pub(crate) fn query(&self, zone: Tz) -> Result<Select<audit_conn::Entity>, &'static str> {
+        let from = parse_date(self.from.as_deref())?;
+        let to = parse_date(self.to.as_deref())?;
+        if matches!((from, to), (Some(from), Some(to)) if from > to) {
+            return Err("AuditDateOrder");
+        }
+        let mut query = conn_query(self.peer_id.as_deref(), self.from_peer.as_deref());
+        if let Some(from) = from {
+            query = query.filter(audit_conn::Column::CreatedAt.gte(start_of_day(from, zone)?));
+        }
+        if let Some(to) = to {
+            let next = to.succ_opt().ok_or("AuditDateFormat")?;
+            query = query.filter(audit_conn::Column::CreatedAt.lt(start_of_day(next, zone)?));
+        }
+        if let Some(keyword) = self.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+            let literal = keyword
+                .replace('!', "!!")
+                .replace('%', "!%")
+                .replace('_', "!_");
+            let pattern = LikeExpr::new(format!("%{literal}%")).escape('!');
+            let matching = [
+                audit_conn::Column::PeerId,
+                audit_conn::Column::FromPeer,
+                audit_conn::Column::FromName,
+                audit_conn::Column::Ip,
+                audit_conn::Column::Note,
+            ]
+            .into_iter()
+            .fold(Condition::any(), |condition, column| {
+                condition.add(column.like(pattern.clone()))
+            });
+            query = query.filter(matching);
+        }
+        Ok(query)
+    }
+}
+
+fn conn_query(peer_id: Option<&str>, from_peer: Option<&str>) -> Select<audit_conn::Entity> {
+    let mut query = audit_conn::Entity::find();
+    if let Some(peer_id) = peer_id.filter(|id| !id.is_empty()) {
+        query = query.filter(audit_conn::Column::PeerId.contains(peer_id));
+    }
+    if let Some(from_peer) = from_peer.filter(|id| !id.is_empty()) {
+        query = query.filter(audit_conn::Column::FromPeer.contains(from_peer));
+    }
+    query
+}
+
+#[derive(Debug)]
+struct ConnReport {
+    row: audit_conn::Model,
+    has_recent_snapshot: i32,
+}
+
+impl FromQueryResult for ConnReport {
+    fn from_query_result(result: &QueryResult, prefix: &str) -> Result<Self, DbErr> {
+        Ok(Self {
+            row: audit_conn::Model::from_query_result(result, prefix)?,
+            has_recent_snapshot: result.try_get(prefix, "has_recent_snapshot")?,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ConnAuditRow {
+    #[serde(flatten)]
+    pub row: audit_conn::Model,
+    end_status: &'static str,
+    duration_seconds: Option<i64>,
+    #[serde(skip)]
+    closed_at: Option<NaiveDateTime>,
+}
+
+impl From<ConnReport> for ConnAuditRow {
+    fn from(report: ConnReport) -> Self {
+        let row = report.row;
+        let closed_at = chrono::DateTime::from_timestamp(row.close_time, 0)
+            .filter(|time| time.timestamp() > 0)
+            .map(|time| time.naive_utc());
+        let duration_seconds = row.created_at.and_then(|start| {
+            // Close events have second precision. A same-second close lasts zero seconds.
+            let seconds = closed_at?.and_utc().timestamp() - start.and_utc().timestamp();
+            (seconds >= 0).then_some(seconds)
+        });
+        let end_status = if closed_at.is_some() {
+            "closed"
+        } else if report.has_recent_snapshot == 1 {
+            "active"
+        } else {
+            "unknown"
+        };
+        Self {
+            row,
+            end_status,
+            duration_seconds,
+            closed_at,
+        }
+    }
+}
+
+fn conn_reports(query: Select<audit_conn::Entity>) -> Select<audit_conn::Entity> {
+    use active_connection::Column as Snapshot;
+    use audit_conn::Column as Audit;
+
+    let prior = Alias::new("newer_audit_conn");
+    let source = |column| (audit_conn::Entity, column);
+    let newer = Query::select()
+        .from_as(audit_conn::Entity, prior.clone())
+        .expr(Expr::value(1))
+        .and_where(Expr::col((prior.clone(), Audit::PeerId)).equals(source(Audit::PeerId)))
+        .and_where(Expr::col((prior.clone(), Audit::Uuid)).equals(source(Audit::Uuid)))
+        .and_where(Expr::col((prior.clone(), Audit::ConnId)).equals(source(Audit::ConnId)))
+        .and_where(Expr::col((prior, Audit::Id)).gt(Expr::col(source(Audit::Id))))
+        .to_owned();
+    let fresh_snapshot = Query::select()
+        .from(active_connection::Entity)
+        .expr(Expr::value(1))
+        .and_where(
+            Expr::col((active_connection::Entity, Snapshot::PeerId)).equals(source(Audit::PeerId)),
+        )
+        .and_where(
+            Expr::col((active_connection::Entity, Snapshot::Uuid)).equals(source(Audit::Uuid)),
+        )
+        .and_where(
+            Expr::col((active_connection::Entity, Snapshot::ConnId)).equals(source(Audit::ConnId)),
+        )
+        .and_where(Snapshot::UpdatedAt.gte(super::active_connection::freshness_cutoff()))
+        .and_where(
+            Expr::col((active_connection::Entity, Snapshot::UpdatedAt))
+                .gte(Expr::col(source(Audit::CreatedAt))),
+        )
+        .to_owned();
+    let recent = Condition::all()
+        .add(Audit::CloseTime.lte(0))
+        .add(Audit::ConnId.gt(0))
+        .add(Audit::PeerId.ne(""))
+        .add(Audit::Uuid.ne(""))
+        .add(Expr::exists(fresh_snapshot))
+        .add(Expr::exists(newer).not());
+    let has_recent_snapshot: SimpleExpr = Expr::case(recent, 1_i32).finally(0_i32).into();
+    query.column_as(has_recent_snapshot, "has_recent_snapshot")
+}
+
+pub(crate) async fn conn_list_with_details(
+    db: &DatabaseConnection,
+    query: Select<audit_conn::Entity>,
+    search: &ConnSearch,
+) -> Result<::entity::ListResult<ConnAuditRow>, DbErr> {
+    let (page, page_size) = paginate(
+        search.page.unwrap_or_default(),
+        search.page_size.unwrap_or_default(),
+    );
+    let total = query.clone().count(db).await? as i64;
+    let reports = conn_reports(query)
+        .order_by_desc(audit_conn::Column::Id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .into_model::<ConnReport>()
+        .all(db)
+        .await?;
+    Ok(::entity::ListResult::new(
+        reports.into_iter().map(ConnAuditRow::from).collect(),
+        page as i64,
+        page_size as i64,
+        total,
+    ))
+}
+
 pub async fn conn_list(
     db: &DatabaseConnection,
     page: u64,
@@ -26,13 +240,7 @@ pub async fn conn_list(
     from_peer: Option<String>,
 ) -> Result<AuditConnListResult, DbErr> {
     let (page, page_size) = paginate(page, page_size);
-    let mut q = audit_conn::Entity::find();
-    if let Some(p) = peer_id.filter(|s| !s.is_empty()) {
-        q = q.filter(audit_conn::Column::PeerId.contains(&p));
-    }
-    if let Some(p) = from_peer.filter(|s| !s.is_empty()) {
-        q = q.filter(audit_conn::Column::FromPeer.contains(&p));
-    }
+    let q = conn_query(peer_id.as_deref(), from_peer.as_deref());
     let total = q.clone().count(db).await? as i64;
     let list = q
         .order_by_desc(audit_conn::Column::Id)
@@ -408,7 +616,176 @@ mod tests {
             .create_table_from_entity(audit_file::Entity)
             .to_owned();
         db.execute(backend.build(&stmt)).await.unwrap();
+        let stmt = schema
+            .create_table_from_entity(active_connection::Entity)
+            .to_owned();
+        db.execute(backend.build(&stmt)).await.unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn connection_list_and_csv_share_keyword_and_inclusive_local_day_filters() {
+        let db = setup_audit_db().await;
+        let note = " =中文,\"原文\"\n第二行";
+        for (id, timestamp, target, source, name) in [
+            (1, "2026-03-08 04:59:59", "target-a", "source-a", "Operator"),
+            (2, "2026-03-08 05:00:00", "target-a", "source-a", "Operator"),
+            (3, "2026-03-09 03:59:59", "target-a", "source-a", "Operator"),
+            (4, "2026-03-09 04:00:00", "target-a", "source-a", "Operator"),
+            (5, "2026-03-08 16:00:00", "target-b", "source-a", "Operator"),
+            (6, "2026-03-08 16:00:00", "target-a", "source-b", "Operator"),
+            (7, "2026-03-08 16:00:00", "target-a", "source-a", "Other"),
+        ] {
+            let start =
+                NaiveDateTime::parse_from_str(timestamp, ::entity::datetime::FORMAT).unwrap();
+            audit_conn::ActiveModel {
+                id: Set(id),
+                peer_id: Set(target.to_owned()),
+                from_peer: Set(source.to_owned()),
+                from_name: Set(name.to_owned()),
+                ip: Set("203.0.113.14".to_owned()),
+                created_at: Set(Some(start)),
+                close_time: Set(start.and_utc().timestamp() + 60),
+                note: Set(if id != 7 { note } else { "other 50%_!" }.to_owned()),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        let zone = chrono_tz::America::New_York;
+        let search = ConnSearch {
+            page: Some(2),
+            page_size: Some(1),
+            peer_id: Some("target-a".into()),
+            from_peer: Some("source-a".into()),
+            q: Some("中文".into()),
+            from: Some("2026-03-08".into()),
+            to: Some("2026-03-08".into()),
+        };
+        let query = search.query(zone).unwrap();
+        let listed = conn_list_with_details(&db, query.clone(), &search)
+            .await
+            .unwrap();
+        assert_eq!(listed.total, 2);
+        assert_eq!(listed.list[0].row.id, 2);
+        assert_eq!(listed.list[0].duration_seconds, Some(60));
+        assert_eq!(listed.list[0].end_status, "closed");
+        let exported = conn_export(&db, query).await.unwrap();
+        let exported = exported.split_once("\r\n").unwrap().1;
+        assert!(exported.starts_with("\"3\","));
+        assert!(exported.contains("\r\n\"2\","));
+        assert!(exported.contains("\"2026-03-08T05:00:00Z\",\"2026-03-08T05:01:00Z\",\"60\",\"closed\",\"' =中文,\"\"原文\"\"\n第二行\""));
+        assert_eq!(exported.matches("\r\n").count(), 2);
+
+        for (keyword, total) in [
+            ("target-b", 1),
+            ("source-b", 1),
+            ("Operator", 6),
+            ("203.0.113.14", 7),
+            ("%_!", 1),
+        ] {
+            let search = ConnSearch {
+                q: Some(keyword.into()),
+                ..ConnSearch::default()
+            };
+            let query = search.query(zone).unwrap();
+            assert_eq!(query.count(&db).await.unwrap(), total, "{keyword}");
+        }
+    }
+
+    #[test]
+    fn connection_date_filters_validate_dates_and_handle_a_skipped_day() {
+        let zone = chrono_tz::Pacific::Apia;
+        for invalid in ["2026-1-01", "2026-01-32", "2026-01-01T00:00:00Z"] {
+            let search = ConnSearch {
+                from: Some(invalid.into()),
+                ..ConnSearch::default()
+            };
+            assert_eq!(search.query(zone).unwrap_err(), "AuditDateFormat");
+        }
+        let backwards = ConnSearch {
+            from: Some("2026-04-01".into()),
+            to: Some("2026-03-31".into()),
+            ..ConnSearch::default()
+        };
+        assert_eq!(backwards.query(zone).unwrap_err(), "AuditDateOrder");
+        let skipped = NaiveDate::from_ymd_opt(2011, 12, 30).unwrap();
+        assert_eq!(
+            start_of_day(skipped, zone).unwrap(),
+            start_of_day(skipped.succ_opt().unwrap(), zone).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn connection_list_requires_a_fresh_matching_snapshot_for_active_status() {
+        let db = setup_audit_db().await;
+        for (conn_id, uuid) in [
+            (1, "peer-uuid"),
+            (1, "peer-uuid"),
+            (2, "peer-uuid"),
+            (3, "wrong-uuid"),
+        ] {
+            record_conn_event(
+                &db,
+                &json!({"action":"new","conn_id":conn_id,"id":"target","uuid":uuid}),
+            )
+            .await
+            .unwrap();
+        }
+        super::super::active_connection::sync_for_device(&db, "target", "peer-uuid", &[1, 2, 3])
+            .await
+            .unwrap();
+        active_connection::Entity::update_many()
+            .filter(active_connection::Column::ConnId.eq(2))
+            .col_expr(
+                active_connection::Column::UpdatedAt,
+                Expr::value(
+                    super::super::active_connection::freshness_cutoff()
+                        - chrono::TimeDelta::seconds(1),
+                ),
+            )
+            .exec(&db)
+            .await
+            .unwrap();
+        let search = ConnSearch::default();
+        let listed = conn_list_with_details(&db, search.query(Tz::UTC).unwrap(), &search)
+            .await
+            .unwrap();
+        let status: Vec<_> = listed.list.iter().map(|report| report.end_status).collect();
+        assert_eq!(status, ["unknown", "unknown", "active", "unknown"]);
+    }
+
+    #[tokio::test]
+    async fn csv_rejects_exports_above_the_row_or_byte_limit() {
+        let rows = futures_util::stream::iter((0..=EXPORT_MAX_ROWS).map(Ok));
+        assert!(matches!(
+            export_csv(rows, &["test"], |csv, _| csv.write_row(["row"])).await,
+            Err(ExportError::Limit)
+        ));
+        let rows = futures_util::stream::iter([Ok("a".repeat(EXPORT_MAX_BYTES))]);
+        assert!(matches!(
+            export_csv(rows, &["test"], |csv, data| csv.write_row([data.as_str()])).await,
+            Err(ExportError::Limit)
+        ));
+    }
+
+    #[test]
+    fn csv_quotes_columns_and_protects_spreadsheet_formula_prefixes() {
+        let mut csv = CsvDocument(String::new());
+        csv.write_row([
+            "=1",
+            "+1",
+            "-1",
+            "@1",
+            "\tword",
+            "\rword",
+            "\nword",
+            " \u{feff}＝1",
+            "中文,\"引号\"\n下一行",
+        ])
+        .unwrap();
+        assert_eq!(csv.0, "\"'=1\",\"'+1\",\"'-1\",\"'@1\",\"'\tword\",\"'\rword\",\"'\nword\",\"' \u{feff}＝1\",\"中文,\"\"引号\"\"\n下一行\"\r\n");
     }
 
     async fn count_conn_rows(db: &DatabaseConnection) -> u64 {
@@ -513,9 +890,16 @@ mod tests {
         .unwrap();
         assert_eq!(count_conn_rows(&db).await, 1);
 
-        let row = only_conn_row(&db).await;
+        let mut row = only_conn_row(&db).await;
         assert_eq!(row.action, "close");
         assert!(row.close_time > 0);
+        row.created_at = chrono::DateTime::from_timestamp(row.close_time, 500_000_000)
+            .map(|time| time.naive_utc());
+        let report = ConnAuditRow::from(ConnReport {
+            row,
+            has_recent_snapshot: 0,
+        });
+        assert_eq!(report.duration_seconds, Some(0));
     }
 
     #[tokio::test]
@@ -639,6 +1023,17 @@ mod tests {
             detail["files"],
             json!([{ "name": "report.txt", "size_bytes": "1024" }])
         );
+        let search = FileSearch {
+            direction: Some(FileDirection::Received),
+            peer_id: Some("182921".to_owned()),
+            from_peer: Some("113998".to_owned()),
+            path: Some("report".to_owned()),
+            ..FileSearch::default()
+        };
+        let exported = file_export(&db, &search).await.unwrap();
+        assert!(exported
+            .contains("\"/tmp/report.txt\",\"true\",\"received\",\"3\",\"1024\",\"partial\""));
+        assert_eq!(file_list_with_details(&db, search).await.unwrap().total, 1);
     }
 
     #[tokio::test]
@@ -693,6 +1088,9 @@ mod tests {
             assert!(legacy["file_count"].is_null());
             assert!(legacy["size_bytes"].is_null());
         }
+        let export = file_export(&db, &FileSearch::default()).await.unwrap();
+        assert!(export.contains("\"unknown\",\"\",\"\",\"unknown\""));
+        assert!(export.contains("\"sent\",\"1\",\"9007199254740993\",\"complete\""));
         let filtered = file_list_with_details(
             &db,
             FileSearch {
@@ -734,6 +1132,34 @@ pub struct FileSearch {
     from_peer: Option<String>,
     path: Option<String>,
     direction: Option<FileDirection>,
+}
+
+impl FileSearch {
+    fn query(&self) -> Select<audit_file::Entity> {
+        let mut query = audit_file::Entity::find();
+        if let Some(id) = self.peer_id.as_deref().filter(|id| !id.is_empty()) {
+            query = query.filter(audit_file::Column::PeerId.contains(id));
+        }
+        if let Some(id) = self.from_peer.as_deref().filter(|id| !id.is_empty()) {
+            query = query.filter(audit_file::Column::FromPeer.contains(id));
+        }
+        if let Some(path) = self.path.as_deref().filter(|path| !path.is_empty()) {
+            query = query.filter(audit_file::Column::Path.contains(path));
+        }
+        match self.direction {
+            Some(FileDirection::Sent) => query.filter(audit_file::Column::ReportedType.eq(0)),
+            Some(FileDirection::Received) => query.filter(
+                Condition::any()
+                    .add(audit_file::Column::ReportedType.eq(1))
+                    .add(
+                        Condition::all()
+                            .add(audit_file::Column::ReportedType.is_null())
+                            .add(audit_file::Column::Type.eq(1)),
+                    ),
+            ),
+            None => query,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -860,30 +1286,7 @@ async fn find_file_reports(
         search.page.unwrap_or_default(),
         search.page_size.unwrap_or_default(),
     );
-    let mut q = audit_file::Entity::find();
-    if let Some(p) = search.peer_id.filter(|s| !s.is_empty()) {
-        q = q.filter(audit_file::Column::PeerId.contains(&p));
-    }
-    if let Some(p) = search.from_peer.filter(|s| !s.is_empty()) {
-        q = q.filter(audit_file::Column::FromPeer.contains(&p));
-    }
-    if let Some(path) = search.path.filter(|s| !s.is_empty()) {
-        q = q.filter(audit_file::Column::Path.contains(&path));
-    }
-    if let Some(direction) = search.direction {
-        q = match direction {
-            FileDirection::Sent => q.filter(audit_file::Column::ReportedType.eq(0)),
-            FileDirection::Received => q.filter(
-                Condition::any()
-                    .add(audit_file::Column::ReportedType.eq(1))
-                    .add(
-                        Condition::all()
-                            .add(audit_file::Column::ReportedType.is_null())
-                            .add(audit_file::Column::Type.eq(1)),
-                    ),
-            ),
-        };
-    }
+    let q = search.query();
     let total = q.clone().count(db).await? as i64;
     let list = q
         .order_by_desc(audit_file::Column::Id)
@@ -897,6 +1300,211 @@ async fn find_file_reports(
         page_size as i64,
         total,
     ))
+}
+
+const EXPORT_MAX_ROWS: u64 = 1_000;
+const EXPORT_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ExportError {
+    #[error(transparent)]
+    Database(#[from] DbErr),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("audit export exceeds its size limit")]
+    Limit,
+}
+
+struct CsvDocument(String);
+
+impl CsvDocument {
+    fn write_row<'a>(
+        &mut self,
+        fields: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), ExportError> {
+        for (index, value) in fields.into_iter().enumerate() {
+            let significant = value.trim_start_matches(|c: char| {
+                c.is_whitespace() || c.is_control() || c == '\u{feff}'
+            });
+            let protect = value.starts_with(['\t', '\r', '\n'])
+                || significant.starts_with(['=', '+', '-', '@', '＝', '＋', '－', '＠']);
+            let quoted_length =
+                value.len() + value.as_bytes().iter().filter(|&&b| b == b'"').count();
+            if self.0.len() + quoted_length + usize::from(protect) + 5 > EXPORT_MAX_BYTES {
+                return Err(ExportError::Limit);
+            }
+            if index != 0 {
+                self.0.push(',');
+            }
+            self.0.push('"');
+            if protect {
+                self.0.push('\'');
+            }
+            for part in value.split_inclusive('"') {
+                self.0.push_str(part);
+                if part.ends_with('"') {
+                    self.0.push('"');
+                }
+            }
+            self.0.push('"');
+        }
+        self.0.push_str("\r\n");
+        Ok(())
+    }
+}
+
+async fn export_csv<T>(
+    rows: impl Stream<Item = Result<T, DbErr>>,
+    header: &[&str],
+    write: impl Fn(&mut CsvDocument, T) -> Result<(), ExportError>,
+) -> Result<String, ExportError> {
+    futures_util::pin_mut!(rows);
+    let mut csv = CsvDocument(String::from("\u{feff}"));
+    csv.write_row(header.iter().copied())?;
+    let mut count = 0;
+    while let Some(row) = rows.next().await {
+        let row = row?;
+        if count == EXPORT_MAX_ROWS {
+            return Err(ExportError::Limit);
+        }
+        write(&mut csv, row)?;
+        count += 1;
+    }
+    Ok(csv.0)
+}
+
+fn csv_time(value: Option<NaiveDateTime>) -> String {
+    value
+        .map(|time| {
+            time.and_utc()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) async fn conn_export(
+    db: &DatabaseConnection,
+    query: Select<audit_conn::Entity>,
+) -> Result<String, ExportError> {
+    let rows = conn_reports(query)
+        .order_by_desc(audit_conn::Column::Id)
+        .limit(EXPORT_MAX_ROWS + 1)
+        .into_model::<ConnReport>()
+        .stream(db)
+        .await?;
+    export_csv(
+        rows,
+        &[
+            "id",
+            "peer_id",
+            "from_peer",
+            "from_name",
+            "ip",
+            "created_at_utc",
+            "closed_at_utc",
+            "duration_seconds",
+            "end_status",
+            "note",
+            "action",
+            "conn_id",
+            "session_id",
+            "type",
+            "uuid",
+            "updated_at_utc",
+        ],
+        |csv, report| {
+            let report = ConnAuditRow::from(report);
+            let row = report.row;
+            csv.write_row([
+                row.id.to_string().as_str(),
+                &row.peer_id,
+                &row.from_peer,
+                &row.from_name,
+                &row.ip,
+                &csv_time(row.created_at),
+                &csv_time(report.closed_at),
+                &report
+                    .duration_seconds
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                report.end_status,
+                &row.note,
+                &row.action,
+                &row.conn_id.to_string(),
+                &row.session_id,
+                &row.r#type.to_string(),
+                &row.uuid,
+                &csv_time(row.updated_at),
+            ])
+        },
+    )
+    .await
+}
+
+pub(crate) async fn file_export(
+    db: &DatabaseConnection,
+    search: &FileSearch,
+) -> Result<String, ExportError> {
+    let rows = search
+        .query()
+        .order_by_desc(audit_file::Column::Id)
+        .limit(EXPORT_MAX_ROWS + 1)
+        .stream(db)
+        .await?;
+    export_csv(
+        rows,
+        &[
+            "id",
+            "peer_id",
+            "from_peer",
+            "from_name",
+            "ip",
+            "created_at_utc",
+            "path",
+            "is_file",
+            "direction",
+            "file_count",
+            "size_bytes",
+            "size_status",
+            "reported_files",
+            "conn_id",
+            "uuid",
+            "updated_at_utc",
+        ],
+        |csv, row| {
+            let report = FileAuditRow::from_row(row);
+            let row = report.row;
+            let direction = match report.direction {
+                Some(FileDirection::Sent) => "sent",
+                Some(FileDirection::Received) => "received",
+                None => "unknown",
+            };
+            let size_status = match &report.size_bytes {
+                None => "unknown",
+                Some(_) if report.size_is_partial => "partial",
+                Some(_) => "complete",
+            };
+            csv.write_row([
+                row.id.to_string().as_str(),
+                &row.peer_id,
+                &row.from_peer,
+                &row.from_name,
+                &row.ip,
+                &csv_time(row.created_at),
+                &row.path,
+                &row.is_file.to_string(),
+                direction,
+                &report.file_count.map(|v| v.to_string()).unwrap_or_default(),
+                report.size_bytes.as_deref().unwrap_or_default(),
+                size_status,
+                &serde_json::to_string(&report.files)?,
+                &report.conn_id.map(|v| v.to_string()).unwrap_or_default(),
+                &row.uuid,
+                &csv_time(row.updated_at),
+            ])
+        },
+    )
+    .await
 }
 
 pub async fn record_file_event(db: &impl ConnectionTrait, body: &JsonValue) -> Result<(), DbErr> {

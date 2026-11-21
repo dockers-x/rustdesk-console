@@ -96,11 +96,27 @@ export function FileAuditTotals({ row }: { row: AuditRow }) {
       {count !== undefined && (
         <span>{t("fileAuditCount", { count, number: new Intl.NumberFormat(i18n.language).format(count) })}</span>
       )}
-      {hasSize && (
-        <span className="text-kumo-subtle">
+      <span className="text-kumo-subtle">
+        {hasSize ? <>
           <FileSize bytes={row.size_bytes} />{row.size_is_partial === true && ` · ${t("fileAuditListedSize")}`}
-        </span>
-      )}
+        </> : <Missing />}
+      </span>
+    </div>
+  );
+}
+
+export function FileAuditSummary({ row }: { row: AuditRow }) {
+  const adminConfig = usePublicAdminConfig();
+  const timestamp = formatDateTime(row.created_at, adminConfig.data?.timezone?.trim() || undefined);
+  return (
+    <div className="grid max-w-44 gap-1">
+      <span className="whitespace-nowrap tabular-nums">{timestamp || "—"}</span>
+      <div className="grid gap-1 sm:hidden">
+        <FileAuditPeer row={row} />
+        <FileAuditDirection row={row} />
+        <FileAuditPath row={row} />
+        <FileAuditTotals row={row} />
+      </div>
     </div>
   );
 }
@@ -114,7 +130,7 @@ export function FileAuditDetails({ row }: { row: AuditRow }) {
   const ip = text(row.ip);
   return (
     <Dialog.Root>
-      <Dialog.Trigger render={<Button size="sm" variant="ghost" />}>
+      <Dialog.Trigger render={<Button size="sm" variant="ghost" className="min-h-11 sm:min-h-0" />}>
         {t("fileAuditOpenDetails")}
       </Dialog.Trigger>
       <Dialog className={dialogPanelClass}>

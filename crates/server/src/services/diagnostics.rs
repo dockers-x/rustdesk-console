@@ -53,22 +53,13 @@ pub async fn run(
     checks.push(check_database(db).await);
     checks.push(check_api_runtime(version, start_time));
     checks.push(check_webclient_config(webclient));
-    checks.push(
-        check_tcp_port(
-            "id_command_port",
-            "ID command port",
-            normalized_id_command_port(config),
-        )
-        .await,
+    let (id, relay) = tokio::join!(
+        check_daemon("HBBS_HEALTH_PORT", "hbbs_readiness", "HBBS readiness", "id_command_port",
+            "ID command port", normalized_id_command_port(config)),
+        check_daemon("HBBR_HEALTH_PORT", "hbbr_readiness", "HBBR readiness", "relay_command_port",
+            "Relay command port", normalize_port(config.admin.relay_server_port)),
     );
-    checks.push(
-        check_tcp_port(
-            "relay_command_port",
-            "Relay command port",
-            normalize_port(config.admin.relay_server_port),
-        )
-        .await,
-    );
+    checks.extend([id, relay]);
 
     let summary = summarize(&checks);
     DiagnosticsReport {
@@ -144,6 +135,40 @@ fn check_webclient_config(cfg: &WebClientConfig) -> DiagnosticCheck {
         } else {
             format!("Missing values: {}", missing.join(", "))
         },
+        elapsed_ms: started.elapsed().as_millis(),
+    }
+}
+
+async fn check_daemon(
+    variable: &str, key: &str, label: &str, tcp_key: &str, tcp_label: &str, tcp_port: Option<u16>,
+) -> DiagnosticCheck {
+    let Ok(value) = std::env::var(variable) else {
+        return check_tcp_port(tcp_key, tcp_label, tcp_port).await;
+    };
+    let started = Instant::now();
+    let result = async {
+        let port = value.parse::<u16>().ok().filter(|port| *port > 0)
+            .ok_or_else(|| format!("Invalid {variable}"))?;
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_millis(800))
+            .build()
+            .map_err(|_| "Could not initialize readiness check".to_string())?
+            .get(format!("http://127.0.0.1:{port}/readyz"))
+            .send()
+            .await
+            .map_err(|_| format!("127.0.0.1:{port} readiness check failed or timed out"))?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(format!("{label} returned HTTP {}", response.status().as_u16()));
+        }
+        Ok(format!("{label} returned HTTP 200"))
+    }.await;
+    DiagnosticCheck {
+        key: key.into(),
+        label: label.into(),
+        status: if result.is_ok() { DiagnosticStatus::Ok } else { DiagnosticStatus::Error },
+        message: result.unwrap_or_else(|message| message),
         elapsed_ms: started.elapsed().as_millis(),
     }
 }

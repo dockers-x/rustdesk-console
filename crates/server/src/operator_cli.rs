@@ -1,4 +1,4 @@
-//! Local version, configuration, schema and account recovery commands.
+//! Local version, configuration, database and account recovery commands.
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::SocketAddr;
@@ -33,7 +33,7 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Inspect or apply the database schema.
+    /// Inspect, migrate or back up the database.
     Database {
         #[command(subcommand)]
         command: DatabaseCommand,
@@ -65,6 +65,21 @@ pub(crate) enum DatabaseCommand {
     Status(Output),
     /// Apply the database schema without starting Console or seeding accounts.
     Migrate(Output),
+    /// Write a consistent SQLite snapshot and manifest to a new directory.
+    Backup {
+        /// New directory for the backup files. Its parent must exist.
+        #[arg(long, value_name = "DIRECTORY")]
+        output: PathBuf,
+        #[command(flatten)]
+        format: Output,
+    },
+    /// Upload an existing backup archive to every configured remote target.
+    UploadBackup {
+        #[arg(value_name = "ARCHIVE")]
+        archive: PathBuf,
+        #[command(flatten)]
+        format: Output,
+    },
 }
 
 #[derive(Args)]
@@ -173,6 +188,12 @@ impl Command {
             Self::Database {
                 command: DatabaseCommand::Migrate(output),
             } => migrate(config_path, output).await,
+            Self::Database {
+                command: DatabaseCommand::Backup { output, format },
+            } => backup(config_path, &output, format).await,
+            Self::Database {
+                command: DatabaseCommand::UploadBackup { archive, format },
+            } => upload_backup(config_path, &archive, format).await,
             Self::AdminPassword(password) => return password_reset(config_path, 1, password).await,
             Self::Password { user_id, password } => {
                 if user_id <= 0 {
@@ -378,11 +399,84 @@ async fn status(config_path: &str, output: Output) -> io::Result<u8> {
         output,
         data,
         &format!(
-            "database schema {} (installed {installed}, target {DATABASE_VERSION})",
+            "{database_type} database schema {} (installed {installed}, target {DATABASE_VERSION})",
             status.state
         ),
         code,
     )
+}
+
+async fn upload_backup(config_path: &str, archive: &std::path::Path, output: Output) -> io::Result<u8> {
+    let Ok(config) = config::init(config_path) else {
+        return config_failed(output);
+    };
+    match services::remote_backup::publish_file(&config, archive).await {
+        Ok(deliveries) => {
+            let text = deliveries.iter().map(|delivery| {
+                let outcome = if delivery.uploaded() { "uploaded" } else { "failed" };
+                format!("{}: {outcome}", delivery.name)
+            }).collect::<Vec<_>>().join("\n");
+            let code = if deliveries.iter().all(|delivery| delivery.uploaded()) { 0 } else { EXIT_DATABASE };
+            emit(output, json!({"targets": deliveries}), &text, code)
+        }
+        Err(error) => emit(
+            output,
+            json!({"error": {"code": "BACKUP_UPLOAD_FAILED", "message": error.to_string()}}),
+            &format!("Could not upload archive: {error}"),
+            EXIT_DATABASE,
+        ),
+    }
+}
+
+async fn backup(
+    config_path: &str,
+    destination: &std::path::Path,
+    output: Output,
+) -> io::Result<u8> {
+    let Ok(config) = config::init(config_path) else {
+        return config_failed(output);
+    };
+    let Ok(database_type) = bootstrap::validate_database_options(&config) else {
+        return config_failed(output);
+    };
+    let external_tool = match database_type {
+        config::DB_TYPE_MYSQL => Some("mysqldump (or mariadb-dump)"),
+        config::DB_TYPE_POSTGRESQL => Some("pg_dump"),
+        _ => None,
+    };
+    if let Some(tool) = external_tool {
+        let message = format!("use {tool} to back up the {database_type} database");
+        return emit(
+            output,
+            json!({
+                "database_type": database_type,
+                "error": {"code": "DATABASE_BACKUP_UNSUPPORTED", "message": message},
+            }),
+            &message,
+            EXIT_DATABASE,
+        );
+    }
+
+    match bootstrap::backup_sqlite(destination).await {
+        Ok(manifest) => emit(
+            output,
+            json!(manifest),
+            &format!("SQLite backup written to {}", destination.display()),
+            0,
+        ),
+        Err(error) => {
+            let message = format!("database backup failed: {error}");
+            emit(
+                output,
+                json!({
+                    "database_type": database_type,
+                    "error": {"code": "DATABASE_BACKUP_FAILED", "message": message},
+                }),
+                &message,
+                EXIT_DATABASE,
+            )
+        }
+    }
 }
 
 async fn migrate(config_path: &str, output: Output) -> io::Result<u8> {

@@ -6,8 +6,10 @@ import { addressBookMessages } from "./locales/addressBook";
 import { routingPolicyMessages } from "./locales/routingPolicy";
 import { consoleAuditMessages } from "./locales/consoleAudit";
 import { fileAuditMessages } from "./locales/fileAudit";
+import { connectionAuditMessages } from "./locales/connectionAudit";
 import { delegationMessages } from "./locales/delegation";
 import { passwordResetMessages } from "./locales/passwordReset";
+import { backupAndGrants } from "./locales/backupAndGrants";
 import { ru } from "./locales/ru";
 
 const en: Record<string, string> = {
@@ -2095,9 +2097,9 @@ i18n.on("languageChanged", (language) => {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en, ...fileAuditMessages.en, ...delegationMessages.en, ...passwordResetMessages.en } },
-    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru, ...fileAuditMessages.ru, ...delegationMessages.ru, ...passwordResetMessages.ru } },
-    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"], ...fileAuditMessages["zh-CN"], ...delegationMessages["zh-CN"], ...passwordResetMessages["zh-CN"] } },
+    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en, ...fileAuditMessages.en, ...connectionAuditMessages.en, ...delegationMessages.en, ...passwordResetMessages.en, ...backupAndGrants.en } },
+    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru, ...fileAuditMessages.ru, ...connectionAuditMessages.ru, ...delegationMessages.ru, ...passwordResetMessages.ru, ...backupAndGrants.ru } },
+    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"], ...fileAuditMessages["zh-CN"], ...connectionAuditMessages["zh-CN"], ...delegationMessages["zh-CN"], ...passwordResetMessages["zh-CN"], ...backupAndGrants["zh-CN"] } },
   },
   lng: detectLang(),
   fallbackLng: "en",

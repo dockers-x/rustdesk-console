@@ -11,6 +11,7 @@ rustdesk-console version --json
 rustdesk-console config validate --config ./conf/config.yaml --json
 rustdesk-console database status --config ./conf/config.yaml --json
 rustdesk-console database migrate --config ./conf/config.yaml --json
+rustdesk-console database backup --config ./conf/config.yaml --output /backups/console-2026-11-21 --json
 ```
 
 | Command | Behavior |
@@ -19,6 +20,7 @@ rustdesk-console database migrate --config ./conf/config.yaml --json
 | `config validate` | Loads YAML and environment overrides, checks runtime settings and local references, and reports optional missing files as warnings. It does not open the database or start the server. |
 | `database status` | Uses a read-only connection to inspect the configured database. A missing SQLite file reports `empty` without creating the file or its parent directory. |
 | `database migrate` | Creates missing tables and runs the existing migrations and their backfills. Startup and explicit migration share the same migration lock. Default groups and administrator setup run only on normal startup. |
+| `database backup` | Writes a consistent SQLite snapshot and a JSON manifest to a new directory. |
 
 The schema states are `empty`, `current`, `upgrade_required`,
 `newer_than_binary` and `invalid`. `safe_to_start` means that the reported
@@ -27,12 +29,37 @@ migrations when necessary. A newer schema is refused before any tables or
 accounts are modified. Repeating `database migrate` is safe. Its `migrated`
 field indicates that the recorded version advanced.
 
-The four inspection and migration commands accept `--json` and print a single
+These commands accept `--json` and print a single
 object with `schema_version: 1` to stdout. Their exit codes are `0` for
 success, `1` for output errors, `2` for command usage errors, `3` for invalid
-configuration, `4` for database connection or migration errors, and `5` for
+configuration, `4` for database connection, migration or backup errors, and `5` for
 incompatible or invalid schema metadata. Status reports `empty` and
 `upgrade_required` with exit code `0` because inspection completed.
+
+## SQLite backup and restore
+
+`database backup` uses SQLite's `VACUUM INTO` and can run while Console is
+accepting writes. The parent of `--output` must exist and the output directory
+must be new. The directory contains `rustdeskapi.db` and `manifest.json`.
+The manifest records the binary version, schema from the snapshot, UTC creation
+time, file size and SHA-256 checksum. On Unix, the directory uses mode `0700`
+and files use `0600`, subject to a stricter umask. On Windows, create the
+backup under a directory accessible only to authorized operators.
+
+To restore, compare the snapshot's SHA-256 with the manifest and run
+`sqlite3 -readonly rustdeskapi.db 'PRAGMA integrity_check;'` against the
+snapshot. Stop Console and every other writer. Move the current database and
+any corresponding `-wal`, `-shm` and `-journal` files out of the active path
+for rollback. Copy in the verified snapshot with the service account's
+ownership and private permissions. Run `database status` with the intended
+binary and config before restarting and checking login and address books.
+
+`database status` identifies the configured backend. Use `mysqldump` or
+`mariadb-dump` for MySQL/MariaDB and `pg_dump` for PostgreSQL. Save Console
+configuration, deployment secrets, signing keys and recordings alongside the
+database backup as separate datasets. For bundled S6 deployments, follow the
+Server image's offline backup guide to capture both databases and the service
+keys together.
 
 ## Account recovery
 
@@ -50,3 +77,62 @@ password of 4–72 bytes with an optional final LF or CRLF. Spaces are preserved
 Both password reset commands revoke the selected user's sessions. The existing
 positional password forms remain available for compatibility. Use the secure
 options so the password stays out of the process arguments and shell history.
+
+## Remote SQLite backups
+
+Add named targets to the Console configuration file and restart Console.
+To keep credentials out of S6 offline archives, point `backup-config-file` at a
+separately mounted YAML secret file. That file contains the contents of the
+`backup` section starting at `interval-hours`, without the enclosing key,
+and takes precedence over inline targets. Relative paths are resolved from
+the Console configuration file's directory.
+**Diagnostics → Remote SQLite backups** shows the configured targets and each
+target's latest result. **Back up now** starts a background run immediately.
+
+```yaml
+backup:
+  interval-hours: 24
+  targets:
+    - name: Offsite S3
+      storage:
+        type: s3
+        s3:
+          endpoint: https://s3.us-east-1.amazonaws.com
+          region: us-east-1
+          bucket: private-rustdesk-backups
+          prefix: console/production
+          access-key-id: REPLACE_ME
+          secret-access-key: REPLACE_ME
+    - name: WebDAV archive
+      storage:
+        type: webdav
+        webdav:
+          url: https://dav.example.com/backups
+          prefix: console/production
+          username: REPLACE_ME
+          password: REPLACE_ME
+```
+
+An interval of 0 enables manual runs only. Automatic runs start when the
+configured number of hours has passed since the last attempt. The first
+scheduled run is due immediately. Manual and scheduled runs share a lock. Each
+run creates one ZIP and uploads it independently to every target. Use a
+private bucket or WebDAV collection with access controls and configure remote
+retention on the storage side. The ZIP includes sensitive database contents
+and uses storage-side encryption if enabled by the target. Use HTTPS.
+For private HTTP deployments, opting in requires `allow-http: true` on that
+target. For S3-compatible path-style endpoints, set `force-path-style: true`
+under `s3`.
+
+Download a ZIP from a successful target, extract it into a private directory
+and use its `manifest.json` and `rustdeskapi.db` with the restore procedure
+above. The newest run's status is kept in `data/remote-backup-status.json`.
+
+For a completed S6 offline tar, the same destinations can be used by running
+`rustdesk-console -c ./conf/config.yaml database upload-backup /backups/s6-2026-11-21.tar --json`.
+Store remote credentials in the separate secret file before capturing an S6
+tar. The S6 archive includes the main YAML file.
+Run this as part of a host maintenance schedule after successful offline
+capture if required. It waits for every destination and exits with status 4
+if any delivery failed. The Console schedule captures only its own SQLite
+database and runs without stopping S6.

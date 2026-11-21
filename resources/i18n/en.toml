@@ -1,4 +1,8 @@
 InvalidSiteLogo = "Choose a valid static PNG up to 512 × 512 pixels and 256 KB."
+AuditDateFormat = "Enter dates in YYYY-MM-DD format."
+AuditDateOrder = "The end date must be on or after the start date."
+AuditExportLimit = "The export exceeds 1,000 records or 8 MiB. Narrow the filters and try again."
+AuditExportFailed = "Could not export the audit records."
 ResetCodeInvalid = "The reset code is incorrect or has expired."
 DirectoryPasswordManaged = "This password is managed by the directory."
 ResetMailSmtpRequired = "Configure and enable SMTP before sending password reset emails."

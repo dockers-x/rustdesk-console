@@ -6,8 +6,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use entity::user;
-use serde::Deserialize;
+use entity::{connection_grant, peer, user};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::middleware::RustClientUser;
@@ -75,14 +76,9 @@ pub async fn authorize_connection(
     caller: RustClientUser,
     Json(request): Json<ConnectionRequest>,
 ) -> Response {
-    let allowed =
-        if caller.user.must_change_password || request.id.is_empty() || request.id.len() > 128 {
-            false
-        } else {
-            connection_allowed(&state, &caller.user, &request.id)
-                .await
-                .unwrap_or(false)
-        };
+    let allowed = evaluate_connection(&state, &caller.user, &request.id)
+        .await
+        .is_ok_and(ConnectionDecision::allowed);
     if !allowed {
         return Json(json!({"allowed": false})).into_response();
     }
@@ -93,32 +89,68 @@ pub async fn authorize_connection(
     }
 }
 
-async fn connection_allowed(
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConnectionDecision {
+    AccountUnavailable,
+    DeviceUnavailable,
+    OwnerUnavailable,
+    Administrator,
+    Owner,
+    GroupGrant,
+    NoGrant,
+}
+
+impl ConnectionDecision {
+    pub(crate) fn allowed(self) -> bool {
+        matches!(self, Self::Administrator | Self::Owner | Self::GroupGrant)
+    }
+}
+
+pub(crate) async fn evaluate_connection(
     state: &AppState,
     caller: &user::Model,
     id: &str,
-) -> Result<bool, sea_orm::DbErr> {
-    let Some(device) = services::peer::find_by_id(&state.db, id).await? else {
-        return Ok(false);
-    };
-    if device.status != user::STATUS_ENABLE {
-        return Ok(false);
+) -> Result<ConnectionDecision, sea_orm::DbErr> {
+    use ConnectionDecision::*;
+    if !caller.is_enabled() || caller.must_change_password {
+        return Ok(AccountUnavailable);
     }
+    if id.is_empty() || id.len() > 128 {
+        return Ok(DeviceUnavailable);
+    }
+    let Some(device) = peer::Entity::find()
+        .filter(services::exact_device_id_eq(state.db.get_database_backend(), peer::Column::Id, id))
+        .filter(peer::Column::Status.eq(user::STATUS_ENABLE))
+        .one(&state.db)
+        .await?
+    else {
+        return Ok(DeviceUnavailable);
+    };
     if caller.is_admin() {
-        return Ok(true);
+        return Ok(Administrator);
     }
     if device.user_id <= 0 {
-        return Ok(false);
+        return Ok(OwnerUnavailable);
     }
     let Some(owner) = services::user::info_by_id(&state.db, device.user_id).await? else {
-        return Ok(false);
+        return Ok(OwnerUnavailable);
     };
     if !owner.is_enabled() {
-        return Ok(false);
+        return Ok(OwnerUnavailable);
+    }
+    if owner.id == caller.id {
+        return Ok(Owner);
     }
     // Address books are editable inventory. Their membership or sharing rules
     // cannot establish a device-level connection grant.
-    Ok(device.user_id == caller.id)
+    if caller.group_id > 0 && device.group_id > 0
+        && connection_grant::Entity::find_by_id((caller.group_id, device.group_id))
+            .one(&state.db).await?.is_some()
+    {
+        return Ok(GroupGrant);
+    }
+    Ok(NoGrant)
 }
 
 #[cfg(test)]
@@ -149,6 +181,9 @@ mod tests {
             schema.create_table_from_entity(address_book_collection::Entity),
             schema.create_table_from_entity(address_book_collection_rule::Entity),
             schema.create_table_from_entity(entity::group::Entity),
+            schema.create_table_from_entity(entity::device_group::Entity),
+            schema.create_table_from_entity(connection_grant::Entity),
+
             schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(entity::login_log::Entity),
             schema.create_table_from_entity(entity::login_verification::Entity),
@@ -225,6 +260,51 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
         body["allowed"].as_bool().unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn connection_grants_share_preview_and_runtime_and_revoke() {
+        use entity::{device_group, group};
+        let state = fixture().await;
+        group::ActiveModel { id: Set(2), name: Set("Support".into()), ..Default::default() }
+            .insert(&state.db).await.unwrap();
+        device_group::ActiveModel { id: Set(42), name: Set("Kiosks".into()), ..Default::default() }
+            .insert(&state.db).await.unwrap();
+        peer::Entity::update_many().col_expr(peer::Column::GroupId, 42.into())
+            .exec(&state.db).await.unwrap();
+
+        let url = "/api/admin/connection-grants/2/42";
+        let (_, response) = json_request(&state, "PUT", url, json!(null), Some("token-2")).await;
+        assert_ne!(response["code"], 0);
+        assert!(!allowed(&state, "token-2", "device-1").await);
+        for _ in 0..2 {
+            let (_, response) = json_request(&state, "PUT", url, json!(null), Some("token-3")).await;
+            assert_eq!(response["code"], 0);
+        }
+        assert!(allowed(&state, "token-2", "device-1").await);
+        assert!(!allowed(&state, "token-2", "Device-1").await);
+        peer::ActiveModel {
+            id: Set("device-2".into()), uuid: Set("device-uuid-2".into()),
+            user_id: Set(2), group_id: Set(2), status: Set(1), ..Default::default()
+        }.insert(&state.db).await.unwrap();
+        assert!(!allowed(&state, "token-1", "device-2").await);
+        let (_, response) = json_request(
+            &state, "POST", "/api/admin/connection-grants/preview",
+            json!({"username": "user-2", "device_id": "device-1"}), Some("token-3"),
+        ).await;
+        assert_eq!(response["data"], json!({"allowed": true, "reason": "group_grant"}));
+
+        peer::Entity::update_many().filter(peer::Column::Id.eq("device-1"))
+            .col_expr(peer::Column::Status, 0.into()).exec(&state.db).await.unwrap();
+        assert!(!allowed(&state, "token-2", "device-1").await);
+        peer::Entity::update_many().filter(peer::Column::Id.eq("device-1"))
+            .col_expr(peer::Column::Status, 1.into()).exec(&state.db).await.unwrap();
+        let (_, response) = json_request(&state, "DELETE", url, json!(null), Some("token-3")).await;
+        assert_eq!(response["code"], 0);
+        assert!(!allowed(&state, "token-2", "device-1").await);
+        json_request(&state, "PUT", url, json!(null), Some("token-3")).await;
+        device_group::Entity::delete_by_id(42).exec(&state.db).await.unwrap();
+        assert!(!allowed(&state, "token-2", "device-1").await);
     }
 
     #[tokio::test]

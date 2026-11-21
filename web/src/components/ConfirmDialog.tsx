@@ -1,4 +1,4 @@
-import { WarningCircle } from "@phosphor-icons/react";
+import { ShieldCheck, WarningCircle } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 import { compactDialogPanelClass } from "./DialogLayout";
@@ -10,6 +10,7 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   cancelLabel: string;
   error?: string;
+  destructive?: boolean;
   loading?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -22,6 +23,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   error,
+  destructive = true,
   loading = false,
   onOpenChange,
   onConfirm,
@@ -31,14 +33,14 @@ export function ConfirmDialog({
       <Dialog size="sm" className={compactDialogPanelClass}>
         <div className="px-5 pt-5">
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-kumo-danger/10 text-kumo-danger">
-              <WarningCircle size={20} weight="fill" />
+            <div className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg ${destructive ? "bg-kumo-danger/10 text-kumo-danger" : "bg-kumo-fill text-kumo-default"}`}>
+              {destructive ? <WarningCircle aria-hidden size={20} weight="fill" /> : <ShieldCheck aria-hidden size={20} />}
             </div>
             <div className="min-w-0">
               <Dialog.Title className="text-base font-semibold">
                 {title}
               </Dialog.Title>
-              <Dialog.Description className="mt-1 text-sm leading-6 text-kumo-subtle">
+              <Dialog.Description className="mt-1 text-sm leading-6 text-kumo-subtle [overflow-wrap:anywhere]">
                 {description}
               </Dialog.Description>
               {error && (
@@ -52,12 +54,13 @@ export function ConfirmDialog({
         <div className="mt-5 flex justify-end gap-2 border-t border-kumo-line bg-kumo-recessed px-5 py-4">
           <Button
             variant="secondary"
+            className="max-sm:min-h-11"
             disabled={loading}
             onClick={() => onOpenChange(false)}
           >
             {cancelLabel}
           </Button>
-          <Button variant="destructive" loading={loading} onClick={onConfirm}>
+          <Button variant={destructive ? "destructive" : "primary"} className="max-sm:min-h-11" loading={loading} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </div>

@@ -89,6 +89,133 @@ fn version_validation_and_empty_status_have_no_local_side_effects() {
 }
 
 #[tokio::test]
+async fn backup_snapshots_committed_wal_data_and_preserves_an_existing_destination() {
+    use sea_orm::sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};
+    use sha2::{Digest, Sha256};
+
+    let directory = TestDirectory::new();
+    directory.config("{}");
+    fs::create_dir(directory.0.join("data")).unwrap();
+    let options = SqliteConnectOptions::new()
+        .filename(directory.0.join("data/rustdeskapi.db"))
+        .create_if_missing(true);
+    let mut writer = SqliteConnection::connect_with(&options).await.unwrap();
+    sea_orm::sqlx::raw_sql(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA wal_autocheckpoint=0;
+         CREATE TABLE versions (id INTEGER PRIMARY KEY, version INTEGER);
+         INSERT INTO versions VALUES (1, 270);
+         CREATE TABLE records (id INTEGER PRIMARY KEY);
+         INSERT INTO records VALUES (1);
+         BEGIN IMMEDIATE;
+         INSERT INTO records VALUES (2);",
+    )
+    .execute(&mut writer)
+    .await
+    .unwrap();
+
+    let arguments = [
+        "database",
+        "backup",
+        "--output",
+        "a backup ' #?.dir",
+        "--json",
+    ];
+    let mut command = directory.command(&arguments);
+    let output = tokio::task::spawn_blocking(move || command.output().unwrap())
+        .await
+        .unwrap();
+    let result = json(output, 0);
+    let backup = directory.0.join("a backup ' #?.dir");
+    let snapshot = backup.join("rustdeskapi.db");
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(backup.join("manifest.json")).unwrap()).unwrap();
+    let bytes = fs::read(&snapshot).unwrap();
+    assert_eq!(result, manifest);
+    assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(manifest["database_type"], "sqlite");
+    assert_eq!(manifest["installed_schema"], 270);
+    assert_eq!(manifest["bytes"], bytes.len());
+    assert_eq!(manifest["sha256"], format!("{:x}", Sha256::digest(&bytes)));
+    assert!(manifest["created_at"]
+        .as_str()
+        .is_some_and(|v| chrono::DateTime::parse_from_rfc3339(v).is_ok()));
+    assert_eq!(fs::read_dir(&backup).unwrap().count(), 2);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for (path, mode) in [
+            (&backup, 0o700),
+            (&snapshot, 0o600),
+            (&backup.join("manifest.json"), 0o600),
+        ] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+    }
+
+    let mut snapshot = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(snapshot)
+            .read_only(true),
+    )
+    .await
+    .unwrap();
+    let integrity: String = sea_orm::sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(&mut snapshot)
+        .await
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    let rows: Vec<i64> = sea_orm::sqlx::query_scalar("SELECT id FROM records ORDER BY id")
+        .fetch_all(&mut snapshot)
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![1]);
+
+    let failed = json(directory.command(&arguments).output().unwrap(), 4);
+    assert_eq!(failed["error"]["code"], "DATABASE_BACKUP_FAILED");
+    assert_eq!(fs::read(backup.join("rustdeskapi.db")).unwrap(), bytes);
+}
+
+#[test]
+fn backup_requires_an_existing_sqlite_database() {
+    let directory = TestDirectory::new();
+    let run = || {
+        directory
+            .command(&["database", "backup", "--output", "backup", "--json"])
+            .output()
+            .unwrap()
+    };
+    directory.config("{}");
+    let failed = json(run(), 4);
+    assert_eq!(failed["error"]["code"], "DATABASE_BACKUP_FAILED");
+    assert!(!directory.0.join("data").exists());
+    assert!(!directory.0.join("backup").exists());
+
+    for (database_type, tool, options) in [
+        (
+            "mysql",
+            "mysqldump",
+            "mysql:\n  addr: 127.0.0.1:3306\n  dbname: console\n",
+        ),
+        (
+            "postgresql",
+            "pg_dump",
+            "postgresql:\n  host: 127.0.0.1\n  port: \"5432\"\n  user: console\n  dbname: console\n",
+        ),
+    ] {
+        directory.config(&format!("db:\n  type: {database_type}\n{options}"));
+        let failed = json(run(), 4);
+        assert_eq!(failed["database_type"], database_type);
+        assert_eq!(failed["error"]["code"], "DATABASE_BACKUP_UNSUPPORTED");
+        assert!(failed["error"]["message"].as_str().unwrap().contains(tool));
+        assert!(!directory.0.join("backup").exists());
+    }
+}
+
+#[tokio::test]
 async fn status_and_migration_preserve_a_future_database() {
     let directory = TestDirectory::new();
     directory.config("{}");

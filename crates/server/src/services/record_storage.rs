@@ -296,8 +296,29 @@ async fn s3_request(
     body: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
     let body = body.unwrap_or_default();
-    let url = s3_url(cfg, key)?;
     let payload_hash = hex_sha256(&body);
+    let response = signed_s3_request(&Client::new(), cfg, method, key, &payload_hash)?
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| "failed to access S3 record storage".to_string())?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("S3 record storage returned HTTP {}", status.as_u16()));
+    }
+    response.bytes().await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|_| "failed to read S3 record storage response".to_string())
+}
+
+fn signed_s3_request(
+    client: &Client,
+    cfg: &RecordStorageS3,
+    method: Method,
+    key: &str,
+    payload_hash: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    let url = s3_url(cfg, key)?;
     let now = chrono::Utc::now();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
     let date = now.format("%Y%m%d").to_string();
@@ -331,28 +352,55 @@ async fn s3_request(
         cfg.access_key_id, scope, signed_headers, signature
     );
 
-    let client = Client::new();
-    let response = client
+    Ok(client
         .request(method, url)
         .header("authorization", authorization)
         .header("x-amz-content-sha256", payload_hash)
-        .header("x-amz-date", amz_date)
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| "failed to access S3 record storage".to_string())?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| "failed to read S3 record storage response".to_string())?;
-    if !status.is_success() {
-        return Err(format!(
-            "S3 record storage returned HTTP {}",
-            status.as_u16()
-        ));
+        .header("x-amz-date", amz_date))
+}
+
+pub(crate) async fn upload_backup(
+    client: &Client,
+    cfg: &RecordStorage,
+    name: &str,
+    path: &Path,
+    hash: &str,
+    bytes: u64,
+) -> Result<(), String> {
+    let request = match cfg.normalized_type() {
+        RECORD_STORAGE_S3 => {
+            validate_s3(&cfg.s3)?;
+            let key = format!("{}{name}", cfg.s3.prefix);
+            signed_s3_request(client, &cfg.s3, Method::PUT, &key, hash)?
+        }
+        RECORD_STORAGE_WEBDAV => {
+            validate_webdav(&cfg.webdav)?;
+            let key = format!("{}{name}", cfg.webdav.prefix);
+            let method = Method::from_bytes(b"MKCOL").map_err(|_| "Invalid WebDAV method")?;
+            let mut prefix = String::new();
+            for segment in cfg.webdav.prefix.split('/').filter(|part| !part.is_empty()) {
+                prefix.push_str(segment);
+                let response = webdav_builder(client, &cfg.webdav, method.clone(), &prefix)?
+                    .send().await.map_err(|_| "Could not access WebDAV")?;
+                if !response.status().is_success() && response.status().as_u16() != 405 {
+                    return Err(format!("WebDAV MKCOL returned HTTP {}", response.status().as_u16()));
+                }
+                prefix.push('/');
+            }
+            webdav_builder(client, &cfg.webdav, Method::PUT, &key)?
+        }
+        _ => return Err("Unsupported backup destination".to_string()),
+    };
+    let file = tokio::fs::File::open(path).await.map_err(|_| "Could not open backup")?;
+    let response = request
+        .header(reqwest::header::CONTENT_LENGTH, bytes)
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(file)
+        .send().await.map_err(|_| "Could not upload backup")?;
+    if !response.status().is_success() {
+        return Err(format!("Upload returned HTTP {}", response.status().as_u16()));
     }
-    Ok(bytes.to_vec())
+    Ok(())
 }
 
 fn s3_url(cfg: &RecordStorageS3, key: &str) -> Result<Url, String> {
@@ -478,11 +526,7 @@ async fn webdav_raw_request(
     key: &str,
     body: Option<Vec<u8>>,
 ) -> Result<reqwest::Response, String> {
-    let client = Client::new();
-    let mut request = client.request(method, webdav_url(cfg, key)?);
-    if !cfg.username.is_empty() || !cfg.password.is_empty() {
-        request = request.basic_auth(&cfg.username, Some(&cfg.password));
-    }
+    let mut request = webdav_builder(&Client::new(), cfg, method, key)?;
     if let Some(body) = body {
         request = request.body(body);
     }
@@ -492,12 +536,26 @@ async fn webdav_raw_request(
         .map_err(|_| "failed to access WebDAV record storage".to_string())
 }
 
+fn webdav_builder(
+    client: &Client,
+    cfg: &RecordStorageWebDav,
+    method: Method,
+    key: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    let mut request = client.request(method, webdav_url(cfg, key)?);
+    if !cfg.username.is_empty() || !cfg.password.is_empty() {
+        request = request.basic_auth(&cfg.username, Some(&cfg.password));
+    }
+    Ok(request)
+}
+
 fn webdav_url(cfg: &RecordStorageWebDav, key: &str) -> Result<Url, String> {
     let mut url = Url::parse(&cfg.url).map_err(|_| "invalid WebDAV URL".to_string())?;
     {
         let mut segments = url
             .path_segments_mut()
             .map_err(|_| "invalid WebDAV URL".to_string())?;
+        segments.pop_if_empty();
         for segment in key.split('/').filter(|segment| !segment.is_empty()) {
             segments.push(segment);
         }

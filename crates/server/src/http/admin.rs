@@ -19,7 +19,7 @@ use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
 use crate::http::security_audit::AuditContext;
 use crate::services;
-use crate::services::audit_devices;
+use crate::services::{audit, audit_devices};
 use crate::services::console_roles::ConsoleRole;
 use crate::services::login_security::{ChallengeSources, VerificationKind};
 use crate::services::user::{LoginProof, AUTH_ENROLLMENT, AUTH_TOTP};
@@ -538,11 +538,13 @@ pub async fn setup_initialize(
 
 pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUser>) -> Response {
     let timezone = std::env::var("TZ").unwrap_or_default();
+    let audit_timezone = audit::audit_timezone().name();
     let Some(user) = user else {
         let cfg = state.admin_config.view(None).await;
         return resp::success(json!({
             "title": cfg.title,
             "timezone": timezone,
+            "audit_timezone": audit_timezone,
             "logo_url": cfg.logo_url,
         }));
     };
@@ -551,6 +553,7 @@ pub async fn config_admin(State(state): State<AppState>, user: Option<BackendUse
         "title": cfg.title,
         "hello": cfg.hello,
         "timezone": timezone,
+        "audit_timezone": audit_timezone,
         "logo_url": cfg.logo_url,
     }))
 }
@@ -2998,47 +3001,32 @@ pub async fn oauth_unbind(
 // audit logs
 // ===========================================================================
 
-#[derive(Deserialize, Default)]
-pub struct AuditQuery {
-    #[serde(default)]
-    pub page: Option<u64>,
-    #[serde(default)]
-    pub page_size: Option<u64>,
-    #[serde(default)]
-    pub peer_id: Option<String>,
-    #[serde(default)]
-    pub from_peer: Option<String>,
-}
-
 pub async fn audit_conn_list(
     State(state): State<AppState>,
     user: AuditReader,
-    Query(q): Query<AuditQuery>,
+    AcceptLang(lang): AcceptLang,
+    Query(search): Query<audit::ConnSearch>,
 ) -> Response {
-    match services::audit::conn_list(
-        &state.db,
-        q.page.unwrap_or(0),
-        q.page_size.unwrap_or(0),
-        q.peer_id,
-        q.from_peer,
-    )
-    .await
-    {
+    let query = match search.query(audit::audit_timezone()) {
+        Ok(query) => query,
+        Err(key) => return resp::fail(101, state.tr(&lang, key)),
+    };
+    match audit::conn_list_with_details(&state.db, query, &search).await {
         Ok(r) => {
             let devices = audit_devices::lookup(
                 &state.db,
                 user.can_lookup_devices(),
                 r.list
                     .iter()
-                    .flat_map(|row| [row.peer_id.as_str(), row.from_peer.as_str()]),
+                    .flat_map(|report| [report.row.peer_id.as_str(), report.row.from_peer.as_str()]),
             )
             .await;
             let list = r
                 .list
                 .into_iter()
                 .map(|row| {
-                    let peer = devices.get(&row.peer_id).cloned();
-                    let from_peer = devices.get(&row.from_peer).cloned();
+                    let peer = devices.get(&row.row.peer_id).cloned();
+                    let from_peer = devices.get(&row.row.from_peer).cloned();
                     audit_devices::DeviceFields::peers(row, peer, from_peer)
                 })
                 .collect();
@@ -3046,6 +3034,24 @@ pub async fn audit_conn_list(
         }
         Err(e) => resp::fail(101, e.to_string()),
     }
+}
+
+pub async fn audit_conn_export(
+    State(state): State<AppState>,
+    _user: AuditReader,
+    AcceptLang(lang): AcceptLang,
+    Query(search): Query<audit::ConnSearch>,
+) -> Response {
+    let query = match search.query(audit::audit_timezone()) {
+        Ok(query) => query,
+        Err(key) => return resp::fail(101, state.tr(&lang, key)),
+    };
+    audit_export_response(
+        &state,
+        &lang,
+        audit::conn_export(&state.db, query).await,
+        "attachment; filename=connection-audit.csv",
+    )
 }
 
 pub async fn audit_conn_delete(
@@ -3101,6 +3107,48 @@ pub async fn audit_file_list(
         }
         Err(e) => resp::fail(101, e.to_string()),
     }
+}
+
+pub async fn audit_file_export(
+    State(state): State<AppState>,
+    _user: AuditReader,
+    AcceptLang(lang): AcceptLang,
+    Query(search): Query<audit::FileSearch>,
+) -> Response {
+    audit_export_response(
+        &state,
+        &lang,
+        audit::file_export(&state.db, &search).await,
+        "attachment; filename=file-audit.csv",
+    )
+}
+
+fn audit_export_response(
+    state: &AppState,
+    lang: &str,
+    result: Result<String, audit::ExportError>,
+    disposition: &'static str,
+) -> Response {
+    let response = match result {
+        Ok(csv) => {
+            let mut response = Response::new(Body::from(csv));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/csv; charset=utf-8"),
+            );
+            response.headers_mut().insert(
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static(disposition),
+            );
+            response
+        }
+        Err(audit::ExportError::Limit) => resp::fail(101, state.tr(lang, "AuditExportLimit")),
+        Err(err) => {
+            tracing::warn!(error = %err, "audit export failed");
+            resp::fail(101, state.tr(lang, "AuditExportFailed"))
+        }
+    };
+    resp::no_store(response)
 }
 
 pub async fn audit_file_delete(

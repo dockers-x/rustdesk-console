@@ -13,6 +13,7 @@ import { cn } from "@cloudflare/kumo/utils";
 import { TableState } from "../components/TableState";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiPost } from "../lib/api";
+import { RemoteBackupPanel } from "./RemoteBackupPanel";
 import { formatDateTime } from "../lib/dateFormat";
 
 type DiagnosticStatus = "ok" | "warning" | "error";
@@ -129,6 +130,7 @@ export function DiagnosticsPage() {
           </div>
         )}
       </section>
+      <RemoteBackupPanel timeZone={displayTimeZone} />
     </div>
   );
 }

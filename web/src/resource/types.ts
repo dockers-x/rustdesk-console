@@ -60,6 +60,7 @@ export interface FieldDef {
 export interface ColumnDef<T = Record<string, unknown>> {
   key: string;
   label: string; // i18n key
+  hideOnMobile?: boolean;
   render?: (row: T, t: (k: string) => string) => ReactNode;
 }
 
@@ -71,7 +72,7 @@ export interface FilterDef {
   allLabel?: string;
   name: string; // query-param name
   label: string; // i18n key (placeholder)
-  type?: "text" | "select";
+  type?: "text" | "select" | "date";
   options?: SelectOption[];
 }
 
@@ -84,6 +85,7 @@ export interface ResourceConfig<T = Record<string, unknown>> {
   titleKey: string;
   /** API base, e.g. `/api/admin/user`. */
   api: string;
+  csvFilename?: string;
   /** Primary key field on the row + in delete payloads ("id" | "row_id"). */
   idField?: string;
   columns: ColumnDef<T>[];

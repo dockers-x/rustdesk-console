@@ -5,9 +5,9 @@ use axum::{
 };
 use chrono::Utc;
 use entity::{
-    address_book, address_book_collection as collection, address_book_collection_rule as rule,
-    address_book_trash, console_audit, group, login_verification, system_setting, tag, user,
-    user_token,
+    active_connection, address_book, address_book_collection as collection,
+    address_book_collection_rule as rule, address_book_trash, audit_conn, audit_file,
+    console_audit, group, login_verification, system_setting, tag, user, user_token,
 };
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, EntityTrait,
@@ -75,6 +75,9 @@ async fn setup() -> (DatabaseConnection, Router) {
         schema.create_table_from_entity(console_audit::Entity),
         schema.create_table_from_entity(login_verification::Entity),
         schema.create_table_from_entity(system_setting::Entity),
+        schema.create_table_from_entity(audit_conn::Entity),
+        schema.create_table_from_entity(audit_file::Entity),
+        schema.create_table_from_entity(active_connection::Entity),
     ] {
         db.execute(DbBackend::Sqlite.build(&table)).await.unwrap();
     }
@@ -133,6 +136,60 @@ async fn setup() -> (DatabaseConnection, Router) {
     }
     let app = crate::http::router::build(test_state(db.clone()));
     (db, app)
+}
+
+#[tokio::test]
+async fn audit_exports_grant_the_same_access_as_lists() {
+    let (db, app) = setup().await;
+    let (_, body) = request(
+        &app,
+        "PUT",
+        "/api/admin/console-role/6",
+        1,
+        json!({"role":"audit_reader"}),
+    )
+    .await;
+    assert_eq!(body["code"], 0);
+    user_token::Entity::delete_by_id(6).exec(&db).await.unwrap();
+    session(&db, 6).await;
+    for kind in ["audit_conn", "audit_file"] {
+        for path in ["list", "export"] {
+            let denied = format!("/api/admin/{kind}/{path}");
+            let (_, body) = request(&app, "GET", &denied, 3, Value::Null).await;
+            assert_eq!(body["code"], 401, "{denied}: {body}");
+        }
+        let list = format!("/api/admin/{kind}/list");
+        let (_, body) = request(&app, "GET", &list, 6, Value::Null).await;
+        assert_eq!(body["code"], 0, "{list}: {body}");
+        for actor in [1, 6] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/admin/{kind}/export"))
+                        .header("api-token", format!("token{actor}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (parts, body) = response.into_parts();
+            let csv = to_bytes(body, 1024).await.unwrap();
+            assert_eq!(parts.status, StatusCode::OK);
+            assert_eq!(
+                parts.headers["content-type"],
+                "text/csv; charset=utf-8",
+                "{kind} for actor {actor}: {}",
+                String::from_utf8_lossy(&csv)
+            );
+            assert!(parts.headers["content-disposition"]
+                .to_str()
+                .unwrap()
+                .ends_with(".csv"));
+            assert_eq!(parts.headers["cache-control"], "no-store");
+            assert!(csv.starts_with("\u{feff}\"id\",\"peer_id\"".as_bytes()));
+        }
+    }
 }
 
 async fn request(

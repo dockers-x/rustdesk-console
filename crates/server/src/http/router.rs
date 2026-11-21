@@ -42,6 +42,11 @@ pub fn build(state: AppState) -> Router {
         .route("/api/login-options", get(api::login_options))
         .route("/api/login", post(api::login))
         .route("/api/server/authorize-connection", post(super::security::authorize_connection))
+        .route("/api/admin/backups", get(super::remote_backup::status))
+        .route("/api/admin/backups/run", post(super::remote_backup::start))
+        .route("/api/admin/connection-grants/preview", post(super::connection_grant::preview))
+        .route("/api/admin/connection-grants/:group", get(super::connection_grant::list))
+        .route("/api/admin/connection-grants/:group/:device_group", put(super::connection_grant::create).delete(super::connection_grant::remove))
         .route("/api/server/device-admission", post(super::routing_policy::hbbs_device_check))
         .route("/api/server/device-admission/hello", post(super::routing_policy::hbbs_pairing))
         .route("/api/admin/device-admission/settings", get(super::routing_policy::settings).put(super::routing_policy::update_settings))
@@ -562,6 +567,7 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/console-audit/cleanup", post(super::console_audit::cleanup))
         // audit
         .route("/api/admin/audit_conn/list", get(admin::audit_conn_list))
+        .route("/api/admin/audit_conn/export", get(admin::audit_conn_export))
         .route(
             "/api/admin/audit_conn/delete",
             post(admin::audit_conn_delete),
@@ -571,6 +577,7 @@ fn admin_routes() -> Router<AppState> {
             post(admin::audit_conn_batch_delete),
         )
         .route("/api/admin/audit_file/list", get(admin::audit_file_list))
+        .route("/api/admin/audit_file/export", get(admin::audit_file_export))
         .route(
             "/api/admin/audit_file/delete",
             post(admin::audit_file_delete),

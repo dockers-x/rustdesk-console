@@ -18,9 +18,13 @@ pub struct ActiveConnectionListResult {
     pub total: i64,
 }
 
+pub(super) fn freshness_cutoff() -> chrono::NaiveDateTime {
+    Utc::now().naive_utc() - ACTIVE_CONNECTION_WINDOW
+}
+
 fn current_connections() -> Select<active_connection::Entity> {
-    let cutoff = Utc::now().naive_utc() - ACTIVE_CONNECTION_WINDOW;
-    active_connection::Entity::find().filter(active_connection::Column::UpdatedAt.gte(cutoff))
+    active_connection::Entity::find()
+        .filter(active_connection::Column::UpdatedAt.gte(freshness_cutoff()))
 }
 
 pub async fn count(db: &DatabaseConnection) -> Result<u64, DbErr> {

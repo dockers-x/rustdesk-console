@@ -35,6 +35,7 @@ import {
   StrategyOptionsInput,
 } from "./strategyOptions";
 import type { FieldDef, ResourceConfig } from "./types";
+import { AuditExport, AuditFilters } from "./AuditControls";
 
 interface ListResult {
   list: Record<string, unknown>[];
@@ -152,7 +153,8 @@ export function ResourcePage({
   const qc = useQueryClient();
   const idField = cfg.idField ?? "id";
   const adminConfig = usePublicAdminConfig();
-  const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
+  const auditTimeZone = cfg.name === "audit_conn" ? adminConfig.data?.audit_timezone ?? "UTC" : undefined;
+  const displayTimeZone = auditTimeZone ?? (adminConfig.data?.timezone?.trim() || undefined);
 
   const [searchParams] = useSearchParams();
   const linkedDeviceId = ["peers", "address_book"].includes(cfg.name)
@@ -167,6 +169,11 @@ export function ResourcePage({
         : {},
   );
   const exactDeviceId = Boolean(linkedDeviceId && filters.id === linkedDeviceId);
+  const activeFilters = Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== ""));
+  const setFilter = (name: string, value: string) => {
+    setFilters((current) => ({ ...current, [name]: value }));
+    setPage(1);
+  };
 
   const sessionId = getAuthSessionId();
   const queryKey = useMemo(
@@ -184,9 +191,7 @@ export function ResourcePage({
         page,
         page_size: PAGE_SIZE,
         exact_id: exactDeviceId || undefined,
-        ...Object.fromEntries(
-          Object.entries(filters).filter(([, v]) => v !== ""),
-        ),
+        ...activeFilters,
       }),
   });
 
@@ -256,17 +261,14 @@ export function ResourcePage({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">{t(cfg.titleKey)}</h1>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          {(cfg.filters ?? []).map((flt) => (
+          {!cfg.csvFilename && (cfg.filters ?? []).map((flt) => (
             flt.type === "select" ? (
               <select
                 aria-label={t(flt.label)}
                 key={flt.name}
                 className="h-11 w-full min-w-36 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand sm:h-9 sm:w-auto"
                 value={filters[flt.name] ?? ""}
-                onChange={(e) => {
-                  setFilters((s) => ({ ...s, [flt.name]: e.target.value }));
-                  setPage(1);
-                }}
+                onChange={(e) => setFilter(flt.name, e.target.value)}
               >
                 <option value="">{t(flt.allLabel ?? "all")}</option>
                 {(flt.options ?? []).map((option) => (
@@ -282,10 +284,7 @@ export function ResourcePage({
                 className="min-h-11 min-w-0 flex-1 sm:min-h-0 sm:min-w-48 sm:flex-none"
                 placeholder={t(flt.label)}
                 value={filters[flt.name] ?? ""}
-                onChange={(e) => {
-                  setFilters((s) => ({ ...s, [flt.name]: e.target.value }));
-                  setPage(1);
-                }}
+                onChange={(e) => setFilter(flt.name, e.target.value)}
               />
             )
           ))}
@@ -299,6 +298,13 @@ export function ResourcePage({
           )}
         </div>
       </div>
+
+      {cfg.csvFilename && (
+        <>
+          <AuditFilters definitions={cfg.filters ?? []} filters={filters} setFilter={setFilter} timeZone={auditTimeZone} />
+          <AuditExport api={cfg.api} filename={cfg.csvFilename} params={activeFilters} />
+        </>
+      )}
 
       {beforeTable}
 
@@ -331,7 +337,9 @@ export function ResourcePage({
           <Table.Header>
             <Table.Row>
               {cfg.columns.map((c) => (
-                <Table.Head key={c.key}>{t(c.label)}</Table.Head>
+                <Table.Head key={c.key} className={c.hideOnMobile ? "hidden sm:table-cell" : undefined}>
+                  {t(c.label)}
+                </Table.Head>
               ))}
               {showActions && (
                 <Table.Head sticky="right">{t("actions")}</Table.Head>
@@ -342,7 +350,7 @@ export function ResourcePage({
             {rows.map((row, i) => (
               <Table.Row key={String(row[idField] ?? i)}>
                 {cfg.columns.map((c) => (
-                  <Table.Cell key={c.key}>
+                  <Table.Cell key={c.key} className={c.hideOnMobile ? "hidden sm:table-cell" : undefined}>
                     {c.render
                       ? c.render(row, t)
                       : asText(row[c.key], c.key, displayTimeZone)}
@@ -370,6 +378,7 @@ export function ResourcePage({
                         <Button
                           size="sm"
                           variant="secondary-destructive"
+                          className={cfg.csvFilename ? "min-h-11 sm:min-h-0" : undefined}
                           onClick={() => {
                             remove.reset();
                             setDeleteTarget(row);

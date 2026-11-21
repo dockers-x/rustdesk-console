@@ -36,6 +36,9 @@ pub struct Config {
     pub oss: Oss,
     #[serde(rename = "record-storage")]
     pub record_storage: RecordStorage,
+    pub(crate) backup: crate::services::remote_backup::Settings,
+    #[serde(rename = "backup-config-file")]
+    pub(crate) backup_config_file: String,
     pub jwt: Jwt,
     pub rustdesk: Rustdesk,
     pub proxy: Proxy,
@@ -470,6 +473,15 @@ pub fn init(path: &str) -> anyhow::Result<Config> {
     cfg.rustdesk.load_key_file();
     cfg.admin.init();
     cfg.record_storage = cfg.record_storage.normalize();
+    if !cfg.backup_config_file.trim().is_empty() {
+        let path = std::path::Path::new(path).with_file_name(cfg.backup_config_file.trim());
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("Could not read backup configuration: {error}"))?;
+        cfg.backup = serde_json::from_value(serde_yaml_to_json(&raw)
+            .map_err(|_| anyhow::anyhow!("Invalid backup configuration file"))?)
+            .map_err(|_| anyhow::anyhow!("Invalid backup configuration file"))?;
+    }
+    cfg.backup.validate()?;
     Ok(cfg)
 }
 

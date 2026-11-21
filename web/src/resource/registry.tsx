@@ -1,11 +1,13 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { Link as RouterLink } from "react-router-dom";
 import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
+import { ConnectionAuditDetails, ConnectionAuditDevice, ConnectionAuditDuration } from "../components/ConnectionAuditDetails";
 import {
   FileAuditDetails,
   FileAuditDirection,
   FileAuditPath,
   FileAuditPeer,
+  FileAuditSummary,
   FileAuditTotals,
 } from "../components/FileAuditDetails";
 import { DeploymentTokenActions } from "../components/DeploymentTokenActions";
@@ -1071,27 +1073,31 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     name: "audit_conn",
     titleKey: "auditConn",
     api: "/api/admin/audit_conn",
+    csvFilename: "connection-audit.csv",
     canCreate: false,
     canEdit: false,
     filters: [
+      { name: "q", label: "auditKeyword" },
       { name: "peer_id", label: "deviceId" },
       { name: "from_peer", label: "fromPeer" },
+      { name: "from", label: "auditDateFrom", type: "date" },
+      { name: "to", label: "auditDateTo", type: "date" },
     ],
     columns: [
-      { key: "id", label: "id" },
-      { key: "action", label: "action" },
-      auditDeviceCol("peer_id", "deviceId"),
-      auditDeviceCol("from_peer", "fromPeer"),
-      { key: "from_name", label: "fromName" },
-      { key: "ip", label: "ip" },
-      { key: "created_at", label: "createdAt" },
+      { key: "peer_id", label: "deviceId", render: (row) => <ConnectionAuditDevice row={row} /> },
+      { ...auditDeviceCol("from_peer", "fromPeer"), hideOnMobile: true },
+      { key: "created_at", label: "auditStartedAt", hideOnMobile: true },
+      { key: "duration_seconds", label: "auditDuration", hideOnMobile: true, render: (row) => <ConnectionAuditDuration row={row} /> },
+      { ...noteCol, label: "auditReportedNote", hideOnMobile: true },
     ],
     fields: [],
+    rowActions: (row) => <ConnectionAuditDetails row={row} />,
   },
   {
     name: "audit_file",
     titleKey: "auditFile",
     api: "/api/admin/audit_file",
+    csvFilename: "file-audit.csv",
     canCreate: false,
     canEdit: false,
     filters: [
@@ -1110,12 +1116,12 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       },
     ],
     columns: [
-      { key: "created_at", label: "createdAt" },
-      { key: "peer_id", label: "fileAuditReportingDevice", render: (row) => <FileAuditPeer row={row} /> },
-      { key: "direction", label: "fileAuditDirection", render: (row) => <FileAuditDirection row={row} /> },
-      { key: "from_peer", label: "fileAuditRemoteDevice", render: (row) => <FileAuditPeer row={row} remote /> },
-      { key: "path", label: "fileAuditPathOrFile", render: (row) => <FileAuditPath row={row} /> },
-      { key: "file_count", label: "fileAuditFilesAndSize", render: (row) => <FileAuditTotals row={row} /> },
+      { key: "created_at", label: "createdAt", render: (row) => <FileAuditSummary row={row} /> },
+      { key: "peer_id", label: "fileAuditReportingDevice", hideOnMobile: true, render: (row) => <FileAuditPeer row={row} /> },
+      { key: "direction", label: "fileAuditDirection", hideOnMobile: true, render: (row) => <FileAuditDirection row={row} /> },
+      { key: "from_peer", label: "fileAuditRemoteDevice", hideOnMobile: true, render: (row) => <FileAuditPeer row={row} remote /> },
+      { key: "path", label: "fileAuditPathOrFile", hideOnMobile: true, render: (row) => <FileAuditPath row={row} /> },
+      { key: "file_count", label: "fileAuditFilesAndSize", hideOnMobile: true, render: (row) => <FileAuditTotals row={row} /> },
     ],
     fields: [],
     rowActions: (row) => <FileAuditDetails row={row} />,
