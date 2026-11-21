@@ -14,6 +14,8 @@ use ::entity::{
 
 use crate::services::now;
 
+use super::console_roles::{self, RemovedScope};
+
 pub fn platform_from_os(os: &str) -> String {
     let l = os.to_lowercase();
     if l.contains("android") {
@@ -628,6 +630,7 @@ pub struct AddressBookListResult {
 #[derive(Default)]
 pub struct AbFilters {
     pub id: Option<String>,
+    pub exact_id: bool,
     pub user_id: Option<i32>,
     pub username: Option<String>,
     pub hostname: Option<String>,
@@ -643,7 +646,15 @@ pub async fn admin_list(
     let (page, page_size) = crate::services::paginate(page, page_size);
     let mut q = address_book::Entity::find();
     if let Some(v) = f.id.filter(|s| !s.is_empty()) {
-        q = q.filter(address_book::Column::Id.contains(&v));
+        q = if f.exact_id {
+            q.filter(super::exact_device_id_eq(
+                db.get_database_backend(),
+                address_book::Column::Id,
+                &v,
+            ))
+        } else {
+            q.filter(address_book::Column::Id.contains(&v))
+        };
     }
     if let Some(v) = f.user_id.filter(|v| *v > 0) {
         q = q.filter(address_book::Column::UserId.eq(v));
@@ -857,7 +868,12 @@ pub async fn update_collection_profile(
     name: &str,
     note: Option<&str>,
 ) -> Result<(), DbErr> {
-    let tx = db.begin().await?;
+    let owner_changed = current.user_id != user_id;
+    let tx = if owner_changed {
+        console_roles::authority_transaction(db).await?
+    } else {
+        db.begin().await?
+    };
     let mut update = address_book_collection::Entity::update_many()
         .col_expr(address_book_collection::Column::UserId, Expr::value(user_id))
         .col_expr(address_book_collection::Column::Name, Expr::value(name))
@@ -867,18 +883,22 @@ pub async fn update_collection_profile(
     if let Some(note) = note {
         update = update.col_expr(address_book_collection::Column::Note, Expr::value(note));
     }
-    update.exec(&tx).await?;
+    // A concurrent transfer may have already changed the previous owner.
+    let affected = update.exec(&tx).await?.rows_affected;
     let actual = address_book_collection::Entity::find_by_id(current.id).one(&tx).await?;
-    if actual.is_none_or(|row| row.user_id != user_id) {
+    if (owner_changed && affected != 1) || actual.is_none_or(|row| row.user_id != user_id) {
         return Err(DbErr::RecordNotUpdated);
     }
     transfer_collection_owner(&tx, current.id, current.user_id, user_id).await?;
+    if owner_changed {
+        console_roles::remove_scope(&tx, RemovedScope::Collection(current.id)).await?;
+    }
     tx.commit().await
 }
 
 /// Delete a collection and its rules + address books (≈ `DeleteCollection`).
 pub async fn delete_collection(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
-    let tx = db.begin().await?;
+    let tx = console_roles::authority_transaction(db).await?;
     address_book_collection_rule::Entity::delete_many()
         .filter(address_book_collection_rule::Column::CollectionId.eq(id))
         .exec(&tx)
@@ -894,6 +914,7 @@ pub async fn delete_collection(db: &DatabaseConnection, id: i32) -> Result<(), D
     address_book_collection::Entity::delete_by_id(id)
         .exec(&tx)
         .await?;
+    console_roles::remove_scope(&tx, RemovedScope::Collection(id)).await?;
     tx.commit().await
 }
 
@@ -936,7 +957,7 @@ pub async fn rule_list(
 }
 
 pub async fn rule_info_by_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: i32,
 ) -> Result<Option<address_book_collection_rule::Model>, DbErr> {
     address_book_collection_rule::Entity::find_by_id(id)
@@ -1003,6 +1024,8 @@ pub async fn update_rule(
     db: &DatabaseConnection,
     m: &address_book_collection_rule::Model,
 ) -> Result<(), DbErr> {
+    let tx = console_roles::authority_transaction(db).await?;
+    let original = rule_info_by_id(&tx, m.id).await?;
     let am = address_book_collection_rule::ActiveModel {
         id: Set(m.id),
         user_id: Set(m.user_id),
@@ -1013,14 +1036,75 @@ pub async fn update_rule(
         updated_at: Set(now()),
         ..Default::default()
     };
-    am.update(db).await?;
-    Ok(())
+    am.update(&tx).await?;
+    if let Some(original) = original {
+        clear_unshared_delegation(&tx, original.collection_id).await?;
+    }
+    tx.commit().await
 }
 
 pub async fn delete_rule(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    let tx = console_roles::authority_transaction(db).await?;
+    let original = rule_info_by_id(&tx, id).await?;
     address_book_collection_rule::Entity::delete_by_id(id)
-        .exec(db)
+        .exec(&tx)
         .await?;
+    if let Some(original) = original {
+        clear_unshared_delegation(&tx, original.collection_id).await?;
+    }
+    tx.commit().await
+}
+
+pub(super) enum ShareRecipient {
+    User(i32),
+    Group(i32),
+}
+
+pub(super) async fn collections_affected_by_recipient_deletion(
+    tx: &DatabaseTransaction,
+    recipient: ShareRecipient,
+) -> Result<Vec<i32>, DbErr> {
+    use address_book_collection as c;
+    use address_book_collection_rule as r;
+    let (rule_type, id) = match recipient {
+        ShareRecipient::User(id) => (r::RULE_TYPE_PERSONAL, id),
+        ShareRecipient::Group(id) => (r::RULE_TYPE_GROUP, id),
+    };
+    if id <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let direct_shares = sea_orm::sea_query::Query::select()
+        .column(r::Column::CollectionId)
+        .from(r::Entity)
+        .and_where(r::Column::Type.eq(rule_type))
+        .and_where(r::Column::ToId.eq(id))
+        .to_owned();
+    let mut scope = Condition::any().add(c::Column::Id.in_subquery(direct_shares));
+    if matches!(recipient, ShareRecipient::User(_)) {
+        scope = scope.add(c::Column::UserId.eq(id));
+    }
+
+    c::Entity::find()
+        .select_only()
+        .column(c::Column::Id)
+        .filter(c::Column::Id.gt(0))
+        .filter(scope)
+        .into_tuple::<i32>()
+        .all(tx)
+        .await
+}
+
+pub(crate) async fn clear_unshared_delegation(tx: &DatabaseTransaction, collection_id: i32) -> Result<(), DbErr> {
+    if collection_id > 0
+        && super::delegated_admin::shared_collections()
+            .filter(address_book_collection::Column::Id.eq(collection_id))
+            .one(tx)
+            .await?
+            .is_none()
+    {
+        console_roles::remove_scope(tx, RemovedScope::Collection(collection_id)).await?;
+    }
     Ok(())
 }
 

@@ -41,7 +41,7 @@ pub async fn list(
 }
 
 pub async fn create(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     name: &str,
     group_type: i32,
 ) -> Result<group::Model, DbErr> {
@@ -68,8 +68,24 @@ pub async fn update(db: &DatabaseConnection, id: i32, name: String, t: i32) -> R
 }
 
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
-    group::Entity::delete_by_id(id).exec(db).await?;
-    Ok(())
+    use super::address_book::{self, ShareRecipient};
+
+    let transaction = super::console_roles::authority_transaction(db).await?;
+    let affected = address_book::collections_affected_by_recipient_deletion(
+        &transaction,
+        ShareRecipient::Group(id),
+    )
+    .await?;
+    group::Entity::delete_by_id(id).exec(&transaction).await?;
+    for collection_id in affected {
+        address_book::clear_unshared_delegation(&transaction, collection_id).await?;
+    }
+    super::console_roles::remove_scope(
+        &transaction,
+        super::console_roles::RemovedScope::UserGroup(id),
+    )
+    .await?;
+    transaction.commit().await
 }
 
 // --- DeviceGroup ---
@@ -156,6 +172,10 @@ pub async fn device_group_update(
 pub async fn device_group_delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
     let transaction = super::console_roles::authority_transaction(db).await?;
     device_group::Entity::delete_by_id(id).exec(&transaction).await?;
-    super::console_roles::remove_group(&transaction, id).await?;
+    super::console_roles::remove_scope(
+        &transaction,
+        super::console_roles::RemovedScope::DeviceGroup(id),
+    )
+    .await?;
     transaction.commit().await
 }

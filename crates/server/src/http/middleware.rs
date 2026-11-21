@@ -387,12 +387,30 @@ fn restricted_console_access(role: &ConsoleRole, method: &Method, path: &str) ->
             (false, "/api/admin/peer/update") => *method == Method::POST,
             _ => false,
         },
+        ConsoleRole::ScopedAdministrator { .. } => matches!(
+            (method, path),
+            (&Method::GET, "/api/admin/delegated/scopes"
+                | "/api/admin/delegated/groups/:id/users"
+                | "/api/admin/delegated/collections/:id/entries")
+            | (&Method::PUT, "/api/admin/delegated/groups/:id/users/status"
+                | "/api/admin/delegated/collections/:id"
+                | "/api/admin/delegated/collections/:id/entries/:row_id")
+        ),
         ConsoleRole::Member => true,
     }
 }
 
 /// Authorizes audit list operations for a superadmin or assigned audit reader.
-pub(crate) struct AuditReader;
+pub(crate) enum AuditReader {
+    Admin,
+    Reader,
+}
+
+impl AuditReader {
+    pub(crate) fn can_lookup_devices(&self) -> bool {
+        matches!(self, Self::Admin)
+    }
+}
 
 #[async_trait]
 impl FromRequestParts<AppState> for AuditReader {
@@ -404,7 +422,8 @@ impl FromRequestParts<AppState> for AuditReader {
     ) -> Result<Self, Self::Rejection> {
         let backend = BackendUser::from_request_parts(parts, state).await?;
         match console_access(parts, &backend) {
-            Some(ConsoleAccess::Admin | ConsoleAccess::AuditReader) => Ok(Self),
+            Some(ConsoleAccess::Admin) => Ok(Self::Admin),
+            Some(ConsoleAccess::AuditReader) => Ok(Self::Reader),
             _ => Err(no_access(parts, state)),
         }
     }
@@ -430,6 +449,22 @@ impl FromRequestParts<AppState> for DeviceAccess {
             Some(ConsoleAccess::DeviceGroupOperator(group_ids)) => Ok(Self::Operator {
                 user_id: backend.user.id,
                 group_ids,
+            }),
+            _ => Err(no_access(parts, state)),
+        }
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for crate::services::delegated_admin::Actor {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let backend = BackendUser::from_request_parts(parts, state).await?;
+        match parts.extensions.remove::<ConsoleRole>() {
+            Some(ConsoleRole::ScopedAdministrator { .. }) if !backend.user.is_admin() => Ok(Self {
+                user_id: backend.user.id,
+                session_id: backend.user_token.id,
             }),
             _ => Err(no_access(parts, state)),
         }
@@ -469,7 +504,7 @@ fn console_access(parts: &mut Parts, backend: &BackendUser) -> Option<ConsoleAcc
         ConsoleRole::DeviceGroupOperator { group_ids } => {
             Some(ConsoleAccess::DeviceGroupOperator(group_ids))
         }
-        ConsoleRole::Member => None,
+        ConsoleRole::Member | ConsoleRole::ScopedAdministrator { .. } => None,
     }
 }
 

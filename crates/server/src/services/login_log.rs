@@ -32,7 +32,11 @@ pub async fn list(
         q = q.filter(login_log::Column::UserId.eq(uid));
     }
     if let Some(client) = filters.client.and_then(non_empty) {
-        q = q.filter(login_log::Column::Client.eq(client));
+        q = q.filter(if client == "native" {
+            login_log::Column::Client.is_in([login_log::CLIENT_NATIVE, login_log::CLIENT_APP])
+        } else {
+            login_log::Column::Client.eq(client)
+        });
     }
     if let Some(login_type) = filters.login_type.and_then(non_empty) {
         q = q.filter(login_log::Column::Type.eq(login_type));

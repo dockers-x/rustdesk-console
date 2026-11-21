@@ -601,16 +601,29 @@ pub async fn update_avatar(db: &DatabaseConnection, id: i32, avatar: &str) -> Re
 }
 
 pub async fn delete(db: &DatabaseConnection, u: &user::Model) -> Result<(), String> {
+    use super::address_book::{self, ShareRecipient};
+
     let transaction = super::console_roles::authority_transaction(db)
         .await
         .map_err(|e| e.to_string())?;
     if is_last_enabled_admin(&transaction, u.id).await? {
         return Err("The last admin user cannot be deleted".to_owned());
     }
+    let affected = address_book::collections_affected_by_recipient_deletion(
+        &transaction,
+        ShareRecipient::User(u.id),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     user::Entity::delete_by_id(u.id)
         .exec(&transaction)
         .await
         .map_err(|e| e.to_string())?;
+    for collection_id in affected {
+        address_book::clear_unshared_delegation(&transaction, collection_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     super::console_roles::clear(&transaction, u.id)
         .await
         .map_err(|e| e.to_string())?;

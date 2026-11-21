@@ -1,6 +1,6 @@
 //! Console role assignments and the transaction lock for account authority changes.
 
-use ::entity::{device_group, system_setting, user};
+use ::entity::{device_group, group, system_setting, user};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr,
@@ -19,10 +19,16 @@ pub enum ConsoleRole {
     DeviceGroupOperator {
         group_ids: Vec<i32>,
     },
+    ScopedAdministrator {
+        group_ids: Vec<i32>,
+        collection_ids: Vec<i32>,
+    },
 }
 
+pub(super) const KEY_PREFIX: &str = "console_role:";
+
 fn key(user_id: i32) -> String {
-    format!("console_role:{user_id}")
+    format!("{KEY_PREFIX}{user_id}")
 }
 
 pub(super) async fn setting<T: serde::de::DeserializeOwned>(
@@ -105,25 +111,42 @@ pub(super) async fn clear(db: &impl ConnectionTrait, user_id: i32) -> Result<(),
     Ok(())
 }
 
-/// Remove a deleted group from every assignment while the authority lock is held.
-pub(super) async fn remove_group(db: &DatabaseTransaction, group_id: i32) -> Result<(), DbErr> {
+pub(super) enum RemovedScope {
+    DeviceGroup(i32),
+    UserGroup(i32),
+    Collection(i32),
+}
+
+/// Remove a deleted or transferred resource while the authority lock is held.
+pub(super) async fn remove_scope(
+    db: &DatabaseTransaction,
+    scope: RemovedScope,
+) -> Result<(), DbErr> {
     let assignments = system_setting::Entity::find()
-        .filter(system_setting::Column::Key.starts_with("console_role:"))
+        .filter(system_setting::Column::Key.starts_with(KEY_PREFIX))
         .all(db)
         .await?;
     for row in assignments {
-        let role =
+        let mut role: ConsoleRole =
             serde_json::from_str(&row.value).map_err(|err| DbErr::Custom(err.to_string()))?;
-        if let ConsoleRole::DeviceGroupOperator { mut group_ids } = role {
-            if group_ids.contains(&group_id) {
-                group_ids.retain(|id| *id != group_id);
-                let value = serde_json::to_string(&ConsoleRole::DeviceGroupOperator { group_ids })
-                    .map_err(|err| DbErr::Custom(err.to_string()))?;
-                let mut setting: system_setting::ActiveModel = row.into();
-                setting.value = Set(value);
-                setting.updated_at = Set(now());
-                setting.update(db).await?;
+        let (ids, removed) = match (&mut role, &scope) {
+            (ConsoleRole::DeviceGroupOperator { group_ids }, RemovedScope::DeviceGroup(id))
+            | (ConsoleRole::ScopedAdministrator { group_ids, .. }, RemovedScope::UserGroup(id)) => {
+                (group_ids, id)
             }
+            (
+                ConsoleRole::ScopedAdministrator { collection_ids, .. },
+                RemovedScope::Collection(id),
+            ) => (collection_ids, id),
+            _ => continue,
+        };
+        if ids.contains(removed) {
+            ids.retain(|id| id != removed);
+            let mut setting: system_setting::ActiveModel = row.into();
+            setting.value =
+                Set(serde_json::to_string(&role).map_err(|err| DbErr::Custom(err.to_string()))?);
+            setting.updated_at = Set(now());
+            setting.update(db).await?;
         }
     }
     Ok(())
@@ -160,6 +183,47 @@ pub(crate) async fn assign(
                 "Select between 1 and 50 existing device groups".to_owned(),
             ));
         }
+    }
+    if let ConsoleRole::ScopedAdministrator {
+        group_ids,
+        collection_ids,
+    } = &mut role
+    {
+        for ids in [&mut *group_ids, &mut *collection_ids] {
+            if ids.len() > 50 || ids.iter().any(|id| *id <= 0) {
+                return Err(DbErr::Custom(
+                    "Select up to 50 groups and 50 shared collections".into(),
+                ));
+            }
+            ids.sort_unstable();
+            ids.dedup();
+        }
+        if (group_ids.is_empty() && collection_ids.is_empty())
+            || group::Entity::find()
+                .filter(group::Column::Id.is_in(group_ids.iter().copied()))
+                .count(&transaction)
+                .await?
+                != group_ids.len() as u64
+            || super::delegated_admin::shared_collections()
+                .filter(
+                    entity::address_book_collection::Column::Id
+                        .is_in(collection_ids.iter().copied()),
+                )
+                .count(&transaction)
+                .await?
+                != collection_ids.len() as u64
+        {
+            return Err(DbErr::Custom(
+                "Select existing user groups or shared collections".into(),
+            ));
+        }
+    }
+    let previous = for_user(&transaction, user_id).await?;
+    if previous != role
+        && (matches!(previous, ConsoleRole::ScopedAdministrator { .. })
+            || matches!(role, ConsoleRole::ScopedAdministrator { .. }))
+    {
+        super::user::revoke_credentials(&transaction, user_id).await?;
     }
     if role == ConsoleRole::Member {
         clear(&transaction, user_id).await?;

@@ -8,7 +8,7 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(unique_key, default_value = "")]
     pub key: String,
-    #[sea_orm(default_value = "")]
+    #[sea_orm(column_type = "Text")]
     #[serde(skip_serializing)]
     pub value: String,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

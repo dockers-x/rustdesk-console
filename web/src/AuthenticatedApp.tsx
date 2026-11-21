@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { ConsoleAuditRetention } from "./pages/ConsoleAuditRetention";
 import { AddressBookPage } from "./pages/AddressBookPage";
 import { DeviceAdmissionPage } from "./pages/DeviceAdmissionPage";
+import { DelegatedAdminPage } from "./pages/DelegatedAdminPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GeoRoutingPage } from "./pages/GeoRoutingPage";
 import { MessageCenterPage } from "./pages/MessageCenterPage";
@@ -20,6 +21,7 @@ import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { SelfSignedClientPage } from "./features/self-signed-client/SelfSignedClientPage";
 import { DeveloperPage } from "./features/developer/DeveloperPage";
 import { ResourcePage } from "./resource/ResourcePage";
+import { PeerIdentitySummary } from "./components/PeerInfoDrawer";
 import type { ResourceConfig } from "./resource/types";
 import { ALL_RESOURCES, resourcePath } from "./resource/registry";
 import { apiGet } from "./lib/api";
@@ -44,7 +46,11 @@ function resourceForRole(resource: ResourceConfig, role?: RestrictedConsoleRole)
     return {
       ...resource,
       canDelete: false,
-      columns: resource.columns.filter(({ key }) => !["__peer_actions", "__peer_info"].includes(key)),
+      columns: resource.columns
+        .filter(({ key }) => key !== "__peer_actions")
+        .map((column) => column.key === "id"
+          ? { ...column, render: (row) => <PeerIdentitySummary row={row} /> }
+          : column),
       fields: resource.fields.filter(({ name }) => name === "alias"),
     };
   }
@@ -104,6 +110,7 @@ export default function AuthenticatedApp() {
         <Route path="/" element={<Navigate to={home} replace />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/device-admission" element={<DeviceAdmissionPage />} />
+        <Route path="/delegated-admin" element={<DelegatedAdminPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/my" element={<MyProfilePage />} />
         <Route path="/my/address_book" element={<AddressBookPage />} />
@@ -134,10 +141,11 @@ export default function AuthenticatedApp() {
             path={resourcePath(resource)}
             element={
               <ResourcePage
-                key={["peers", "strategy_assignments"].includes(resource.name)
+                key={["peers", "address_book", "strategy_assignments"].includes(resource.name)
                   ? `${resource.name}${location.search}`
                   : resource.name}
                 cfg={resourceForRole(resource, role)}
+                accessScope={isAdmin ? "admin" : role ?? "member"}
                 beforeTable={isAdmin && resource.name === "console-audit" ? <ConsoleAuditRetention /> : undefined}
               />
             }

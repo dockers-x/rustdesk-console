@@ -525,6 +525,34 @@ fn admin_routes() -> Router<AppState> {
             "/api/admin/console-role/:id",
             get(super::console_audit::role).put(super::console_audit::assign_role),
         )
+        .route(
+            "/api/admin/delegation-collections",
+            get(super::delegated_admin::collection_options),
+        )
+        .route(
+            "/api/admin/delegated/scopes",
+            get(super::delegated_admin::scopes),
+        )
+        .route(
+            "/api/admin/delegated/groups/:id/users",
+            get(super::delegated_admin::group_users),
+        )
+        .route(
+            "/api/admin/delegated/groups/:id/users/status",
+            put(super::delegated_admin::set_user_status),
+        )
+        .route(
+            "/api/admin/delegated/collections/:id",
+            put(super::delegated_admin::update_collection),
+        )
+        .route(
+            "/api/admin/delegated/collections/:id/entries",
+            get(super::delegated_admin::collection_entries),
+        )
+        .route(
+            "/api/admin/delegated/collections/:id/entries/:row_id",
+            put(super::delegated_admin::update_entry),
+        )
         .route("/api/admin/console-audit/list", get(super::console_audit::list))
         .route(
             "/api/admin/console-audit/retention",
@@ -724,6 +752,10 @@ fn admin_routes() -> Router<AppState> {
         .route(
             "/api/admin/rustdesk/geo/test",
             post(admin::rustdesk_geo_test),
+        )
+        .route(
+            "/api/admin/rustdesk/geo/preview",
+            post(admin::rustdesk_geo_preview),
         )
         // file upload (local + OSS)
         .route("/api/admin/file/upload", post(file::upload))

@@ -194,6 +194,9 @@ pub async fn trace(State(state): State<AppState>, request: Request, next: Next) 
 fn management_action(route: &str, method: &Method) -> Option<&'static str> {
     match (method.clone(), route) {
         (Method::PUT, "/api/admin/console-role/:id") => Some("roles.assign"),
+        (Method::PUT, "/api/admin/delegated/groups/:id/users/status") => Some("delegation.user_status"),
+        (Method::PUT, "/api/admin/delegated/collections/:id") => Some("delegation.collection_update"),
+        (Method::PUT, "/api/admin/delegated/collections/:id/entries/:row_id") => Some("delegation.entry_update"),
         (Method::PUT, "/api/admin/user/control-role/:id") => Some("roles.control_assign"),
         (Method::PUT, "/api/admin/device-admission/settings") => Some("admission.settings"),
         (Method::POST, "/api/admin/device-admission/review") => Some("admission.review"),

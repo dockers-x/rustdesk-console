@@ -24,6 +24,7 @@ import { TableState } from "../components/TableState";
 import { TagPicker } from "../components/TagPicker";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { apiGet, apiPost, http } from "../lib/api";
+import { getAuthSessionId } from "../lib/auth";
 import { copyToClipboard } from "../lib/clipboard";
 import {
   formatDateTime,
@@ -137,7 +138,15 @@ function stringArrayValue(value: unknown) {
   return [];
 }
 
-export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; beforeTable?: ReactNode }) {
+export function ResourcePage({
+  cfg,
+  beforeTable,
+  accessScope,
+}: {
+  cfg: ResourceConfig;
+  beforeTable?: ReactNode;
+  accessScope: string;
+}) {
   const { t } = useTranslation();
   const toasts = useKumoToastManager();
   const qc = useQueryClient();
@@ -146,7 +155,9 @@ export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; before
   const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
 
   const [searchParams] = useSearchParams();
-  const linkedDeviceId = cfg.name === "peers" ? searchParams.get("id") : null;
+  const linkedDeviceId = ["peers", "address_book"].includes(cfg.name)
+    ? searchParams.get("id")
+    : null;
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState((): Record<string, string> =>
     linkedDeviceId
@@ -157,13 +168,17 @@ export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; before
   );
   const exactDeviceId = Boolean(linkedDeviceId && filters.id === linkedDeviceId);
 
+  const sessionId = getAuthSessionId();
   const queryKey = useMemo(
-    () => [cfg.name, page, filters, exactDeviceId],
-    [cfg.name, page, filters, exactDeviceId],
+    () => [cfg.name, page, filters, exactDeviceId, sessionId, accessScope],
+    [cfg.name, page, filters, exactDeviceId, sessionId, accessScope],
   );
+  const tracksPresence = cfg.name === "peers" || cfg.name === "my_peer";
   const { data, error, isLoading } = useQuery({
     queryKey,
-    refetchInterval: cfg.name === "active_connection" ? 15_000 : undefined,
+    refetchInterval: tracksPresence ? 30_000 : cfg.name === "active_connection" ? 15_000 : undefined,
+    // Unchanged heartbeats still need to age out on each successful poll.
+    notifyOnChangeProps: tracksPresence ? ["data", "error", "isLoading", "dataUpdatedAt"] : undefined,
     queryFn: () =>
       apiGet<ListResult>(`${cfg.api}/list`, {
         page,
@@ -253,7 +268,7 @@ export function ResourcePage({ cfg, beforeTable }: { cfg: ResourceConfig; before
                   setPage(1);
                 }}
               >
-                <option value="">{t("all")}</option>
+                <option value="">{t(flt.allLabel ?? "all")}</option>
                 {(flt.options ?? []).map((option) => (
                   <option key={String(option.value)} value={String(option.value)}>
                     {t(option.label)}

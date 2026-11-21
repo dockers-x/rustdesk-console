@@ -1,8 +1,16 @@
 import { Badge } from "@cloudflare/kumo/components/badge";
-import { Link } from "@cloudflare/kumo/components/link";
 import { Link as RouterLink } from "react-router-dom";
 import { ActiveConnectionActions } from "../components/ActiveConnectionActions";
+import {
+  FileAuditDetails,
+  FileAuditDirection,
+  FileAuditPath,
+  FileAuditPeer,
+  FileAuditTotals,
+} from "../components/FileAuditDetails";
 import { DeploymentTokenActions } from "../components/DeploymentTokenActions";
+import { DeviceAuditId } from "../components/DeviceAuditId";
+import { LoginPlatformCell } from "../components/LoginPlatformCell";
 import { OAuthProviderActions } from "../components/OAuthProviderActions";
 import { PeerInfoDrawer } from "../components/PeerInfoDrawer";
 import { PeerQuickActions } from "../components/PeerQuickActions";
@@ -15,7 +23,6 @@ import { WebClientActions } from "../components/WebClientActions";
 import { renderStrategyOptionsSummary } from "./strategyOptions";
 import type { ResourceConfig } from "./types";
 
-const PEER_ONLINE_WINDOW_SECONDS = 90;
 const DEVICES_PATH = "/peers";
 
 const statusCol = {
@@ -159,34 +166,6 @@ const monoCol = (key: string, label: string, width = "max-w-44") => ({
     );
   },
 });
-const peerOnlineStatusCol = {
-  key: "__online_status",
-  label: "status",
-  render: (r: Record<string, unknown>, t: (k: string) => string) => {
-    const lastOnline = Number(r.last_online_time ?? 0);
-    const online =
-      Number.isFinite(lastOnline) &&
-      lastOnline > 0 &&
-      Date.now() / 1000 - lastOnline <= PEER_ONLINE_WINDOW_SECONDS;
-    return (
-      <span
-        className={`inline-flex min-h-7 items-center gap-2 rounded-md border px-2.5 text-xs font-medium ${
-          online
-            ? "border-kumo-success/25 bg-kumo-success-tint/60 text-kumo-success"
-            : "border-kumo-line bg-kumo-base text-kumo-subtle"
-        }`}
-      >
-        <span
-          className={`inline-flex size-2.5 rounded-full ${
-            online ? "bg-kumo-success" : "bg-kumo-subtle/60"
-          }`}
-          aria-hidden="true"
-        />
-        {t(online ? "online" : "offline")}
-      </span>
-    );
-  },
-};
 const adminCol = {
   key: "is_admin",
   label: "isAdmin",
@@ -200,13 +179,23 @@ const webClientCol = (share = false) => ({
     <WebClientActions peerId={String(r.id ?? "")} share={share} />
   ),
 });
-const peerInfoCol = (scope: "admin" | "my" = "my") => ({
-  key: "__peer_info",
-  label: "deviceInfo",
+const peerIdentityCol = (scope: "admin" | "my") => ({
+  key: "id",
+  label: "deviceId",
   render: (r: Record<string, unknown>) => (
     <PeerInfoDrawer row={r} scope={scope} />
   ),
 });
+const loginPlatformCol = {
+  key: "platform",
+  label: "platform",
+  render: (r: Record<string, unknown>) => <LoginPlatformCell value={String(r.platform ?? "")} />,
+};
+const loginDeviceCol = {
+  key: "device_id",
+  label: "deviceId",
+  render: (r: Record<string, unknown>) => <DeviceAuditId id={r.device_id} device={r.device_id_device} />,
+};
 const peerActionsCol = {
   key: "__peer_actions",
   label: "quickActions",
@@ -240,23 +229,19 @@ const activeConnectionActionsCol = {
     />
   ),
 };
+const auditDeviceCol = (key: string, label: string) => ({
+  key,
+  label,
+  render: (row: Record<string, unknown>) => (
+    <DeviceAuditId id={row[key]} device={row[`${key}_device`]} />
+  ),
+});
 const activeConnectionDeviceCol = {
   key: "peer_id",
   label: "deviceId",
-  render: (row: Record<string, unknown>, t: (k: string) => string) => {
-    const id = String(row.peer_id ?? "");
-    if (!id) return "—";
-    const search = new URLSearchParams({ id }).toString();
-    return (
-      <Link
-        render={<RouterLink to={{ pathname: DEVICES_PATH, search }} />}
-        className="font-mono text-xs tabular-nums"
-        title={t("openDeviceInList")}
-      >
-        {id}
-      </Link>
-    );
-  },
+  render: (row: Record<string, unknown>) => (
+    <DeviceAuditId id={row.peer_id} device={row.peer_id_device} fallbackTarget="device" />
+  ),
 };
 const colorCol = {
   key: "color",
@@ -317,7 +302,7 @@ const LOGIN_TYPE_OPTIONS = [
 const LOGIN_CLIENT_OPTIONS = [
   { label: "loginClientWebAdmin", value: "webadmin" },
   { label: "loginClientWebClient", value: "webclient" },
-  { label: "loginClientApp", value: "app" },
+  { label: "loginClientApp", value: "native" },
 ];
 const loginTypeCol = {
   key: "type",
@@ -343,6 +328,7 @@ const loginClientCol = {
       case "webclient":
         return t("loginClientWebClient");
       case "app":
+      case "client":
         return t("loginClientApp");
       default:
         return String(r.client ?? "") || "—";
@@ -713,14 +699,13 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
       { name: "hostname", label: "hostname" },
     ],
     columns: [
-      { key: "id", label: "deviceId" },
-      peerOnlineStatusCol,
-      peerInfoCol("admin"),
+      peerIdentityCol("admin"),
       { key: "hostname", label: "hostname" },
       { key: "os", label: "os" },
       { key: "username", label: "username" },
       { key: "last_online_ip", label: "ip" },
       { key: "group_id", label: "groupId" },
+      { ...statusCol, label: "deviceAccessState" },
       { key: "alias", label: "alias" },
       peerActionsCol,
     ],
@@ -1018,17 +1003,17 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     canCreate: false,
     canEdit: false,
     filters: [
-      { name: "type", label: "type", type: "select", options: LOGIN_TYPE_OPTIONS },
-      { name: "client", label: "client", type: "select", options: LOGIN_CLIENT_OPTIONS },
+      { name: "type", label: "type", allLabel: "allLoginMethods", type: "select", options: LOGIN_TYPE_OPTIONS },
+      { name: "client", label: "client", allLabel: "allLoginClients", type: "select", options: LOGIN_CLIENT_OPTIONS },
     ],
     columns: [
       { key: "id", label: "id" },
       { key: "user_id", label: "userId" },
       loginClientCol,
-      { key: "device_id", label: "deviceId" },
+      loginDeviceCol,
       { key: "ip", label: "ip" },
       loginTypeCol,
-      { key: "platform", label: "platform" },
+      loginPlatformCol,
       { key: "created_at", label: "createdAt" },
     ],
     fields: [],
@@ -1095,8 +1080,8 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     columns: [
       { key: "id", label: "id" },
       { key: "action", label: "action" },
-      { key: "peer_id", label: "deviceId" },
-      { key: "from_peer", label: "fromPeer" },
+      auditDeviceCol("peer_id", "deviceId"),
+      auditDeviceCol("from_peer", "fromPeer"),
       { key: "from_name", label: "fromName" },
       { key: "ip", label: "ip" },
       { key: "created_at", label: "createdAt" },
@@ -1110,19 +1095,30 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     canCreate: false,
     canEdit: false,
     filters: [
-      { name: "peer_id", label: "deviceId" },
-      { name: "from_peer", label: "fromPeer" },
+      { name: "peer_id", label: "fileAuditReportingDevice" },
+      { name: "from_peer", label: "fileAuditRemoteDevice" },
+      { name: "path", label: "fileAuditReportedPath" },
+      {
+        name: "direction",
+        label: "fileAuditDirection",
+        allLabel: "fileAuditAllDirections",
+        type: "select",
+        options: [
+          { value: "sent", label: "fileAuditSent" },
+          { value: "received", label: "fileAuditReceived" },
+        ],
+      },
     ],
     columns: [
-      { key: "id", label: "id" },
-      { key: "peer_id", label: "deviceId" },
-      { key: "from_peer", label: "fromPeer" },
-      { key: "path", label: "path" },
-      boolCol("is_file", "isFile"),
-      { key: "num", label: "num" },
       { key: "created_at", label: "createdAt" },
+      { key: "peer_id", label: "fileAuditReportingDevice", render: (row) => <FileAuditPeer row={row} /> },
+      { key: "direction", label: "fileAuditDirection", render: (row) => <FileAuditDirection row={row} /> },
+      { key: "from_peer", label: "fileAuditRemoteDevice", render: (row) => <FileAuditPeer row={row} remote /> },
+      { key: "path", label: "fileAuditPathOrFile", render: (row) => <FileAuditPath row={row} /> },
+      { key: "file_count", label: "fileAuditFilesAndSize", render: (row) => <FileAuditTotals row={row} /> },
     ],
     fields: [],
+    rowActions: (row) => <FileAuditDetails row={row} />,
   },
   {
     name: "record_file",
@@ -1137,7 +1133,7 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     columns: [
       { key: "id", label: "id" },
       monoCol("filename", "filename", "max-w-80"),
-      monoCol("peer_id", "deviceId", "max-w-28"),
+      auditDeviceCol("peer_id", "deviceId"),
       { key: "direction", label: "direction" },
       { key: "storage_backend", label: "storageBackend" },
       { key: "size", label: "sizeBytes" },
@@ -1177,9 +1173,7 @@ export const MY_RESOURCES: ResourceConfig[] = [
       { name: "username", label: "username" },
     ],
     columns: [
-      { key: "id", label: "deviceId" },
-      peerOnlineStatusCol,
-      peerInfoCol("my"),
+      peerIdentityCol("my"),
       { key: "hostname", label: "hostname" },
       { key: "os", label: "os" },
       { key: "username", label: "username" },
@@ -1373,16 +1367,16 @@ export const MY_RESOURCES: ResourceConfig[] = [
     canCreate: false,
     canEdit: false,
     filters: [
-      { name: "type", label: "type", type: "select", options: LOGIN_TYPE_OPTIONS },
-      { name: "client", label: "client", type: "select", options: LOGIN_CLIENT_OPTIONS },
+      { name: "type", label: "type", allLabel: "allLoginMethods", type: "select", options: LOGIN_TYPE_OPTIONS },
+      { name: "client", label: "client", allLabel: "allLoginClients", type: "select", options: LOGIN_CLIENT_OPTIONS },
     ],
     columns: [
       { key: "id", label: "id" },
       loginClientCol,
-      { key: "device_id", label: "deviceId" },
+      loginDeviceCol,
       { key: "ip", label: "ip" },
       loginTypeCol,
-      { key: "platform", label: "platform" },
+      loginPlatformCol,
       { key: "created_at", label: "createdAt" },
     ],
     fields: [],

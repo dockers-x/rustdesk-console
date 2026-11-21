@@ -83,7 +83,7 @@ Web 后台没有固定默认密码。服务默认监听 `0.0.0.0:21114`，首次
 后续如果需要恢复访问，可以随时重置密码：
 
 ```bash
-rustdesk-console reset-admin-pwd <新密码>
+rustdesk-console reset-admin-pwd --password-file /path/to/console-password
 ```
 
 这些初始化管理员配置只在数据库首次初始化时生效，后续重启不会覆盖已有管理员。设置
@@ -287,10 +287,16 @@ npx pnpm@10.34.0 run dev    # 开发服务器；/api 反向代理到 http://127.
 ## 命令行
 
 ```bash
-rustdesk-console reset-admin-pwd <新密码>      # 重置管理员（用户 1）密码
-rustdesk-console reset-pwd <用户ID> <新密码>    # 重置任意用户密码
-rustdesk-console -c ./conf/config.yaml         # 启动服务（默认）
+rustdesk-console version --json
+rustdesk-console config validate
+rustdesk-console database status --json
+rustdesk-console database migrate --json
+rustdesk-console reset-admin-pwd --password-file /path/to/console-password
+rustdesk-console reset-pwd 42 --password-stdin < /path/to/console-password
+rustdesk-console -c ./conf/config.yaml
 ```
+
+数据库状态、退出码和账号恢复流程见[本地运维命令](docs/local-maintenance.zh-CN.md)。
 
 ## 技术栈
 

@@ -2,6 +2,7 @@
 
 use sea_orm::sea_query::Expr;
 use sea_orm::*;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use ::entity::{audit_conn, audit_file, peer};
@@ -629,16 +630,192 @@ mod tests {
         assert_eq!(row.path, "/tmp/report.txt");
         assert!(row.is_file);
         assert_eq!(row.r#type, 1);
+        let detail = serde_json::to_value(FileAuditRow::from_row(row)).unwrap();
+        assert_eq!(detail["direction"], "received");
+        assert_eq!(detail["file_count"], 3);
+        assert_eq!(detail["size_bytes"], "1024");
+        assert_eq!(detail["size_is_partial"], true);
+        assert_eq!(
+            detail["files"],
+            json!([{ "name": "report.txt", "size_bytes": "1024" }])
+        );
+    }
+
+    #[tokio::test]
+    async fn file_audit_distinguishes_reported_zero_and_sparse_legacy_rows() {
+        let db = setup_audit_db().await;
+        audit_file::ActiveModel {
+            peer_id: Set("legacy-device".to_owned()),
+            path: Set("/home/legacy.txt".to_owned()),
+            r#type: Set(0),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        record_file_event(&db, &json!({ "peer_id": "sparse", "type": "invalid" }))
+            .await
+            .unwrap();
+        record_file_event(
+            &db,
+            &json!({
+                "id": "host",
+                "peer_id": "remote",
+                "conn_id": 325,
+                "type": 0,
+                "path": "/home/complete.txt",
+                "info": {
+                    "num": 1,
+                    "files": [["", 9007199254740993u64]],
+                },
+            }),
+        )
+        .await
+        .unwrap();
+
+        let reports = file_list_with_details(&db, FileSearch::default())
+            .await
+            .unwrap();
+        assert_eq!(reports.total, 3);
+        let report = serde_json::to_value(&reports.list[0]).unwrap();
+        assert_eq!(report["direction"], "sent");
+        assert_eq!(report["conn_id"], 325);
+        assert_eq!(report["peer_id"], "host");
+        assert_eq!(report["from_peer"], "remote");
+        assert_eq!(report["size_bytes"], "9007199254740993");
+        assert_eq!(report["size_is_partial"], false);
+        assert_eq!(report["files"][0]["size_bytes"], "9007199254740993");
+        assert_eq!(reports.list[1].row.peer_id, "sparse");
+        assert_eq!(reports.list[1].row.from_peer, "");
+        for legacy in &reports.list[1..] {
+            let legacy = serde_json::to_value(legacy).unwrap();
+            assert!(legacy["direction"].is_null());
+            assert!(legacy["file_count"].is_null());
+            assert!(legacy["size_bytes"].is_null());
+        }
+        let filtered = file_list_with_details(
+            &db,
+            FileSearch {
+                path: Some("/home".to_owned()),
+                direction: Some(FileDirection::Sent),
+                ..FileSearch::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(filtered.total, 1);
+        assert_eq!(filtered.list[0].row.peer_id, "host");
+
+        let pro = file_list(&db, 1, 10, Some("host".to_owned()), None)
+            .await
+            .unwrap();
+        let raw = serde_json::to_value(&pro.list[0]).unwrap();
+        assert_eq!(raw["type"], 0);
+        assert!(raw["info"].is_string());
+        assert!(raw.get("conn_id").is_none());
+        assert!(raw.get("direction").is_none());
     }
 }
 
 // ---- AuditFile ----
 
-pub struct AuditFileListResult {
-    pub list: Vec<audit_file::Model>,
-    pub page: i64,
-    pub page_size: i64,
-    pub total: i64,
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileDirection {
+    Sent,
+    Received,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FileSearch {
+    page: Option<u64>,
+    page_size: Option<u64>,
+    peer_id: Option<String>,
+    from_peer: Option<String>,
+    path: Option<String>,
+    direction: Option<FileDirection>,
+}
+
+#[derive(Serialize)]
+pub struct FileAuditRow {
+    #[serde(flatten)]
+    row: audit_file::Model,
+    direction: Option<FileDirection>,
+    conn_id: Option<i32>,
+    file_count: Option<u64>,
+    size_bytes: Option<String>,
+    size_is_partial: bool,
+    files: Vec<FileAuditEntry>,
+}
+
+#[derive(Serialize)]
+struct FileAuditEntry {
+    name: String,
+    size_bytes: Option<String>,
+}
+
+impl FileAuditRow {
+    pub(crate) fn peer_ids(&self) -> [&str; 2] {
+        [&self.row.peer_id, &self.row.from_peer]
+    }
+
+    fn from_row(row: audit_file::Model) -> Self {
+        let info = serde_json::from_str::<JsonValue>(&row.info).unwrap_or(JsonValue::Null);
+        let file_count = if row.num > 0 {
+            u64::try_from(row.num).ok()
+        } else {
+            unsigned_json_number(&info["num"])
+        };
+        let direction = match (row.reported_type, row.r#type) {
+            (Some(0), _) => Some(FileDirection::Sent),
+            (Some(1), _) | (None, 1) => Some(FileDirection::Received),
+            // Older rows use zero both for sent files and a missing type.
+            _ => None,
+        };
+        let entries = info["files"].as_array();
+        let mut files = Vec::new();
+        let mut sizes = 0u64;
+        let mut count_with_size = 0;
+        let mut size_overflow = false;
+        if let Some(entries) = entries {
+            for entry in entries.iter().take(10) {
+                let Some(name) = entry.get(0).and_then(JsonValue::as_str) else {
+                    continue;
+                };
+                let size_bytes = entry.get(1).and_then(unsigned_json_number);
+                if let Some(size) = size_bytes {
+                    if let Some(sum) = sizes.checked_add(size) {
+                        sizes = sum;
+                    } else {
+                        size_overflow = true;
+                    }
+                    count_with_size += 1;
+                }
+                files.push(FileAuditEntry {
+                    name: name.to_owned(),
+                    size_bytes: size_bytes.map(|size| size.to_string()),
+                });
+            }
+        }
+        let size_is_partial = file_count != Some(count_with_size)
+            || entries.is_none_or(|raw| raw.len() != files.len());
+        let size_bytes = (!size_overflow
+            && (count_with_size > 0 || (!size_is_partial && file_count == Some(0))))
+        .then(|| sizes.to_string());
+        Self {
+            conn_id: row.conn_id,
+            row,
+            direction,
+            file_count,
+            size_bytes,
+            size_is_partial,
+            files,
+        }
+    }
+}
+
+fn unsigned_json_number(value: &JsonValue) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
 
 pub async fn file_list(
@@ -647,14 +824,65 @@ pub async fn file_list(
     page_size: u64,
     peer_id: Option<String>,
     from_peer: Option<String>,
-) -> Result<AuditFileListResult, DbErr> {
-    let (page, page_size) = paginate(page, page_size);
+) -> Result<::entity::ListResult<audit_file::Model>, DbErr> {
+    find_file_reports(
+        db,
+        FileSearch {
+            page: Some(page),
+            page_size: Some(page_size),
+            peer_id,
+            from_peer,
+            ..FileSearch::default()
+        },
+    )
+    .await
+}
+
+pub async fn file_list_with_details(
+    db: &DatabaseConnection,
+    search: FileSearch,
+) -> Result<::entity::ListResult<FileAuditRow>, DbErr> {
+    let rows = find_file_reports(db, search).await?;
+    let list = rows.list.into_iter().map(FileAuditRow::from_row).collect();
+    Ok(::entity::ListResult::new(
+        list,
+        rows.page,
+        rows.page_size,
+        rows.total,
+    ))
+}
+
+async fn find_file_reports(
+    db: &DatabaseConnection,
+    search: FileSearch,
+) -> Result<::entity::ListResult<audit_file::Model>, DbErr> {
+    let (page, page_size) = paginate(
+        search.page.unwrap_or_default(),
+        search.page_size.unwrap_or_default(),
+    );
     let mut q = audit_file::Entity::find();
-    if let Some(p) = peer_id.filter(|s| !s.is_empty()) {
+    if let Some(p) = search.peer_id.filter(|s| !s.is_empty()) {
         q = q.filter(audit_file::Column::PeerId.contains(&p));
     }
-    if let Some(p) = from_peer.filter(|s| !s.is_empty()) {
+    if let Some(p) = search.from_peer.filter(|s| !s.is_empty()) {
         q = q.filter(audit_file::Column::FromPeer.contains(&p));
+    }
+    if let Some(path) = search.path.filter(|s| !s.is_empty()) {
+        q = q.filter(audit_file::Column::Path.contains(&path));
+    }
+    if let Some(direction) = search.direction {
+        q = match direction {
+            FileDirection::Sent => q.filter(audit_file::Column::ReportedType.eq(0)),
+            FileDirection::Received => q.filter(
+                Condition::any()
+                    .add(audit_file::Column::ReportedType.eq(1))
+                    .add(
+                        Condition::all()
+                            .add(audit_file::Column::ReportedType.is_null())
+                            .add(audit_file::Column::Type.eq(1)),
+                    ),
+            ),
+        };
     }
     let total = q.clone().count(db).await? as i64;
     let list = q
@@ -663,12 +891,12 @@ pub async fn file_list(
         .limit(page_size)
         .all(db)
         .await?;
-    Ok(AuditFileListResult {
+    Ok(::entity::ListResult::new(
         list,
-        page: page as i64,
-        page_size: page_size as i64,
+        page as i64,
+        page_size as i64,
         total,
-    })
+    ))
 }
 
 pub async fn record_file_event(db: &impl ConnectionTrait, body: &JsonValue) -> Result<(), DbErr> {
@@ -681,6 +909,8 @@ pub async fn record_file_event(db: &impl ConnectionTrait, body: &JsonValue) -> R
         path: Set(event.path),
         peer_id: Set(event.peer_id),
         r#type: Set(event.r#type),
+        reported_type: Set(event.reported_type),
+        conn_id: Set(event.conn_id),
         uuid: Set(event.uuid),
         ip: Set(event.ip),
         num: Set(event.num),
@@ -701,6 +931,8 @@ struct FileEvent {
     is_file: bool,
     path: String,
     r#type: i32,
+    reported_type: Option<i32>,
+    conn_id: Option<i32>,
     uuid: String,
     ip: String,
     num: i32,
@@ -709,23 +941,42 @@ struct FileEvent {
 
 impl FileEvent {
     fn from_json(body: &JsonValue) -> Self {
-        let info = string_field(body, "info");
+        let info = match &body["info"] {
+            info @ JsonValue::Object(_) => info.to_string(),
+            info => value_to_string(info),
+        };
         let info_json = serde_json::from_str::<JsonValue>(&info).unwrap_or(JsonValue::Null);
         let body_num = i32_field(body, "num");
         let info_num = i32_field(&info_json, "num");
+        let report_id = string_field(body, "id");
+        let peer_id = string_field(body, "peer_id");
+        let from_peer = string_field(body, "from_peer");
+        // Stock RustDesk supplies a reporting ID in `id` and a remote ID in `peer_id`.
+        // Older callers can supply the reporting ID as `peer_id` and the remote as `from_peer`.
+        let (peer_id, from_peer) = if report_id.is_empty() {
+            (peer_id, from_peer)
+        } else if from_peer.is_empty() {
+            (report_id, peer_id)
+        } else {
+            (report_id, from_peer)
+        };
+        let optional_i32 = |field: &JsonValue| {
+            field
+                .as_i64()
+                .or_else(|| field.as_str()?.parse().ok())
+                .and_then(|value| i32::try_from(value).ok())
+        };
+        let reported_type = optional_i32(&body["type"]);
 
         Self {
-            // RustDesk posts `id` as the local device and `peer_id` as the remote side.
-            // The original Go API stores local as peer_id and remote as from_peer.
-            peer_id: first_non_empty(&[string_field(body, "id"), string_field(body, "peer_id")]),
-            from_peer: first_non_empty(&[
-                string_field(body, "from_peer"),
-                string_field(body, "peer_id"),
-            ]),
+            peer_id,
+            from_peer,
             info,
             is_file: bool_field(body, "is_file"),
             path: string_field(body, "path"),
-            r#type: i32_field(body, "type"),
+            r#type: reported_type.unwrap_or_default(),
+            reported_type,
+            conn_id: optional_i32(&body["conn_id"]),
             uuid: string_field(body, "uuid"),
             ip: first_non_empty(&[string_field(body, "ip"), string_field(&info_json, "ip")]),
             num: if body_num != 0 { body_num } else { info_num },

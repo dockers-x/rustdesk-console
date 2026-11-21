@@ -8,7 +8,7 @@ use axum::Json;
 use chrono::{Duration, Utc};
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, TransactionTrait,
+    QuerySelect, Set,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -3223,6 +3223,7 @@ pub async fn ab_rules_delete(
         return resp::error("ParamsError");
     };
     let mut scope = sea_orm::Condition::any();
+    let mut collections = std::collections::BTreeSet::new();
     for id in &ids {
         let rule = match services::address_book::rule_info_by_id(&state.db, *id).await {
             Ok(Some(row)) => row,
@@ -3231,15 +3232,21 @@ pub async fn ab_rules_delete(
         if !can_control_collection_id(&state, &user.user, rule.collection_id).await {
             return resp::error("NoAccess");
         }
+        collections.insert(rule.collection_id);
         scope = scope.add(sea_orm::Condition::all()
             .add(address_book_collection_rule::Column::Id.eq(rule.id))
             .add(address_book_collection_rule::Column::CollectionId.eq(rule.collection_id)));
     }
-    let Ok(tx) = state.db.begin().await else {
+    let Ok(tx) = services::console_roles::authority_transaction(&state.db).await else {
         return resp::error("OperationFailed");
     };
     match address_book_collection_rule::Entity::delete_many().filter(scope).exec(&tx).await {
         Ok(result) if result.rows_affected == ids.len() as u64 => {
+            for collection_id in collections {
+                if services::address_book::clear_unshared_delegation(&tx, collection_id).await.is_err() {
+                    return resp::error("OperationFailed");
+                }
+            }
             if tx.commit().await.is_err() {
                 return resp::error("OperationFailed");
             }

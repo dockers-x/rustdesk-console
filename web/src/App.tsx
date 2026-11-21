@@ -1,5 +1,6 @@
 import {
   Component,
+  Fragment,
   lazy,
   Suspense,
   useSyncExternalStore,
@@ -104,7 +105,8 @@ function RequireAuth({
   if (passwordChangeRequired && !allowPasswordChange) {
     return <Navigate to="/change-password" replace />;
   }
-  return <>{children}</>;
+  const [, sessionId] = authState.split(":");
+  return <Fragment key={sessionId}>{children}</Fragment>;
 }
 
 function RouteLoading() {

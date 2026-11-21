@@ -4,17 +4,19 @@ export function hasAdminAccess(routeNames?: readonly string[]): boolean {
   return routeNames?.includes(ADMIN_ROUTE) ?? false;
 }
 
-export type RestrictedConsoleRole = "audit" | "devices";
+export type RestrictedConsoleRole = "audit" | "devices" | "delegated";
 
 export function restrictedConsoleRole(routeNames?: readonly string[]): RestrictedConsoleRole | undefined {
   if (routeNames?.includes("AuditReader")) return "audit";
   if (routeNames?.includes("DeviceGroupOperator")) return "devices";
+  if (routeNames?.includes("ScopedAdministrator")) return "delegated";
 }
 
 export function authenticatedHome(isAdmin: boolean, role?: RestrictedConsoleRole): string {
   if (isAdmin) return "/overview";
   if (role === "audit") return "/console-audit";
   if (role === "devices") return "/peers";
+  if (role === "delegated") return "/delegated-admin";
   return "/my";
 }
 
@@ -31,7 +33,9 @@ export function canAccessConsolePath(
     return false;
   }
   const pathname = location.split(/[?#]/, 1)[0];
+  if (pathname === "/delegated-admin") return role === "delegated";
   if (isAdmin) return true;
+  if (role === "delegated") return pathname === "/";
   if (role === "audit") {
     return ["/", "/console-audit", "/login_log", "/audit_conn", "/audit_file"].includes(pathname);
   }

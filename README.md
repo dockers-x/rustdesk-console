@@ -87,7 +87,7 @@ database seed, the server creates the initial administrator automatically:
 If you need to recover access later, reset the password any time:
 
 ```bash
-rustdesk-console reset-admin-pwd <newpassword>
+rustdesk-console reset-admin-pwd --password-file /path/to/console-password
 ```
 
 These initial admin settings are applied only when the database is first
@@ -334,10 +334,17 @@ npx pnpm@10.34.0 run dev    # dev server; proxies /api to http://127.0.0.1:21114
 ## CLI
 
 ```bash
-rustdesk-console reset-admin-pwd <newpassword>    # reset the admin (user 1) password
-rustdesk-console reset-pwd <userId> <newpassword> # reset any user's password
-rustdesk-console -c ./conf/config.yaml            # run the server (default)
+rustdesk-console version --json
+rustdesk-console config validate
+rustdesk-console database status --json
+rustdesk-console database migrate --json
+rustdesk-console reset-admin-pwd --password-file /path/to/console-password
+rustdesk-console reset-pwd 42 --password-stdin < /path/to/console-password
+rustdesk-console -c ./conf/config.yaml
 ```
+
+See the [local maintenance CLI guide](docs/local-maintenance.en.md) for schema
+states, exit codes, and account recovery.
 
 ## Tech stack
 

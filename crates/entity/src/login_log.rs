@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 pub const CLIENT_WEB_ADMIN: &str = "webadmin";
 pub const CLIENT_WEB: &str = "webclient";
 pub const CLIENT_APP: &str = "app";
+pub const CLIENT_NATIVE: &str = "client";
+
+pub fn is_native_client(client: &str) -> bool {
+    matches!(client, CLIENT_APP | CLIENT_NATIVE)
+}
+
 pub const TYPE_ACCOUNT: &str = "account";
 pub const TYPE_OAUTH: &str = "oauth";
 

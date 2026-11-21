@@ -19,6 +19,10 @@ pub struct Model {
     #[sea_orm(column_name = "type", default_value = 0)]
     #[serde(rename = "type")]
     pub r#type: i32,
+    #[serde(skip_serializing)]
+    pub reported_type: Option<i32>,
+    #[serde(skip_serializing)]
+    pub conn_id: Option<i32>,
     #[sea_orm(default_value = "")]
     pub uuid: String,
     #[sea_orm(default_value = "")]

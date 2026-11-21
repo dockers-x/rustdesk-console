@@ -6,15 +6,17 @@ pub mod active_connection;
 pub mod address_book;
 pub mod audit;
 pub mod audit_alarm;
+pub(crate) mod audit_devices;
 pub mod audit_receipt;
 pub(crate) mod console_audit;
 pub(crate) mod console_roles;
+pub(crate) mod delegated_admin;
 pub mod deployment;
-pub mod device_admission;
 pub mod developer;
+pub mod device_admission;
 pub mod diagnostics;
-pub mod group;
 pub mod geo_relay;
+pub mod group;
 pub mod ldap;
 pub mod ldap_settings;
 pub mod login_log;
@@ -37,7 +39,31 @@ pub mod user;
 pub mod webhook;
 
 use chrono::Utc;
-use sea_orm::prelude::DateTime;
+use sea_orm::{
+    prelude::DateTime,
+    sea_query::{Alias, Expr, IntoColumnRef},
+    ColumnTrait, Condition, DatabaseBackend,
+};
+
+/// Preserve case and trailing bytes when comparing or grouping device IDs.
+pub(crate) fn exact_device_id(backend: DatabaseBackend, column: impl IntoColumnRef) -> Expr {
+    let column = Expr::col(column);
+    match backend {
+        DatabaseBackend::MySql => Expr::expr(column.cast_as(Alias::new("BINARY"))),
+        _ => column,
+    }
+}
+
+pub(crate) fn exact_device_id_eq(
+    backend: DatabaseBackend,
+    column: impl ColumnTrait,
+    value: &str,
+) -> Condition {
+    // Keep an indexable comparison as a prefilter when using a binary cast.
+    Condition::all()
+        .add_option((backend == DatabaseBackend::MySql).then(|| column.eq(value)))
+        .add(exact_device_id(backend, column.as_column_ref()).eq(value))
+}
 
 /// Current time as the entities' optional timestamp (≈ GORM auto timestamps).
 pub fn now() -> Option<DateTime> {

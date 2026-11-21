@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { X } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Table } from "@cloudflare/kumo/components/table";
+import { Tooltip } from "@cloudflare/kumo/components/tooltip";
 import { useTranslation } from "react-i18next";
 import { apiGet } from "../lib/api";
+import { getAuthSessionId } from "../lib/auth";
 import { formatDateTime, formatUnixSeconds } from "../lib/dateFormat";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { TableState } from "./TableState";
@@ -47,6 +49,27 @@ function timestampValue(value: string) {
 function isPeerOnline(row: Record<string, unknown>) {
   const lastOnline = numberValue(row.last_online_time);
   return lastOnline > 0 && Date.now() / 1000 - lastOnline <= PEER_ONLINE_WINDOW_SECONDS;
+}
+
+function PresenceDot({ online }: { online: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`size-2.5 shrink-0 rounded-full ${online ? "bg-kumo-success" : "border border-current text-kumo-subtle"}`}
+    />
+  );
+}
+
+export function PeerIdentitySummary({ row }: { row: Record<string, unknown> }) {
+  const { t } = useTranslation();
+  const online = isPeerOnline(row);
+  return (
+    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+      <PresenceDot online={online} />
+      <span className="font-mono tabular-nums">{textValue(row.id)}</span>
+      <span className="text-xs text-kumo-subtle">{t(online ? "online" : "offline")}</span>
+    </span>
+  );
 }
 
 function DetailItem({
@@ -107,9 +130,10 @@ export function PeerInfoDrawer({
   const peerId = String(row.id ?? "");
   const uuid = String(row.uuid ?? "");
   const online = isPeerOnline(row);
+  const authSessionId = getAuthSessionId();
 
   const activeConnections = useQuery({
-    queryKey: ["peer-info-active-connections", peerId, uuid],
+    queryKey: ["peer-info-active-connections", authSessionId, peerId, uuid],
     enabled: open && scope === "admin" && Boolean(peerId || uuid),
     queryFn: () =>
       apiGet<ListResult<ActiveConnection>>("/api/admin/active_connection/list", {
@@ -121,7 +145,7 @@ export function PeerInfoDrawer({
   });
 
   const effectiveStrategy = useQuery({
-    queryKey: ["peer-effective-strategy", row.row_id],
+    queryKey: ["peer-effective-strategy", authSessionId, row.row_id],
     enabled: open && scope === "admin" && Boolean(row.row_id),
     queryFn: () => apiGet<{ name: string; source: string; revision: number } | null>(
       `/api/admin/peer/effective-strategy/${encodeURIComponent(String(row.row_id))}`,
@@ -148,15 +172,23 @@ export function PeerInfoDrawer({
 
   return (
     <>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="whitespace-nowrap"
-        onClick={() => setOpen(true)}
+      <Tooltip
+        content={t(online ? "online" : "offline")}
+        render={
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="-ml-2 min-h-11 justify-start whitespace-nowrap px-2 text-kumo-link sm:min-h-9"
+            aria-label={t("devicePresenceDetails", { id: peerId, status: t(online ? "online" : "offline") })}
+            aria-haspopup="dialog"
+            onClick={() => setOpen(true)}
+          />
+        }
       >
-        {t("showDeviceInfo")}
-      </Button>
+        <PresenceDot online={online} />
+        <span className="font-mono tabular-nums">{peerId || "—"}</span>
+      </Tooltip>
 
       {open && (
         <div className="fixed inset-0 z-50">

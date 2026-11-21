@@ -58,8 +58,8 @@ pub(crate) async fn list(
 }
 
 pub(crate) async fn retention(State(state): State<AppState>, _actor: AdminUser) -> Response {
-    match console_audit::retention(&state.db).await {
-        Ok(settings) => resp::success(settings),
+    match console_audit::retention_status(&state.db).await {
+        Ok(settings) => resp::no_store(resp::success(settings)),
         Err(_) => resp::fail(101, "Unable to load audit retention"),
     }
 }
@@ -77,7 +77,7 @@ pub(crate) async fn set_retention(
 
 pub(crate) async fn preview(State(state): State<AppState>, _actor: AdminUser) -> Response {
     match console_audit::preview(&state.db, Utc::now()).await {
-        Ok(result) => resp::success(result),
+        Ok(result) => resp::no_store(resp::success(result)),
         Err(_) => resp::fail(101, "Unable to preview audit retention"),
     }
 }
@@ -135,6 +135,9 @@ mod tests {
         let schema = Schema::new(DbBackend::Sqlite);
         for statement in [
             schema.create_table_from_entity(user::Entity),
+            schema.create_table_from_entity(entity::group::Entity),
+            schema.create_table_from_entity(entity::address_book_collection::Entity),
+            schema.create_table_from_entity(entity::address_book_collection_rule::Entity),
             schema.create_table_from_entity(user_token::Entity),
             schema.create_table_from_entity(system_setting::Entity),
             schema.create_table_from_entity(device_group::Entity),
@@ -491,9 +494,15 @@ mod tests {
                 .is_null()
         );
         assert!(console_audit::cleanup(&db, now).await.is_err());
-        console_audit::set_retention(&db, Retention { days: Some(7) })
-            .await
-            .unwrap();
+        console_audit::set_retention(
+            &db,
+            Retention {
+                days: Some(7),
+                ..Retention::default()
+            },
+        )
+        .await
+        .unwrap();
 
         for _ in 0..101 {
             rows::ActiveModel {
@@ -622,5 +631,210 @@ mod tests {
             active_connection::Entity::find().count(&db).await.unwrap(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn retention_scheduling_is_opt_in_bounded_and_shared() {
+        let path = std::env::temp_dir().join(format!(
+            "rustdesk-console-retention-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let db = Database::connect(url.clone()).await.unwrap();
+        let other_db = Database::connect(url).await.unwrap();
+        schema(&db).await;
+        let now = Utc::now();
+        let old = now - Duration::days(20);
+        system_setting::ActiveModel {
+            key: Set("console_audit_retention".to_owned()),
+            value: Set(json!({"days": 7}).to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        for _ in 0..101 {
+            rows::ActiveModel {
+                action: Set("roles.assign".to_owned()),
+                result: Set("success".to_owned()),
+                actor_id: Set(1),
+                created_at: Set(old.naive_utc()),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        login_log::ActiveModel {
+            user_token_id: Set(2),
+            created_at: Set(Some(old.naive_utc())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        audit_conn::ActiveModel {
+            peer_id: Set("closed".to_owned()),
+            close_time: Set(old.timestamp()),
+            updated_at: Set(Some(old.naive_utc())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        audit_file::ActiveModel {
+            peer_id: Set("closed".to_owned()),
+            created_at: Set(Some(old.naive_utc())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(console_audit::retention_status(&db).await.unwrap()).unwrap(),
+            json!({"days": 7})
+        );
+        assert!(console_audit::run_scheduled(&db, now)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(rows::Entity::find().count(&db).await.unwrap(), 101);
+
+        let config = json!({
+            "scheduled": true,
+            "log_days": {"console": 7, "login": 30, "connection": null, "file": 10}
+        });
+        console_audit::set_retention(&db, serde_json::from_value(config).unwrap())
+            .await
+            .unwrap();
+
+        let preview =
+            serde_json::to_value(console_audit::preview(&db, now).await.unwrap()).unwrap();
+        assert_eq!(preview["console"], 101);
+        assert_eq!(preview["login"], 0);
+        assert_eq!(preview["connection"], 0);
+        assert_eq!(preview["file"], 1);
+        assert_eq!(
+            preview["cutoffs"],
+            json!({
+                "console": now - Duration::days(7),
+                "login": now - Duration::days(30),
+                "connection": null,
+                "file": now - Duration::days(10)
+            })
+        );
+
+        let (first, second) = tokio::join!(
+            console_audit::run_scheduled(&db, now),
+            console_audit::run_scheduled(&other_db, now),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(first.is_some(), second.is_some());
+        let batch = serde_json::to_value(first.or(second).unwrap()).unwrap();
+        assert_eq!(batch["console"], 100);
+        assert_eq!(batch["file"], 1);
+        assert_eq!(rows::Entity::find().count(&db).await.unwrap(), 1);
+        assert_eq!(login_log::Entity::find().count(&db).await.unwrap(), 1);
+        assert_eq!(audit_conn::Entity::find().count(&db).await.unwrap(), 1);
+        assert_eq!(audit_file::Entity::find().count(&db).await.unwrap(), 0);
+        let status =
+            serde_json::to_value(console_audit::retention_status(&db).await.unwrap()).unwrap();
+        assert_eq!(status["last_run"], json!({"at": now, "result": batch}));
+
+        assert!(
+            console_audit::run_scheduled(&db, now + Duration::minutes(14))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            console_audit::run_scheduled(&db, now + Duration::minutes(15))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(rows::Entity::find().count(&db).await.unwrap(), 0);
+
+        // A legacy replacement can still disable all retention and automatic deletion.
+        console_audit::set_retention(&db, serde_json::from_value(json!({"days": null})).unwrap())
+            .await
+            .unwrap();
+        assert!(console_audit::run_scheduled(&db, now + Duration::hours(1))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(console_audit::cleanup(&db, now).await.is_err());
+        assert_eq!(
+            serde_json::to_value(console_audit::retention_status(&db).await.unwrap()).unwrap(),
+            json!({"days": null})
+        );
+        other_db.close().await.unwrap();
+        db.close().await.unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_failed_scheduled_batch_rolls_back_and_records_attempt() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        schema(&db).await;
+        let now = Utc::now();
+        rows::ActiveModel {
+            action: Set("roles.assign".to_owned()),
+            result: Set("success".to_owned()),
+            actor_id: Set(1),
+            created_at: Set((now - Duration::days(20)).naive_utc()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        login_log::ActiveModel {
+            user_token_id: Set(2),
+            created_at: Set(Some((now - Duration::days(20)).naive_utc())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        db.execute_unprepared(
+            "CREATE TRIGGER block_login_cleanup BEFORE DELETE ON login_logs
+             BEGIN SELECT RAISE(ABORT, 'blocked for test'); END;",
+        )
+        .await
+        .unwrap();
+        console_audit::set_retention(
+            &db,
+            Retention {
+                days: Some(7),
+                scheduled: true,
+                ..Retention::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(console_audit::run_scheduled(&db, now).await.is_err());
+        assert_eq!(rows::Entity::find().count(&db).await.unwrap(), 1);
+        assert_eq!(login_log::Entity::find().count(&db).await.unwrap(), 1);
+        let status =
+            serde_json::to_value(console_audit::retention_status(&db).await.unwrap()).unwrap();
+        assert_eq!(status["last_run"], json!({"at": now, "result": null}));
+        assert!(console_audit::run_scheduled(&db, now)
+            .await
+            .unwrap()
+            .is_none());
+
+        db.execute_unprepared("DROP TRIGGER block_login_cleanup")
+            .await
+            .unwrap();
+        assert!(
+            console_audit::run_scheduled(&db, now + Duration::minutes(15))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(rows::Entity::find().count(&db).await.unwrap(), 0);
+        assert_eq!(login_log::Entity::find().count(&db).await.unwrap(), 0);
     }
 }

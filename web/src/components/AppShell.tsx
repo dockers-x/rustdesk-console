@@ -88,6 +88,7 @@ const NAV_ICONS: Record<string, IconType> = {
   auditConn: PlugsConnected,
   auditFile: FileText,
   consoleAudit: ShieldCheck,
+  delegationTitle: UsersThree,
   recordFiles: VideoCamera,
   serverCommands: Terminal,
   geoRouting: GlobeHemisphereWest,
@@ -168,6 +169,7 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
   {
     key: "orgAccounts",
     items: [
+      { to: "/delegated-admin", key: "delegationTitle" },
       adminItem("users"),
       adminItem("groups"),
       adminItem("oauth"),

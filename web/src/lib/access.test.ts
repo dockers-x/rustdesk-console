@@ -50,6 +50,17 @@ describe("console access", () => {
     expect(canAccessConsolePath("/developer/keys", false, operator)).toBe(false);
   });
 
+  it("lands scoped administrators in the delegated workspace", () => {
+    const delegated = restrictedConsoleRole(["ScopedAdministrator"]);
+    expect(delegated).toBe("delegated");
+    expect(authenticatedHome(false, delegated)).toBe("/delegated-admin");
+    expect(canAccessConsolePath("/delegated-admin", false, delegated)).toBe(true);
+    expect(canAccessConsolePath("/delegated-admin", false)).toBe(false);
+    for (const path of ["/users", "/groups", "/address_book_collection", "/my", "/settings", "/console-audit"]) {
+      expect(canAccessConsolePath(path, false, delegated)).toBe(false);
+    }
+  });
+
   it("allows administrators to use every console route", () => {
     expect(canAccessConsolePath("/overview", true)).toBe(true);
     expect(canAccessConsolePath("/users", true)).toBe(true);

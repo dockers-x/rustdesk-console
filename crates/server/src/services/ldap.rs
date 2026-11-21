@@ -118,7 +118,15 @@ fn ca_roots(pem: &[u8]) -> Result<rustls::RootCertStore, &'static str> {
     Ok(roots)
 }
 
-fn custom_tls(pem: &str, file: &str) -> Result<rustls::ClientConfig, &'static str> {
+pub(crate) fn validate_with_references(cfg: &Settings) -> Result<(), &'static str> {
+    validate(cfg, true)?;
+    if cfg.tls_ca_pem.is_empty() && !cfg.tls_ca_file.is_empty() {
+        custom_ca_roots("", &cfg.tls_ca_file)?;
+    }
+    Ok(())
+}
+
+fn custom_ca_roots(pem: &str, file: &str) -> Result<rustls::RootCertStore, &'static str> {
     let pem = if pem.is_empty() {
         let file = std::fs::File::open(file).map_err(|_| "LdapInvalidCa")?;
         if !file.metadata().is_ok_and(|meta| meta.is_file()) {
@@ -135,7 +143,11 @@ fn custom_tls(pem: &str, file: &str) -> Result<rustls::ClientConfig, &'static st
     } else {
         pem.as_bytes().to_vec()
     };
-    let mut roots = ca_roots(&pem)?;
+    ca_roots(&pem)
+}
+
+fn custom_tls(pem: &str, file: &str) -> Result<rustls::ClientConfig, &'static str> {
+    let mut roots = custom_ca_roots(pem, file)?;
     for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
         let _ = roots.add(&rustls::Certificate(cert.0));
     }

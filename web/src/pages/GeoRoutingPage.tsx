@@ -66,6 +66,22 @@ interface GeoOverview {
   runtime: RuntimeStatus;
 }
 
+interface RelayPreview {
+  revision: number;
+  reason: "rule_match" | "disabled" | "no_eligible_match" | "no_relay";
+  relay: string | null;
+  rule: string | null;
+  candidates: string[];
+  warnings: string[];
+}
+
+const previewReasonLabel = {
+  rule_match: "geoPreviewRuleMatch",
+  disabled: "geoPreviewDisabled",
+  no_eligible_match: "geoPreviewNoMatch",
+  no_relay: "geoPreviewNoRelay",
+} as const;
+
 interface MmdbUpdatePolicy {
   enabled: boolean;
   intervalHours: number;
@@ -132,7 +148,6 @@ export function GeoRoutingPage() {
   const [restoreKind, setRestoreKind] = useState<MmdbKind | null>(null);
   const [clientA, setClientA] = useState("");
   const [clientB, setClientB] = useState("");
-  const [testResult, setTestResult] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -261,12 +276,10 @@ export function GeoRoutingPage() {
 
   const test = useMutation({
     mutationFn: () =>
-      apiPost<{ raw: string }>("/api/admin/rustdesk/geo/test", {
+      apiPost<{ preview: RelayPreview | null }>("/api/admin/rustdesk/geo/preview", {
         clientA: clientA.trim(),
         clientB: clientB.trim() || null,
       }),
-    onSuccess: (result) => setTestResult(result.raw || "-"),
-    onError: (value) => setTestResult((value as Error).message || t("operationFailed")),
   });
 
   const openRule = (index?: number) => {
@@ -486,12 +499,37 @@ export function GeoRoutingPage() {
       <section className="rounded-lg border border-kumo-line bg-kumo-base p-4">
         <h2 className="text-base font-semibold">{t("geoTestTitle")}</h2>
         <p className="mt-1 text-sm text-kumo-default/75">{t("geoTestHint")}</p>
-        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-          <Field label={t("geoClientA")}><Input value={clientA} placeholder="203.0.113.10" onChange={(event) => setClientA(event.target.value)} /></Field>
-          <Field label={t("geoClientBOptional")}><Input value={clientB} placeholder="198.51.100.20" onChange={(event) => setClientB(event.target.value)} /></Field>
-          <Button disabled={!clientA.trim()} loading={test.isPending} onClick={() => test.mutate()}>{t("geoRunTest")}</Button>
-        </div>
-        {testResult && <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-kumo-line bg-kumo-recessed p-3 text-xs">{testResult}</pre>}
+        <form
+          className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (clientA.trim() && !test.isPending) test.mutate();
+          }}
+        >
+          <Input
+            label={t("geoClientA")}
+            value={clientA}
+            placeholder="203.0.113.10"
+            maxLength={45}
+            disabled={test.isPending}
+            onChange={(event) => { setClientA(event.target.value); test.reset(); }}
+          />
+          <Input
+            label={t("geoClientBOptional")}
+            value={clientB}
+            placeholder="198.51.100.20"
+            maxLength={45}
+            disabled={test.isPending}
+            onChange={(event) => { setClientB(event.target.value); test.reset(); }}
+          />
+          <Button type="submit" disabled={!clientA.trim()} loading={test.isPending}>{t("geoRunTest")}</Button>
+        </form>
+        {test.isError && <InlineMessage tone="error" className="mt-3">{test.error.message || t("operationFailed")}</InlineMessage>}
+        {test.isSuccess && (
+          test.data.preview
+            ? <RelayPreviewResult preview={test.data.preview} />
+            : <InlineMessage tone="error" className="mt-3">{t("geoPreviewUnavailable")}</InlineMessage>
+        )}
       </section>
 
       <Dialog.Root open={ruleOpen} onOpenChange={setRuleOpen}>
@@ -527,6 +565,38 @@ export function GeoRoutingPage() {
 
 function Status({ label, value }: { label: string; value: string | number }) {
   return <div className="rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-3"><div className="text-xs text-kumo-default/75">{label}</div><div className="mt-1 break-words font-mono text-sm font-semibold">{value}</div></div>;
+}
+
+function RelayPreviewResult({ preview }: { preview: RelayPreview }) {
+  const { t } = useTranslation();
+  return (
+    <div role="status" className="mt-4 space-y-3 rounded-md border border-kumo-line bg-kumo-elevated p-3 text-sm">
+      <p>{t(previewReasonLabel[preview.reason])}</p>
+      <dl className="grid gap-3 sm:grid-cols-3">
+        <div><dt className="text-kumo-subtle">{t("geoPreviewRevision")}</dt><dd>{preview.revision}</dd></div>
+        {preview.rule && <div><dt className="text-kumo-subtle">{t("geoPreviewMatchedRule")}</dt><dd className="break-words">{preview.rule}</dd></div>}
+        {preview.relay && <div><dt className="text-kumo-subtle">{t("geoPreviewRelay")}</dt><dd className="break-words">{preview.relay}</dd></div>}
+      </dl>
+      {preview.candidates.length > 0 && (
+        <div>
+          <p className="text-kumo-subtle">{t("geoPreviewCandidates")}</p>
+          <ul className="mt-1 flex flex-wrap gap-1.5">
+            {[...new Set(preview.candidates)].map((relay) => (
+              <li key={relay} className="min-w-0">
+                <Badge className="max-w-full whitespace-normal break-all">{relay}</Badge>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!preview.relay && preview.candidates.length > 1 && <p>{t("geoPreviewRotation")}</p>}
+      {preview.warnings.length > 0 && (
+        <ul className="list-disc space-y-1 pl-5 text-kumo-subtle">
+          {preview.warnings.map((warning) => <li key={warning} className="break-words">{warning}</li>)}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {

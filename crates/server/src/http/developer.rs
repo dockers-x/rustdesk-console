@@ -739,6 +739,9 @@ mod tests {
             schema.create_table_from_entity(developer_key::Entity),
             schema.create_table_from_entity(peer::Entity),
             schema.create_table_from_entity(address_book::Entity),
+            schema.create_table_from_entity(entity::group::Entity),
+            schema.create_table_from_entity(entity::address_book_collection::Entity),
+            schema.create_table_from_entity(entity::address_book_collection_rule::Entity),
             schema.create_table_from_entity(device_group::Entity),
             schema.create_table_from_entity(strategy::Entity),
         ] {

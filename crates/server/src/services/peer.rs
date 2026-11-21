@@ -252,11 +252,15 @@ pub(crate) async fn list_filtered_in_groups(
         q = q.filter(peer::Column::LastOnlineTime.gt(gt));
     }
     if let Some(v) = f.id.filter(|s| !s.is_empty()) {
-        q = q.filter(if f.exact_id {
-            peer::Column::Id.eq(v)
+        q = if f.exact_id {
+            q.filter(super::exact_device_id_eq(
+                db.get_database_backend(),
+                peer::Column::Id,
+                &v,
+            ))
         } else {
-            peer::Column::Id.contains(&v)
-        });
+            q.filter(peer::Column::Id.contains(&v))
+        };
     }
     if let Some(v) = f.hostname.filter(|s| !s.is_empty()) {
         q = q.filter(peer::Column::Hostname.contains(&v));

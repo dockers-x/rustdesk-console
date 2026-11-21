@@ -2,7 +2,8 @@
 //! assemble the shared [`AppState`]. Mirrors the Go
 //! `InitGlobal` / `DatabaseAutoUpdate` / `Migrate` flow.
 
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,17 +11,18 @@ use std::{fmt, future::Future};
 
 use sea_orm::sea_query::{ColumnDef, Table};
 use sea_orm::{
-    ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, DatabaseBackend,
-    DatabaseConnection, EntityTrait, PaginatorTrait, QueryOrder, Schema, Set, Statement,
+    AccessMode, ActiveModelTrait, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
+    DatabaseBackend, DatabaseConnection, EntityTrait, IsolationLevel, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Schema, Set, Statement, TransactionTrait,
 };
 
 use entity::{
     active_connection, address_book, address_book_collection, address_book_collection_rule,
-    audit_alarm, audit_conn, audit_file, audit_receipt, deployment_event, deployment_token, device_group,
-    device_presence_state, group, login_log, login_verification, message, message_read, oauth,
-    peer, record_file, server_cmd, share_record, smtp_email_config, strategy, strategy_assignment,
-    system_setting, tag, trusted_login_device, user, user_third, user_token, version,
-    webhook_delivery, webhook_subscription,
+    audit_alarm, audit_conn, audit_file, audit_receipt, deployment_event, deployment_token,
+    device_group, device_presence_state, group, login_log, login_verification, message,
+    message_read, oauth, peer, record_file, server_cmd, share_record, smtp_email_config, strategy,
+    strategy_assignment, system_setting, tag, trusted_login_device, user, user_third, user_token,
+    version, webhook_delivery, webhook_subscription,
 };
 
 use crate::config::{self, Config};
@@ -35,60 +37,77 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 277;
+pub const DATABASE_VERSION: i32 = 279;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
-type MigrationFn = for<'a> fn(&'a DatabaseConnection, &'a Config) -> MigrationFuture<'a>;
+// SeaORM entity methods require a sized connection type, so instantiate the
+// same migration list for a pool (MySQL) or a transaction (SQLite/PostgreSQL).
+type MigrationFn<C> = for<'a> fn(&'a C, &'a Config) -> MigrationFuture<'a>;
 
-struct SchemaMigration {
+struct SchemaMigration<C> {
     version: i32,
     name: &'static str,
-    apply: MigrationFn,
+    apply: MigrationFn<C>,
 }
 
-impl fmt::Display for SchemaMigration {
+impl<C> fmt::Display for SchemaMigration<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({})", self.version, self.name)
     }
 }
 
-const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[
-    SchemaMigration {
-        version: 271,
-        name: "legacy column reconciliation",
-        apply: migration_271,
-    },
-    SchemaMigration {
-        version: 272,
-        name: "address book peer notes",
-        apply: migration_272,
-    },
-    SchemaMigration {
-        version: 273,
-        name: "smtp sender display names",
-        apply: migration_273,
-    },
-    SchemaMigration {
-        version: 274,
-        name: "developer device group notes",
-        apply: migration_274,
-    },
-    SchemaMigration {
-        version: 275,
-        name: "session authentication level",
-        apply: migration_275,
-    },
-    SchemaMigration {
-        version: 276,
-        name: "notification destinations and delivery schedule",
-        apply: migration_276,
-    },
-    SchemaMigration {
-        version: 277,
-        name: "shared address book notes",
-        apply: migration_277,
-    },
-];
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 9] {
+    [
+        SchemaMigration {
+            version: 271,
+            name: "legacy column reconciliation",
+            apply: migration_271,
+        },
+        SchemaMigration {
+            version: 272,
+            name: "address book peer notes",
+            apply: migration_272,
+        },
+        SchemaMigration {
+            version: 273,
+            name: "smtp sender display names",
+            apply: migration_273,
+        },
+        SchemaMigration {
+            version: 274,
+            name: "developer device group notes",
+            apply: migration_274,
+        },
+        SchemaMigration {
+            version: 275,
+            name: "session authentication level",
+            apply: migration_275,
+        },
+        SchemaMigration {
+            version: 276,
+            name: "notification destinations and delivery schedule",
+            apply: migration_276,
+        },
+        SchemaMigration {
+            version: 277,
+            name: "shared address book notes",
+            apply: migration_277,
+        },
+        SchemaMigration {
+            version: 278,
+            name: "file audit report metadata",
+            apply: migration_278,
+        },
+        SchemaMigration {
+            version: 279,
+            name: "long system setting values",
+            apply: migration_279,
+        },
+    ]
+}
+
+const SQLITE_DATABASE_PATH: &str = "./data/rustdeskapi.db";
+const FIRST_RUN_SEED_PENDING: &str = "bootstrap.seed_pending";
 
 fn database_url(config: &Config) -> String {
     match config.db.r#type.as_str() {
@@ -112,16 +131,61 @@ fn database_url(config: &Config) -> String {
                 &config.postgresql.sslmode
             },
         ),
-        _ => {
-            // SQLite is the default and stores its data under ./data.
-            std::fs::create_dir_all("./data").ok();
-            "sqlite://./data/rustdeskapi.db?mode=rwc".to_string()
+        _ => format!("sqlite://{SQLITE_DATABASE_PATH}?mode=rwc"),
+    }
+}
+
+pub(crate) fn validate_database_options(
+    config: &Config,
+) -> Result<&'static str, (&'static str, &'static str)> {
+    use sea_orm::sqlx::{mysql::MySqlConnectOptions, postgres::PgConnectOptions};
+
+    match config.db.r#type.as_str() {
+        "" | config::DB_TYPE_SQLITE => Ok(config::DB_TYPE_SQLITE),
+        config::DB_TYPE_MYSQL => {
+            let valid = !config.mysql.addr.is_empty()
+                && database_url(config)
+                    .parse::<MySqlConnectOptions>()
+                    .is_ok_and(|options| {
+                        options.get_database().is_some_and(|name| !name.is_empty())
+                    });
+            valid
+                .then_some(config::DB_TYPE_MYSQL)
+                .ok_or(("mysql", "configure a valid MySQL address and database name"))
         }
+        config::DB_TYPE_POSTGRESQL => {
+            let valid = database_url(config).parse::<PgConnectOptions>().is_ok()
+                && (config.postgresql.port.is_empty()
+                    || config
+                        .postgresql
+                        .port
+                        .parse::<u16>()
+                        .is_ok_and(|port| port > 0));
+            valid.then_some(config::DB_TYPE_POSTGRESQL).ok_or((
+                "postgresql",
+                "configure a valid PostgreSQL endpoint and SSL mode",
+            ))
+        }
+        _ => Err((
+            "db.type",
+            "database type must be sqlite, mysql, or postgresql",
+        )),
+    }
+}
+
+fn database_type(config: &Config) -> &'static str {
+    match config.db.r#type.as_str() {
+        config::DB_TYPE_MYSQL => config::DB_TYPE_MYSQL,
+        config::DB_TYPE_POSTGRESQL => config::DB_TYPE_POSTGRESQL,
+        _ => config::DB_TYPE_SQLITE,
     }
 }
 
 /// Connect to the configured database.
 pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
+    if database_type(config) == config::DB_TYPE_SQLITE {
+        std::fs::create_dir_all("./data")?;
+    }
     let mut opt = ConnectOptions::new(database_url(config));
     if config.db.max_open_conns > 0 {
         opt.max_connections(config.db.max_open_conns);
@@ -130,13 +194,159 @@ pub async fn connect(config: &Config) -> anyhow::Result<DatabaseConnection> {
         opt.min_connections(config.db.max_idle_conns);
     }
     opt.connect_timeout(Duration::from_secs(10));
-    let db = Database::connect(opt).await?;
-    Ok(db)
+    Ok(Database::connect(opt).await?)
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SchemaState {
+    Empty,
+    Current,
+    UpgradeRequired,
+    NewerThanBinary,
+    Invalid,
+}
+
+impl fmt::Display for SchemaState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Empty => "empty",
+            Self::Current => "current",
+            Self::UpgradeRequired => "upgrade_required",
+            Self::NewerThanBinary => "newer_than_binary",
+            Self::Invalid => "invalid",
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SchemaError {
+    #[error("database schema {0} is newer than the supported schema {DATABASE_VERSION}")]
+    Future(i32),
+    #[error("database schema metadata is invalid")]
+    Invalid,
+}
+
+pub(crate) struct DatabaseStatus {
+    pub connection_ok: bool,
+    pub installed_schema: Option<i32>,
+    pub state: SchemaState,
+}
+
+pub(crate) struct MigrationOutcome {
+    pub from_schema: Option<i32>,
+    pub installed_schema: i32,
+}
+
+pub(crate) async fn database_status(config: &Config) -> DatabaseStatus {
+    let is_sqlite = database_type(config) == config::DB_TYPE_SQLITE;
+    let invalid = DatabaseStatus {
+        connection_ok: false,
+        installed_schema: None,
+        state: SchemaState::Invalid,
+    };
+    let url = if is_sqlite {
+        match Path::new(SQLITE_DATABASE_PATH).metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return DatabaseStatus {
+                    connection_ok: false,
+                    installed_schema: None,
+                    state: SchemaState::Empty,
+                };
+            }
+            Ok(meta) if meta.is_file() => format!("sqlite://{SQLITE_DATABASE_PATH}?mode=ro"),
+            _ => return invalid,
+        }
+    } else {
+        database_url(config)
+    };
+
+    let mut options = ConnectOptions::new(url);
+    options
+        .max_connections(1)
+        .connect_timeout(Duration::from_secs(10))
+        .sqlx_logging(false);
+    let Ok(db) = Database::connect(options).await else {
+        return invalid;
+    };
+
+    let result = async {
+        let transaction = db
+            .begin_with_config(None, Some(AccessMode::ReadOnly))
+            .await?;
+        let installed = latest_schema_version(&transaction).await;
+        transaction.rollback().await?;
+        installed
+    }
+    .await;
+    let installed_schema = match result {
+        Ok(installed_schema) => installed_schema,
+        Err(_) => {
+            return DatabaseStatus {
+                connection_ok: true,
+                ..invalid
+            }
+        }
+    };
+    let state = match installed_schema {
+        None => SchemaState::Empty,
+        Some(version) if version < 0 => SchemaState::Invalid,
+        Some(version) if version < DATABASE_VERSION => SchemaState::UpgradeRequired,
+        Some(DATABASE_VERSION) => SchemaState::Current,
+        Some(_) => SchemaState::NewerThanBinary,
+    };
+    DatabaseStatus {
+        connection_ok: true,
+        installed_schema,
+        state,
+    }
+}
+
+/// SQLite DDL and first-run seed are transactional. The separate file lock
+/// serializes starters before they take a read snapshot and respects retries
+/// after process exit, when the OS automatically releases the lock.
+async fn lock_sqlite_migration(config: &Config) -> anyhow::Result<Option<File>> {
+    if database_type(config) != config::DB_TYPE_SQLITE {
+        return Ok(None);
+    }
+    tokio::task::spawn_blocking(|| {
+        std::fs::create_dir_all("./data")?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(format!("{SQLITE_DATABASE_PATH}.migrate.lock"))?;
+        fs2::FileExt::lock_exclusive(&file)?;
+        Ok(Some(file))
+    })
+    .await?
+}
+
+async fn lock_mysql_migration(config: &Config) -> anyhow::Result<sea_orm::sqlx::MySqlConnection> {
+    use sea_orm::sqlx::{self, Connection, MySqlConnection};
+
+    // DDL implicitly commits on MySQL. Hold the server advisory lock on a
+    // dedicated connection for the entire apply/seed operation.
+    let mut lock = tokio::time::timeout(
+        Duration::from_secs(10),
+        MySqlConnection::connect(&database_url(config)),
+    )
+    .await??;
+    let acquired: Option<i32> =
+        sqlx::query_scalar("SELECT GET_LOCK(CONCAT('rdc:', SHA2(DATABASE(), 224)), 10)")
+            .fetch_one(&mut lock)
+            .await?;
+    anyhow::ensure!(
+        acquired == Some(1),
+        "could not acquire the schema migration lock"
+    );
+    Ok(lock)
 }
 
 /// Create any missing tables. Existing tables are never altered here; schema
 /// evolution is handled by the ordered migrations below.
-async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
+async fn create_tables(db: &impl ConnectionTrait) -> anyhow::Result<()> {
     let backend = db.get_database_backend();
     let schema = Schema::new(backend);
 
@@ -198,19 +408,19 @@ async fn create_tables(db: &DatabaseConnection) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn migration_271<'a>(db: &'a DatabaseConnection, config: &'a Config) -> MigrationFuture<'a> {
+fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
 }
 
-fn migration_272<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+fn migration_272<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_272_address_book_notes(db).await })
 }
 
-fn migration_273<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+fn migration_273<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_273_smtp_sender_names(db).await })
 }
 
-fn migration_274<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+fn migration_274<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move {
         if !column_exists(db, "device_groups", "note").await? {
             let statement = Table::alter()
@@ -229,7 +439,7 @@ fn migration_274<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> Migrati
     })
 }
 
-fn migration_275<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+fn migration_275<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move {
         if !column_exists(db, "user_tokens", "auth_level").await? {
             let statement = Table::alter()
@@ -267,26 +477,126 @@ fn migration_275<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> Migrati
                         .default(false),
                 )
                 .to_owned();
-            db.execute(db.get_database_backend().build(&statement)).await?;
+            db.execute(db.get_database_backend().build(&statement))
+                .await?;
         }
         Ok(())
     })
 }
 
-fn migration_277<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+fn migration_277<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move {
         if !column_exists(db, "address_book_collections", "note").await? {
             let statement = Table::alter()
                 .table(address_book_collection::Entity)
-                .add_column(ColumnDef::new(address_book_collection::Column::Note).string().not_null().default(""))
+                .add_column(
+                    ColumnDef::new(address_book_collection::Column::Note)
+                        .string()
+                        .not_null()
+                        .default(""),
+                )
                 .to_owned();
-            db.execute(db.get_database_backend().build(&statement)).await?;
+            db.execute(db.get_database_backend().build(&statement))
+                .await?;
         }
         Ok(())
     })
 }
 
-fn migration_276<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> MigrationFuture<'a> {
+fn migration_278<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        for (name, column) in [
+            ("reported_type", audit_file::Column::ReportedType),
+            ("conn_id", audit_file::Column::ConnId),
+        ] {
+            if !column_exists(db, "audit_files", name).await? {
+                let statement = Table::alter()
+                    .table(audit_file::Entity)
+                    .add_column(ColumnDef::new(column).integer())
+                    .to_owned();
+                db.execute(db.get_database_backend().build(&statement))
+                    .await?;
+            }
+        }
+
+        // RustDesk reports full paths and up to ten file details in the raw JSON.
+        // Widen legacy VARCHAR columns while retaining existing text-backed columns.
+        let backend = db.get_database_backend();
+        for column in ["info", "path"] {
+            let (query, alter) = match backend {
+                DatabaseBackend::MySql => (
+                    format!(
+                        "SELECT is_nullable AS nullable_value FROM information_schema.columns
+                         WHERE table_schema = DATABASE() AND table_name = 'audit_files'
+                         AND column_name = '{column}' AND data_type IN ('char', 'varchar')"
+                    ),
+                    format!("ALTER TABLE audit_files MODIFY COLUMN `{column}` MEDIUMTEXT NOT NULL"),
+                ),
+                DatabaseBackend::Postgres => (
+                    format!(
+                        "SELECT is_nullable AS nullable_value FROM information_schema.columns
+                         WHERE table_schema = current_schema() AND table_name = 'audit_files'
+                         AND column_name = '{column}' AND character_maximum_length IS NOT NULL"
+                    ),
+                    format!(r#"ALTER TABLE audit_files ALTER COLUMN "{column}" TYPE TEXT"#),
+                ),
+                DatabaseBackend::Sqlite => break,
+            };
+            if let Some(legacy) = db.query_one(Statement::from_string(backend, query)).await? {
+                let nullable: String = legacy.try_get("", "nullable_value")?;
+                if nullable == "YES" {
+                    // Legacy databases can represent missing metadata as NULL.
+                    // The audit entity represents the same absence as an empty string.
+                    db.execute_unprepared(&format!(
+                        "UPDATE audit_files SET {column} = '' WHERE {column} IS NULL"
+                    ))
+                    .await?;
+                }
+                db.execute_unprepared(&alter).await?;
+            }
+        }
+        Ok(())
+    })
+}
+
+fn migration_279<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let query = match backend {
+            DatabaseBackend::MySql => {
+                "SELECT is_nullable AS nullable_value FROM information_schema.columns
+                 WHERE table_schema = DATABASE() AND table_name = 'system_settings'
+                 AND column_name = 'value' AND data_type IN ('char', 'varchar')"
+            }
+            DatabaseBackend::Postgres => {
+                "SELECT is_nullable AS nullable_value FROM information_schema.columns
+                 WHERE table_schema = current_schema() AND table_name = 'system_settings'
+                 AND column_name = 'value' AND character_maximum_length IS NOT NULL"
+            }
+            // SQLite accepts long strings even in a column declared VARCHAR(255).
+            DatabaseBackend::Sqlite => return Ok(()),
+        };
+        if let Some(column) = db.query_one(Statement::from_string(backend, query)).await? {
+            let nullable: String = column.try_get("", "nullable_value")?;
+            let alter = match backend {
+                DatabaseBackend::MySql if nullable == "YES" => {
+                    "ALTER TABLE system_settings MODIFY COLUMN `value` TEXT NULL"
+                }
+                DatabaseBackend::MySql => {
+                    "ALTER TABLE system_settings MODIFY COLUMN `value` TEXT NOT NULL"
+                }
+                DatabaseBackend::Postgres => {
+                    r#"ALTER TABLE system_settings ALTER COLUMN "value" TYPE TEXT"#
+                }
+                DatabaseBackend::Sqlite => unreachable!(),
+            };
+            db.execute_unprepared(alter).await?;
+        }
+        Ok(())
+    })
+}
+
+fn migration_276<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move {
         use sea_orm::sea_query::{Alias, Index};
 
@@ -382,7 +692,7 @@ fn migration_276<'a>(db: &'a DatabaseConnection, _config: &'a Config) -> Migrati
 }
 
 async fn migrate_271_legacy_columns(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     config: &Config,
 ) -> anyhow::Result<()> {
     let backend = db.get_database_backend();
@@ -568,7 +878,7 @@ async fn migrate_271_legacy_columns(
     Ok(())
 }
 
-async fn migrate_272_address_book_notes(db: &DatabaseConnection) -> anyhow::Result<()> {
+async fn migrate_272_address_book_notes(db: &impl ConnectionTrait) -> anyhow::Result<()> {
     let backend = db.get_database_backend();
 
     if !column_exists(db, "address_books", "note").await? {
@@ -587,7 +897,7 @@ async fn migrate_272_address_book_notes(db: &DatabaseConnection) -> anyhow::Resu
     Ok(())
 }
 
-async fn migrate_273_smtp_sender_names(db: &DatabaseConnection) -> anyhow::Result<()> {
+async fn migrate_273_smtp_sender_names(db: &impl ConnectionTrait) -> anyhow::Result<()> {
     let backend = db.get_database_backend();
 
     if !column_exists(db, "smtp_email_configs", "from_name").await? {
@@ -607,7 +917,7 @@ async fn migrate_273_smtp_sender_names(db: &DatabaseConnection) -> anyhow::Resul
 }
 
 async fn column_exists(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     table_name: &str,
     column_name: &str,
 ) -> anyhow::Result<bool> {
@@ -635,7 +945,7 @@ async fn column_exists(
 }
 
 async fn backfill_record_storage_keys(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     config: &Config,
 ) -> anyhow::Result<()> {
     let rows = record_file::Entity::find().all(db).await?;
@@ -656,16 +966,50 @@ async fn backfill_record_storage_keys(
     Ok(())
 }
 
-async fn latest_schema_version(db: &DatabaseConnection) -> anyhow::Result<Option<i32>> {
-    Ok(version::Entity::find()
-        .order_by_desc(version::Column::Version)
-        .order_by_desc(version::Column::Id)
-        .one(db)
+async fn latest_schema_version(db: &impl ConnectionTrait) -> anyhow::Result<Option<i32>> {
+    let backend = db.get_database_backend();
+    let sql = match backend {
+        DatabaseBackend::MySql => "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'versions' AND table_type = 'BASE TABLE'",
+        DatabaseBackend::Postgres => "SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'versions' AND table_type = 'BASE TABLE'",
+        DatabaseBackend::Sqlite => "SELECT 1 FROM sqlite_schema WHERE name = 'versions' AND type = 'table'",
+    };
+    if db
+        .query_one(Statement::from_string(backend, sql))
         .await?
-        .map(|v| v.version))
+        .is_none()
+    {
+        return Ok(None);
+    }
+    Ok(version::Entity::find()
+        .select_only()
+        .column(version::Column::Version)
+        .order_by_desc(version::Column::Version)
+        .into_tuple::<i32>()
+        .one(db)
+        .await?)
 }
 
-async fn record_schema_version(db: &DatabaseConnection, schema_version: i32) -> anyhow::Result<()> {
+pub(crate) async fn require_compatible_schema(
+    db: &impl ConnectionTrait,
+) -> anyhow::Result<Option<i32>> {
+    let installed_schema = latest_schema_version(db)
+        .await
+        .map_err(|_| SchemaError::Invalid)?;
+    if let Some(version) = installed_schema {
+        if version > DATABASE_VERSION {
+            return Err(SchemaError::Future(version).into());
+        }
+        if version < 0 {
+            return Err(SchemaError::Invalid.into());
+        }
+    }
+    Ok(installed_schema)
+}
+
+async fn record_schema_version(
+    db: &impl ConnectionTrait,
+    schema_version: i32,
+) -> anyhow::Result<()> {
     let am = version::ActiveModel {
         version: Set(schema_version),
         created_at: Set(services::now()),
@@ -676,27 +1020,95 @@ async fn record_schema_version(db: &DatabaseConnection, schema_version: i32) -> 
     Ok(())
 }
 
-async fn run_schema_migrations(db: &DatabaseConnection, config: &Config) -> anyhow::Result<()> {
-    let declared_latest = SCHEMA_MIGRATIONS
-        .last()
-        .map(|migration| migration.version)
-        .unwrap_or(0);
+async fn apply_schema(
+    db: &impl ConnectionTrait,
+    config: &Config,
+) -> anyhow::Result<MigrationOutcome> {
+    let from_schema = require_compatible_schema(db).await?;
+    let migrations = schema_migrations();
+    let declared_latest = migrations.last().map_or(0, |migration| migration.version);
     anyhow::ensure!(
         declared_latest == DATABASE_VERSION,
         "schema migration list latest version {declared_latest} does not match DATABASE_VERSION {DATABASE_VERSION}"
     );
 
-    let current_version = latest_schema_version(db).await?.unwrap_or(0);
-    for migration in SCHEMA_MIGRATIONS {
-        if migration.version > current_version {
+    create_tables(db).await?;
+    if from_schema.is_none()
+        && user::Entity::find().count(db).await? == 0
+        && first_run_seed_marker(db).await?.is_none()
+    {
+        system_setting::ActiveModel {
+            key: Set(FIRST_RUN_SEED_PENDING.to_owned()),
+            value: Set("true".to_owned()),
+            created_at: Set(services::now()),
+            updated_at: Set(services::now()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?;
+    }
+    for migration in migrations {
+        let pending = migration.version > from_schema.unwrap_or(0);
+        if pending {
             tracing::info!("Applying schema migration {}", migration);
-            (migration.apply)(db, config).await?;
+        }
+        (migration.apply)(db, config).await?;
+        if pending {
             record_schema_version(db, migration.version).await?;
-        } else {
-            (migration.apply)(db, config).await?;
         }
     }
-    Ok(())
+    Ok(MigrationOutcome {
+        from_schema,
+        installed_schema: DATABASE_VERSION,
+    })
+}
+
+async fn initialize_database(
+    db: &DatabaseConnection,
+    config: &Config,
+    seed_locale: Option<(&I18n, &str)>,
+) -> anyhow::Result<MigrationOutcome> {
+    let backend = db.get_database_backend();
+    if backend == DatabaseBackend::MySql {
+        let _lock = lock_mysql_migration(config).await?;
+        let outcome = apply_schema(db, config).await?;
+        if let Some((i18n, lang)) = seed_locale {
+            let transaction = db.begin().await?;
+            seed_if_needed(&transaction, config, i18n, lang).await?;
+            transaction.commit().await?;
+        }
+        return Ok(outcome);
+    }
+
+    let transaction = if backend == DatabaseBackend::Postgres {
+        // The version read must see the holder's committed migration after
+        // waiting on its advisory lock.
+        let transaction = db
+            .begin_with_config(Some(IsolationLevel::ReadCommitted), None)
+            .await?;
+        transaction
+            .query_one(Statement::from_string(
+                backend,
+                "SELECT pg_advisory_xact_lock(1866693622, hashtext(current_schema()))",
+            ))
+            .await?;
+        transaction
+    } else {
+        db.begin().await?
+    };
+    let outcome = apply_schema(&transaction, config).await?;
+    if let Some((i18n, lang)) = seed_locale {
+        seed_if_needed(&transaction, config, i18n, lang).await?;
+    }
+    transaction.commit().await?;
+    Ok(outcome)
+}
+
+/// Apply the schema without creating default groups or user accounts.
+pub(crate) async fn migrate_database(config: &Config) -> anyhow::Result<MigrationOutcome> {
+    let _lock = lock_sqlite_migration(config).await?;
+    let db = connect(config).await?;
+    initialize_database(&db, config, None).await
 }
 
 /// Run schema sync + version bookkeeping + first-run seed.
@@ -706,24 +1118,41 @@ pub async fn migrate_and_seed(
     i18n: &I18n,
     lang: &str,
 ) -> anyhow::Result<()> {
-    let had_versions = version::Entity::find().count(db).await.unwrap_or(0) > 0;
+    initialize_database(db, config, Some((i18n, lang))).await?;
+    Ok(())
+}
 
-    create_tables(db).await?;
-    run_schema_migrations(db, config).await?;
+async fn first_run_seed_marker(
+    db: &impl ConnectionTrait,
+) -> Result<Option<system_setting::Model>, sea_orm::DbErr> {
+    system_setting::Entity::find()
+        .filter(system_setting::Column::Key.eq(FIRST_RUN_SEED_PENDING))
+        .one(db)
+        .await
+}
 
-    // First run ever: seed default groups + admin user. This is based on users
-    // rather than version rows because fresh installs now record every schema
-    // migration in the version table.
-    let user_count = user::Entity::find().count(db).await.unwrap_or(0);
-    if !had_versions && user_count == 0 {
-        seed(db, config, i18n, lang).await?;
+async fn seed_if_needed(
+    db: &impl ConnectionTrait,
+    config: &Config,
+    i18n: &I18n,
+    lang: &str,
+) -> anyhow::Result<()> {
+    // A schema-only first run defers application data to the next startup.
+    // Keep the marker transactional with the seed so interrupted starts retry
+    // without treating deliberately emptied existing installations as new.
+    if let Some(marker) = first_run_seed_marker(db).await? {
+        if user::Entity::find().count(db).await? == 0 {
+            seed(db, config, i18n, lang).await?;
+        }
+        system_setting::Entity::delete_by_id(marker.id)
+            .exec(db)
+            .await?;
     }
-
     Ok(())
 }
 
 async fn seed(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     config: &Config,
     i18n: &I18n,
     lang: &str,
@@ -741,7 +1170,7 @@ async fn seed(
     } else {
         share_name
     };
-    services::group::create(db, &default_name, group::TYPE_DEFAULT).await?;
+    let default_group = services::group::create(db, &default_name, group::TYPE_DEFAULT).await?;
     services::group::create(db, &share_name, group::TYPE_SHARE).await?;
 
     if config.admin.password.is_empty() {
@@ -757,7 +1186,7 @@ async fn seed(
         nickname: Set("Admin".to_string()),
         status: Set(user::STATUS_ENABLE),
         is_admin: Set(Some(true)),
-        group_id: Set(1),
+        group_id: Set(default_group.id),
         password: Set(hash),
         must_change_password: Set(config.admin.force_change_password),
         created_at: Set(services::now()),
@@ -771,10 +1200,13 @@ async fn seed(
 /// Build the full application state from a parsed config.
 pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result<AppState> {
     let jwt = Jwt::try_new(&config.jwt.key, config.jwt.expire_duration())?;
-    let db = connect(&config).await?;
     let i18n = I18n::load(&config.lang);
-
-    migrate_and_seed(&db, &config, &i18n, &config.lang).await?;
+    let db = {
+        let _lock = lock_sqlite_migration(&config).await?;
+        let db = connect(&config).await?;
+        migrate_and_seed(&db, &config, &i18n, &config.lang).await?;
+        db
+    };
 
     let limiter = LoginLimiter::new(SecurityPolicy {
         captcha_threshold: config.app.captcha_threshold,
@@ -834,7 +1266,10 @@ mod tests {
             config.postgresql.host = "localhost".to_string();
             let parsed = url::Url::parse(&database_url(&config)).unwrap();
             assert_eq!(parsed.host_str(), Some("localhost"));
-            assert_eq!(urlencoding::decode(parsed.username()).unwrap(), "user@/#?%:");
+            assert_eq!(
+                urlencoding::decode(parsed.username()).unwrap(),
+                "user@/#?%:"
+            );
             assert_eq!(
                 urlencoding::decode(parsed.password().unwrap()).unwrap(),
                 "pass@/#?%:"
@@ -853,6 +1288,63 @@ mod tests {
         cfg.admin.password = admin_password.to_string();
         cfg.admin.init();
         cfg
+    }
+
+    #[tokio::test]
+    async fn schema_only_migration_is_idempotent_and_leaves_first_run_for_startup() {
+        let db = memory_db().await;
+        let cfg = test_config("change-me");
+        let i18n = I18n::load("en");
+
+        let first = initialize_database(&db, &cfg, None).await.unwrap();
+        assert_eq!(first.from_schema, None);
+        assert_eq!(first.installed_schema, DATABASE_VERSION);
+        assert_eq!(group::Entity::find().count(&db).await.unwrap(), 0);
+        assert_eq!(user::Entity::find().count(&db).await.unwrap(), 0);
+
+        let repeat = initialize_database(&db, &cfg, None).await.unwrap();
+        assert_eq!(repeat.from_schema, Some(DATABASE_VERSION));
+        assert_eq!(
+            version::Entity::find().count(&db).await.unwrap(),
+            schema_migrations::<DatabaseConnection>().len() as u64,
+        );
+
+        migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
+        migrate_and_seed(&db, &cfg, &i18n, "en").await.unwrap();
+        assert_eq!(group::Entity::find().count(&db).await.unwrap(), 2);
+        let admin = user::Entity::find().one(&db).await.unwrap().unwrap();
+        assert!(admin.is_admin());
+        assert_eq!(admin.username, "admin");
+    }
+
+    #[tokio::test]
+    async fn startup_never_creates_tables_on_a_future_schema() {
+        let db = memory_db().await;
+        let future_version = DATABASE_VERSION + 1;
+        db.execute_unprepared("CREATE TABLE versions (version INTEGER NOT NULL)")
+            .await
+            .unwrap();
+        db.execute_unprepared(&format!(
+            "INSERT INTO versions VALUES ({future_version}), (1)"
+        ))
+        .await
+        .unwrap();
+        let cfg = test_config("change-me");
+        let error = migrate_and_seed(&db, &cfg, &I18n::load("en"), "en")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error.downcast_ref::<SchemaError>(), Some(SchemaError::Future(version)) if *version == future_version)
+        );
+        let tables = db
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT name FROM sqlite_schema WHERE type = 'table'",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].try_get::<String>("", "name").unwrap(), "versions");
     }
 
     #[tokio::test]
@@ -885,6 +1377,15 @@ mod tests {
         assert!(crate::support::password::verify_password(&admin.password, "change-me").0);
     }
 
+    #[test]
+    fn fresh_mysql_schema_supports_long_system_setting_values() {
+        let backend = DatabaseBackend::MySql;
+        let statement = Schema::new(backend).create_table_from_entity(system_setting::Entity);
+        let ddl = backend.build(&statement).sql;
+        assert!(ddl.contains("`value` text NOT NULL"), "{ddl}");
+        assert!(!ddl.contains("`value` varchar"), "{ddl}");
+    }
+
     #[tokio::test]
     async fn fresh_install_records_schema_migration_versions() {
         let db = memory_db().await;
@@ -902,20 +1403,62 @@ mod tests {
             .map(|row| row.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, vec![271, 272, 273, 274, 275, 276, DATABASE_VERSION]);
+        assert_eq!(
+            versions,
+            vec![271, 272, 273, 274, 275, 276, 277, 278, DATABASE_VERSION]
+        );
+    }
+
+    #[tokio::test]
+    async fn file_audit_migration_keeps_legacy_reports_and_accepts_replay() {
+        let db = memory_db().await;
+        db.execute_unprepared(
+            "CREATE TABLE audit_files (id INTEGER PRIMARY KEY, type INTEGER, path TEXT, info TEXT);
+             INSERT INTO audit_files (id,type,path,info) VALUES (1,0,'legacy path','legacy details');",
+        )
+        .await
+        .unwrap();
+        let cfg = test_config("");
+        migration_278(&db, &cfg).await.unwrap();
+        migration_278(&db, &cfg).await.unwrap();
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT type, path, info, reported_type, conn_id FROM audit_files WHERE id = 1",
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.try_get::<i32>("", "type").unwrap(), 0);
+        assert_eq!(row.try_get::<String>("", "path").unwrap(), "legacy path");
+        assert_eq!(row.try_get::<String>("", "info").unwrap(), "legacy details");
+        assert_eq!(row.try_get::<Option<i32>>("", "reported_type").unwrap(), None);
+        assert_eq!(row.try_get::<Option<i32>>("", "conn_id").unwrap(), None);
     }
 
     #[tokio::test]
     async fn existing_device_groups_preserve_rows_and_gain_developer_notes() {
         let db = memory_db().await;
         db.execute_unprepared("CREATE TABLE device_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', created_at DATETIME, updated_at DATETIME)").await.unwrap();
-        db.execute_unprepared("INSERT INTO device_groups (id,name) VALUES (7,'Existing fleet')").await.unwrap();
+        db.execute_unprepared("INSERT INTO device_groups (id,name) VALUES (7,'Existing fleet')")
+            .await
+            .unwrap();
         let cfg = test_config("");
-        migrate_and_seed(&db, &cfg, &I18n::load("en"), "en").await.unwrap();
-        let group = device_group::Entity::find_by_id(7).one(&db).await.unwrap().unwrap();
+        migrate_and_seed(&db, &cfg, &I18n::load("en"), "en")
+            .await
+            .unwrap();
+        let group = device_group::Entity::find_by_id(7)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(group.name, "Existing fleet");
         assert_eq!(group.note, "");
-        assert!(entity::developer_key::Entity::find().all(&db).await.unwrap().is_empty());
+        assert!(entity::developer_key::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

@@ -181,7 +181,7 @@ fn merge_form(mut current: RecordStorage, form: RecordStorageConfigForm) -> Reco
     current
 }
 
-fn validate_active(cfg: &RecordStorage) -> anyhow::Result<()> {
+pub(crate) fn validate_active(cfg: &RecordStorage) -> anyhow::Result<()> {
     match cfg.normalized_type() {
         RECORD_STORAGE_S3 => {
             if cfg.s3.endpoint.is_empty()

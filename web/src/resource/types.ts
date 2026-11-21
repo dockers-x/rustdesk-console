@@ -68,6 +68,7 @@ export interface RowActionHelpers<T = Record<string, unknown>> {
 }
 
 export interface FilterDef {
+  allLabel?: string;
   name: string; // query-param name
   label: string; // i18n key (placeholder)
   type?: "text" | "select";

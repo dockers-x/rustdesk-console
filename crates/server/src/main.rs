@@ -13,70 +13,37 @@ mod features;
 mod http;
 mod i18n;
 mod logging;
+mod operator_cli;
 mod services;
 mod state;
 mod support;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-#[command(name = "rustdesk-api-server", about = "RUSTDESK API SERVER (Rust)")]
-struct Cli {
-    /// Path to the config file.
-    #[arg(short, long, default_value = "./conf/config.yaml")]
-    config: String,
-
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Reset the admin (user id 1) password.
-    #[command(name = "reset-admin-pwd")]
-    AdminPassword { pwd: String },
-    /// Reset a user's password by id.
-    #[command(name = "reset-pwd")]
-    Password { user_id: i32, pwd: String },
-    /// Reset a lost TOTP factor and revoke the user's sessions and challenges.
-    #[command(name = "reset-totp")]
-    Totp { user_id: i32 },
-}
+use clap::Parser;
 
 #[tokio::main]
-async fn main() {
-    let cli = Cli::parse();
+async fn main() -> ExitCode {
+    let cli = operator_cli::Cli::parse();
+    if let Some(command) = cli.command {
+        return command.run(&cli.config).await;
+    }
 
     let cfg = match config::init(&cli.config) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
     };
-
     logging::init(&cfg);
-
-    let result = match cli.command {
-        Some(Command::AdminPassword { pwd }) => reset_password(&cfg, 1, &pwd).await,
-        Some(Command::Password { user_id, pwd }) => {
-            if user_id <= 0 {
-                tracing::warn!("userId must be greater than 0!");
-                return;
-            }
-            reset_password(&cfg, user_id, &pwd).await
-        }
-        Some(Command::Totp { user_id }) => reset_totp(&cfg, user_id).await,
-        None => serve(cfg, PathBuf::from(cli.config)).await,
-    };
-
-    if let Err(e) = result {
+    if let Err(e) = serve(cfg, PathBuf::from(cli.config)).await {
         tracing::error!("{e}");
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
 
 async fn serve(cfg: config::Config, config_path: PathBuf) -> anyhow::Result<()> {
@@ -92,10 +59,10 @@ async fn serve(cfg: config::Config, config_path: PathBuf) -> anyhow::Result<()> 
     services::geo_relay::spawn_startup_sync(state.db.clone(), state.config.clone());
     services::geo_relay::spawn_mmdb_update_worker(state.db.clone(), state.config.clone());
     services::webhook::spawn_presence_worker(state.db.clone());
-    let app = http::router::build(state);
-
     let addr: SocketAddr = addr_str.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    services::console_audit::spawn_retention_worker(state.db.clone());
+    let app = http::router::build(state);
     tracing::info!("listening on http://{addr}");
     tracing::info!(
         target: "security_audit",
@@ -109,43 +76,5 @@ async fn serve(cfg: config::Config, config_path: PathBuf) -> anyhow::Result<()> 
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await?;
-    Ok(())
-}
-
-/// Reset a password without running the full migrate/seed/serve path.
-async fn reset_password(cfg: &config::Config, user_id: i32, pwd: &str) -> anyhow::Result<()> {
-    let db = bootstrap::connect(cfg).await?;
-    match services::user::info_by_id(&db, user_id).await? {
-        Some(u) if u.id != 0 => {
-            services::user::update_password(&db, &u, pwd)
-                .await
-                .map_err(|e| anyhow::anyhow!(e))?;
-            tracing::info!(
-                target: "security_audit",
-                event = "console.password_reset",
-                actor = "local_cli",
-                subject_id = user_id,
-            );
-        }
-        _ => tracing::warn!("user not found!"),
-    }
-    Ok(())
-}
-
-/// Recover access to the enrollment flow using local database access.
-async fn reset_totp(cfg: &config::Config, user_id: i32) -> anyhow::Result<()> {
-    let db = bootstrap::connect(cfg).await?;
-    let account = services::user::info_by_id(&db, user_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("user {user_id} not found"))?;
-    services::login_security::reset_user_totp(&db, &account)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    tracing::info!(
-        target: "security_audit",
-        event = "console.totp_reset",
-        actor = "local_cli",
-        subject_id = user_id,
-    );
     Ok(())
 }

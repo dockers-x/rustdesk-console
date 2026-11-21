@@ -88,6 +88,7 @@ pub async fn address_book_list(
 ) -> Response {
     let f = services::address_book::AbFilters {
         id: q.id,
+        exact_id: false,
         user_id: Some(user.user.id),
         username: q.username,
         hostname: q.hostname,

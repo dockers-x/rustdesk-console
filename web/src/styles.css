@@ -230,3 +230,19 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
     transition-duration: 80ms !important;
   }
 }
+
+@media (hover: hover) and (pointer: fine) {
+  .audit-device-copy {
+    opacity: 0;
+  }
+
+  .audit-device-id:is(:hover, :focus-within) .audit-device-copy {
+    opacity: 1;
+  }
+}
+
+@media (any-pointer: coarse) {
+  .audit-device-copy {
+    opacity: 1;
+  }
+}

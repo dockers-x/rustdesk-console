@@ -19,6 +19,7 @@ use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
 use crate::http::security_audit::AuditContext;
 use crate::services;
+use crate::services::audit_devices;
 use crate::services::console_roles::ConsoleRole;
 use crate::services::login_security::{ChallengeSources, VerificationKind};
 use crate::services::user::{LoginProof, AUTH_ENROLLMENT, AUTH_TOTP};
@@ -1318,6 +1319,9 @@ pub async fn user_current(user: BackendUser, role: Option<Extension<ConsoleRole>
             Some(ConsoleRole::AuditReader) => payload.route_names = vec!["AuditReader".to_owned()],
             Some(ConsoleRole::DeviceGroupOperator { .. }) => {
                 payload.route_names = vec!["DeviceGroupOperator".to_owned()];
+            }
+            Some(ConsoleRole::ScopedAdministrator { .. }) => {
+                payload.route_names = vec!["ScopedAdministrator".to_owned()];
             }
             _ => {}
         }
@@ -2673,7 +2677,23 @@ pub async fn active_connection_list(
     )
     .await
     {
-        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Ok(r) => {
+            let devices = audit_devices::lookup(
+                &state.db,
+                true,
+                r.list.iter().map(|row| row.peer_id.as_str()),
+            )
+            .await;
+            let list = r
+                .list
+                .into_iter()
+                .map(|row| {
+                    let device = devices.get(&row.peer_id).cloned();
+                    audit_devices::DeviceFields::peers(row, device, None)
+                })
+                .collect();
+            resp::no_store(list_json(list, r.page, r.total, r.page_size))
+        }
         Err(e) => resp::fail(101, e.to_string()),
     }
 }
@@ -2729,7 +2749,7 @@ fn disconnect_key(uuid: &str, peer_id: &str) -> String {
 
 pub async fn login_log_list(
     State(state): State<AppState>,
-    _user: AuditReader,
+    user: AuditReader,
     Query(q): Query<PageQuery>,
 ) -> Response {
     match services::login_log::list(
@@ -2744,7 +2764,30 @@ pub async fn login_log_list(
     )
     .await
     {
-        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Ok(r) => {
+            let devices = audit_devices::lookup(
+                &state.db,
+                user.can_lookup_devices(),
+                r.list
+                    .iter()
+                    .filter(|row| entity::login_log::is_native_client(&row.client))
+                    .map(|row| row.device_id.as_str()),
+            )
+            .await;
+            let list = r
+                .list
+                .into_iter()
+                .map(|row| {
+                    let device = if entity::login_log::is_native_client(&row.client) {
+                        devices.get(&row.device_id).cloned()
+                    } else {
+                        None
+                    };
+                    audit_devices::DeviceFields::login(row, device)
+                })
+                .collect();
+            resp::no_store(list_json(list, r.page, r.total, r.page_size))
+        }
         Err(e) => resp::fail(101, e.to_string()),
     }
 }
@@ -2969,7 +3012,7 @@ pub struct AuditQuery {
 
 pub async fn audit_conn_list(
     State(state): State<AppState>,
-    _user: AuditReader,
+    user: AuditReader,
     Query(q): Query<AuditQuery>,
 ) -> Response {
     match services::audit::conn_list(
@@ -2981,7 +3024,26 @@ pub async fn audit_conn_list(
     )
     .await
     {
-        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Ok(r) => {
+            let devices = audit_devices::lookup(
+                &state.db,
+                user.can_lookup_devices(),
+                r.list
+                    .iter()
+                    .flat_map(|row| [row.peer_id.as_str(), row.from_peer.as_str()]),
+            )
+            .await;
+            let list = r
+                .list
+                .into_iter()
+                .map(|row| {
+                    let peer = devices.get(&row.peer_id).cloned();
+                    let from_peer = devices.get(&row.from_peer).cloned();
+                    audit_devices::DeviceFields::peers(row, peer, from_peer)
+                })
+                .collect();
+            resp::no_store(list_json(list, r.page, r.total, r.page_size))
+        }
         Err(e) => resp::fail(101, e.to_string()),
     }
 }
@@ -3014,19 +3076,29 @@ pub async fn audit_conn_batch_delete(
 
 pub async fn audit_file_list(
     State(state): State<AppState>,
-    _user: AuditReader,
-    Query(q): Query<AuditQuery>,
+    user: AuditReader,
+    Query(search): Query<services::audit::FileSearch>,
 ) -> Response {
-    match services::audit::file_list(
-        &state.db,
-        q.page.unwrap_or(0),
-        q.page_size.unwrap_or(0),
-        q.peer_id,
-        q.from_peer,
-    )
-    .await
-    {
-        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+    match services::audit::file_list_with_details(&state.db, search).await {
+        Ok(r) => {
+            let devices = services::audit_devices::lookup(
+                &state.db,
+                user.can_lookup_devices(),
+                r.list.iter().flat_map(services::audit::FileAuditRow::peer_ids),
+            )
+            .await;
+            let rows = r
+                .list
+                .into_iter()
+                .map(|row| {
+                    let [peer, remote] = row.peer_ids();
+                    let peer = devices.get(peer).cloned();
+                    let remote = devices.get(remote).cloned();
+                    services::audit_devices::DeviceFields::peers(row, peer, remote)
+                })
+                .collect();
+            resp::no_store(list_json(rows, r.page, r.total, r.page_size))
+        }
         Err(e) => resp::fail(101, e.to_string()),
     }
 }
@@ -3087,7 +3159,23 @@ pub async fn record_file_list(
     )
     .await
     {
-        Ok(r) => list_json(r.list, r.page, r.total, r.page_size),
+        Ok(r) => {
+            let devices = audit_devices::lookup(
+                &state.db,
+                true,
+                r.list.iter().map(|row| row.peer_id.as_str()),
+            )
+            .await;
+            let list = r
+                .list
+                .into_iter()
+                .map(|row| {
+                    let device = devices.get(&row.peer_id).cloned();
+                    audit_devices::DeviceFields::peers(row, device, None)
+                })
+                .collect();
+            resp::no_store(list_json(list, r.page, r.total, r.page_size))
+        }
         Err(e) => resp::fail(101, e.to_string()),
     }
 }
@@ -3374,6 +3462,7 @@ pub async fn address_book_list(
 ) -> Response {
     let f = services::address_book::AbFilters {
         id: q.id,
+        exact_id: q.exact_id,
         user_id: q.user_id,
         username: q.username,
         hostname: q.hostname,
@@ -3400,6 +3489,8 @@ pub struct AddressBookQuery {
     pub page_size: Option<u64>,
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
+    pub exact_id: bool,
     #[serde(default)]
     pub user_id: Option<i32>,
     #[serde(default)]
@@ -4320,24 +4411,51 @@ pub struct GeoTestForm {
     pub client_b: Option<String>,
 }
 
+impl GeoTestForm {
+    fn addresses(&self) -> Result<(std::net::IpAddr, Option<std::net::IpAddr>), &'static str> {
+        let a = self
+            .client_a
+            .trim()
+            .parse()
+            .map_err(|_| "clientA must be a valid IP address")?;
+        let b = self
+            .client_b
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::parse)
+            .transpose()
+            .map_err(|_| "clientB must be a valid IP address")?;
+        Ok((a, b))
+    }
+}
+
 pub async fn rustdesk_geo_test(
     State(state): State<AppState>,
     _user: AdminUser,
     Json(input): Json<GeoTestForm>,
 ) -> Response {
-    let client_a = match input.client_a.parse::<std::net::IpAddr>() {
-        Ok(value) => value,
-        Err(_) => return resp::fail(101, "clientA must be a valid IP address"),
-    };
-    let client_b = match input.client_b.as_deref().map(str::trim) {
-        Some(value) if !value.is_empty() => match value.parse::<std::net::IpAddr>() {
-            Ok(value) => Some(value),
-            Err(_) => return resp::fail(101, "clientB must be a valid IP address"),
-        },
-        _ => None,
+    let (client_a, client_b) = match input.addresses() {
+        Ok(addresses) => addresses,
+        Err(error) => return resp::fail(101, error),
     };
     match services::geo_relay::test_rule(&state.config, client_a, client_b).await {
         Ok(raw) => resp::success(json!({ "raw": raw })),
+        Err(error) => resp::fail(101, error),
+    }
+}
+
+pub async fn rustdesk_geo_preview(
+    State(state): State<AppState>,
+    _user: AdminUser,
+    Json(input): Json<GeoTestForm>,
+) -> Response {
+    let (client_a, client_b) = match input.addresses() {
+        Ok(addresses) => addresses,
+        Err(error) => return resp::fail(101, error),
+    };
+    match services::geo_relay::preview_rule(&state.config, client_a, client_b).await {
+        Ok(preview) => resp::no_store(resp::success(json!({ "preview": preview }))),
         Err(error) => resp::fail(101, error),
     }
 }

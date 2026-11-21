@@ -3,7 +3,7 @@ pub mod mmdb;
 mod store;
 pub mod types;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{config::Config, services::server_cmd};
 use sea_orm::DatabaseConnection;
@@ -212,6 +212,48 @@ pub async fn test_rule(
         &argument,
     )
     .await
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PreviewReason {
+    RuleMatch,
+    Disabled,
+    NoEligibleMatch,
+    NoRelay,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoPreview {
+    revision: u64,
+    reason: PreviewReason,
+    relay: Option<String>,
+    rule: Option<String>,
+    candidates: Vec<String>,
+    warnings: Vec<String>,
+}
+
+pub async fn preview_rule(
+    config: &Config,
+    client_a: std::net::IpAddr,
+    client_b: Option<std::net::IpAddr>,
+) -> Result<Option<GeoPreview>, String> {
+    let client_b = client_b.unwrap_or(client_a);
+    let raw = server_cmd::send_target_cmd(
+        config,
+        entity::server_cmd::TARGET_ID_SERVER,
+        "geo-preview",
+        &format!("{client_a} {client_b}"),
+    )
+    .await?;
+    // Older HBBS builds reply with an empty response to unknown commands.
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| format!("HBBS returned an invalid Geo preview: {error}"))
 }
 
 pub fn cleanup_stale_handoffs(config: &Config) {

@@ -148,6 +148,7 @@ mod tests {
             schema.create_table_from_entity(address_book::Entity),
             schema.create_table_from_entity(address_book_collection::Entity),
             schema.create_table_from_entity(address_book_collection_rule::Entity),
+            schema.create_table_from_entity(entity::group::Entity),
             schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(entity::login_log::Entity),
             schema.create_table_from_entity(entity::login_verification::Entity),
