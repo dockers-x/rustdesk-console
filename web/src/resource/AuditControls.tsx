@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
@@ -59,21 +60,24 @@ export function AuditExport({
   );
 }
 
-export function AuditFilters({
+export function ResourceFilters({
   definitions,
   filters,
   setFilter,
+  clearFilters,
   timeZone,
 }: {
   definitions: FilterDef[];
   filters: Record<string, string>;
   setFilter: (name: string, value: string) => void;
+  clearFilters: () => void;
   timeZone?: string;
 }) {
   const { t } = useTranslation();
+  const panel = useRef<HTMLDivElement>(null);
   return (
-    <div className="mb-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+    <div ref={panel} className="admin-filter-panel mb-4 rounded-xl border border-kumo-line p-4">
+      <div className="flex flex-wrap items-end gap-3">
         {definitions.map((filter) => {
           const isWide = filter.name === "q" || filter.name === "path";
           const options = filter.type === "select"
@@ -85,7 +89,7 @@ export function AuditFilters({
             ]
             : [];
           return (
-            <div key={filter.name} className={isWide ? "min-w-0 col-span-2 sm:col-span-1" : "min-w-0"}>
+            <div key={filter.name} className={isWide ? "min-w-0 basis-full sm:basis-60" : "min-w-0 basis-[calc(50%-0.375rem)] sm:basis-44"}>
               {filter.type === "select" ? (
                 <Select<string>
                   label={t(filter.label)}
@@ -111,6 +115,12 @@ export function AuditFilters({
             </div>
           );
         })}
+        {Object.values(filters).some(Boolean) && (
+          <Button size="sm" variant="ghost" onClick={() => {
+            clearFilters();
+            panel.current?.querySelector<HTMLElement>('input:not([type="hidden"]), [role="combobox"]')?.focus();
+          }}>{t("clearFilters")}</Button>
+        )}
       </div>
       {timeZone && <p className="mt-2 text-sm text-kumo-subtle">{t("auditDateTimezone", { timeZone })}</p>}
     </div>

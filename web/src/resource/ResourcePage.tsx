@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -35,7 +35,8 @@ import {
   StrategyOptionsInput,
 } from "./strategyOptions";
 import type { FieldDef, ResourceConfig } from "./types";
-import { AuditExport, AuditFilters } from "./AuditControls";
+import { CaretLeft, CaretRight, Plus } from "@phosphor-icons/react";
+import { AuditExport, ResourceFilters } from "./AuditControls";
 
 interface ListResult {
   list: Record<string, unknown>[];
@@ -170,8 +171,31 @@ export function ResourcePage({
   );
   const exactDeviceId = Boolean(linkedDeviceId && filters.id === linkedDeviceId);
   const activeFilters = Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== ""));
+  const [draft, setDraft] = useState(filters);
+  // Keep typing local while text settles. Discrete choices and clearing apply immediately.
+  useEffect(() => {
+    if (draft === filters) return;
+    const timer = window.setTimeout(() => {
+      setFilters(draft);
+      setPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [draft, filters]);
   const setFilter = (name: string, value: string) => {
-    setFilters((current) => ({ ...current, [name]: value }));
+    const next = { ...draft };
+    if (value) next[name] = value;
+    else delete next[name];
+    setDraft(next);
+    const type = cfg.filters?.find((field) => field.name === name)?.type;
+    if (!value || type === "select" || type === "date") {
+      setFilters(next);
+      setPage(1);
+    }
+  };
+  const clearFilters = () => {
+    const empty = {};
+    setDraft(empty);
+    setFilters(empty);
     setPage(1);
   };
 
@@ -181,18 +205,18 @@ export function ResourcePage({
     [cfg.name, page, filters, exactDeviceId, sessionId, accessScope],
   );
   const tracksPresence = cfg.name === "peers" || cfg.name === "my_peer";
-  const { data, error, isLoading } = useQuery({
+  const { data, error, isLoading, refetch } = useQuery({
     queryKey,
     refetchInterval: tracksPresence ? 30_000 : cfg.name === "active_connection" ? 15_000 : undefined,
     // Unchanged heartbeats still need to age out on each successful poll.
     notifyOnChangeProps: tracksPresence ? ["data", "error", "isLoading", "dataUpdatedAt"] : undefined,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiGet<ListResult>(`${cfg.api}/list`, {
         page,
         page_size: PAGE_SIZE,
         exact_id: exactDeviceId || undefined,
         ...activeFilters,
-      }),
+      }, signal),
   });
 
   const [open, setOpen] = useState(false);
@@ -211,6 +235,7 @@ export function ResourcePage({
   );
 
   const openCreate = () => {
+    save.reset();
     setEditingId(null);
     const defaults = initialForm(cfg);
     if (cfg.name === "strategy_assignments" && filters.target_type) {
@@ -221,6 +246,7 @@ export function ResourcePage({
     setOpen(true);
   };
   const openEdit = (row: Record<string, unknown>) => {
+    save.reset();
     setUserEditTab("details");
     setSavedUserEmail(typeof row.email === "string" ? row.email.trim() : "");
     setEditingId(row[idField]);
@@ -253,57 +279,27 @@ export function ResourcePage({
   const rows = data?.list ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  useEffect(() => {
+    if (data && page > totalPages) setPage(totalPages);
+  }, [data, page, totalPages]);
   const showActions =
     cfg.rowActions || cfg.canEdit !== false || cfg.canDelete !== false;
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">{t(cfg.titleKey)}</h1>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          {!cfg.csvFilename && (cfg.filters ?? []).map((flt) => (
-            flt.type === "select" ? (
-              <select
-                aria-label={t(flt.label)}
-                key={flt.name}
-                className="h-11 w-full min-w-36 rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand sm:h-9 sm:w-auto"
-                value={filters[flt.name] ?? ""}
-                onChange={(e) => setFilter(flt.name, e.target.value)}
-              >
-                <option value="">{t(flt.allLabel ?? "all")}</option>
-                {(flt.options ?? []).map((option) => (
-                  <option key={String(option.value)} value={String(option.value)}>
-                    {t(option.label)}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <Input
-                aria-label={t(flt.label)}
-                key={flt.name}
-                className="min-h-11 min-w-0 flex-1 sm:min-h-0 sm:min-w-48 sm:flex-none"
-                placeholder={t(flt.label)}
-                value={filters[flt.name] ?? ""}
-                onChange={(e) => setFilter(flt.name, e.target.value)}
-              />
-            )
-          ))}
-          {cfg.canCreate !== false && (
-            <Button
-              className="min-h-11 shrink-0 sm:min-h-0"
-              onClick={openCreate}
-            >
-              {t("create")}
-            </Button>
-          )}
-        </div>
-      </div>
+        {cfg.canCreate !== false && (
+          <Button variant="primary" icon={<Plus aria-hidden />} onClick={openCreate}>{t("create")}</Button>
+        )}
+      </header>
 
+      {Boolean(cfg.filters?.length) && (
+        <ResourceFilters definitions={cfg.filters ?? []} filters={draft} setFilter={setFilter}
+          clearFilters={clearFilters} timeZone={auditTimeZone} />
+      )}
       {cfg.csvFilename && (
-        <>
-          <AuditFilters definitions={cfg.filters ?? []} filters={filters} setFilter={setFilter} timeZone={auditTimeZone} />
-          <AuditExport api={cfg.api} filename={cfg.csvFilename} params={activeFilters} />
-        </>
+        <AuditExport api={cfg.api} filename={cfg.csvFilename} params={draft} />
       )}
 
       {beforeTable}
@@ -327,117 +323,110 @@ export function ResourcePage({
         </div>
       )}
 
-      <div
-        className="min-w-0 overflow-x-auto overscroll-x-contain rounded-lg border border-kumo-line focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
-        role="region"
-        aria-label={t("scrollableTable")}
-        tabIndex={0}
-      >
-        <Table className="min-w-max [&_th]:whitespace-nowrap [&_td]:align-top">
-          <Table.Header>
-            <Table.Row>
-              {cfg.columns.map((c) => (
-                <Table.Head key={c.key} className={c.hideOnMobile ? "hidden sm:table-cell" : undefined}>
-                  {t(c.label)}
-                </Table.Head>
-              ))}
-              {showActions && (
-                <Table.Head sticky="right">{t("actions")}</Table.Head>
-              )}
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {rows.map((row, i) => (
-              <Table.Row key={String(row[idField] ?? i)}>
+      <div className="admin-surface overflow-hidden rounded-xl border border-kumo-line">
+        <div
+          className="resource-table min-w-0 overflow-x-auto focus-visible:-outline-offset-2"
+          role="region"
+          aria-label={t("scrollableTable")}
+          tabIndex={0}
+        >
+          <Table className="min-w-max [&_th]:whitespace-nowrap [&_td]:align-middle">
+            <Table.Header>
+              <Table.Row>
                 {cfg.columns.map((c) => (
-                  <Table.Cell key={c.key} className={c.hideOnMobile ? "hidden sm:table-cell" : undefined}>
-                    {c.render
-                      ? c.render(row, t)
-                      : asText(row[c.key], c.key, displayTimeZone)}
-                  </Table.Cell>
+                  <Table.Head key={c.key} className={c.hideOnMobile ? "hidden sm:table-cell" : undefined}>
+                    {t(c.label)}
+                  </Table.Head>
                 ))}
                 {showActions && (
-                  <Table.Cell sticky="right">
-                    <div className="flex flex-wrap items-start gap-1">
-                      {cfg.rowActions?.(row, t, {
-                        openDelete: (target) => {
-                          remove.reset();
-                          setDeleteTarget(target);
-                        },
-                      })}
-                      {cfg.canEdit !== false && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => openEdit(row)}
-                        >
-                          {t("edit")}
-                        </Button>
-                      )}
-                      {cfg.canDelete !== false && (
-                        <Button
-                          size="sm"
-                          variant="secondary-destructive"
-                          className={cfg.csvFilename ? "min-h-11 sm:min-h-0" : undefined}
-                          onClick={() => {
-                            remove.reset();
-                            setDeleteTarget(row);
-                          }}
-                        >
-                          {t("delete")}
-                        </Button>
-                      )}
-                    </div>
-                  </Table.Cell>
+                  <Table.Head sticky="right">{t("actions")}</Table.Head>
                 )}
               </Table.Row>
-            ))}
-          </Table.Body>
-        </Table>
-        {isLoading && (
-          <TableState tone="loading">{t("loading")}</TableState>
-        )}
+            </Table.Header>
+            <Table.Body>
+              {rows.map((row, i) => (
+                <Table.Row key={String(row[idField] ?? i)}>
+                  {cfg.columns.map((c) => (
+                    <Table.Cell key={c.key} className={c.hideOnMobile ? "hidden sm:table-cell" : undefined}>
+                      {c.render
+                        ? c.render(row, t)
+                        : asText(row[c.key], c.key, displayTimeZone)}
+                    </Table.Cell>
+                  ))}
+                  {showActions && (
+                    <Table.Cell sticky="right">
+                      <div className="flex flex-wrap items-center gap-1">
+                        {cfg.rowActions?.(row, t, {
+                          openDelete: (target) => {
+                            remove.reset();
+                            setDeleteTarget(target);
+                          },
+                        })}
+                        {cfg.canEdit !== false && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openEdit(row)}
+                          >
+                            {t("edit")}
+                          </Button>
+                        )}
+                        {cfg.canDelete !== false && (
+                          <Button
+                            size="sm"
+                            variant="secondary-destructive"
+                            className={cfg.csvFilename ? "min-h-11 sm:min-h-0" : undefined}
+                            onClick={() => {
+                              remove.reset();
+                              setDeleteTarget(row);
+                            }}
+                          >
+                            {t("delete")}
+                          </Button>
+                        )}
+                      </div>
+                    </Table.Cell>
+                  )}
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table>
+        </div>
+        {isLoading && <TableState tone="loading">{t("loading")}</TableState>}
         {error && (
           <TableState tone="error">
             {(error as Error).message || t("operationFailed")}
+            <Button variant="secondary" size="sm" onClick={() => void refetch()}>{t("retryLoad")}</Button>
           </TableState>
         )}
-        {!isLoading && !error && rows.length === 0 && (
-          <TableState tone="empty">{t("noData")}</TableState>
+        {data && !error && rows.length === 0 && (
+          <TableState tone="empty">
+            {Object.keys(activeFilters).length ? t("noMatchingRecords") : t("noData")}
+          </TableState>
         )}
-      </div>
-
-      <div className="mt-4 flex items-center justify-end gap-3 text-sm">
-        <span>
-          {page} / {totalPages} · {total}
-        </span>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={page <= 1}
-          onClick={() => setPage((p) => p - 1)}
-        >
-          ‹
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={page >= totalPages}
-          onClick={() => setPage((p) => p + 1)}
-        >
-          ›
-        </Button>
+        {data && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-kumo-line px-4 py-2.5 text-sm tabular-nums">
+            <span role="status" className="text-kumo-subtle">{t("recordTotal", { count: total })}</span>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" aria-label={t("consolePreviousPage")} title={t("consolePreviousPage")}
+                  disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                  <CaretLeft size={16} aria-hidden />
+                </Button>
+                <span aria-live="polite">{page} / {totalPages}</span>
+                <Button size="sm" variant="secondary" aria-label={t("consoleNextPage")} title={t("consoleNextPage")}
+                  disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                  <CaretRight size={16} aria-hidden />
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {(cfg.canCreate !== false || cfg.canEdit !== false) && (
         <>
-          {open && (
-            <div
-              aria-hidden="true"
-              className="pointer-events-none fixed inset-0 z-40 bg-kumo-recessed opacity-95"
-            />
-          )}
-          <Dialog.Root open={open} onOpenChange={setOpen}>
+          <Dialog.Root open={open} onOpenChange={(next) => { if (!save.isPending) setOpen(next); }}>
             <Dialog size="lg" className={resourceFormDialogPanelClass}>
               <DialogHeader
                 title={`${editing ? t("edit") : t("create")} · ${t(cfg.titleKey)}`}
@@ -458,7 +447,10 @@ export function ResourcePage({
               {editingUser && userEditTab === "password" ? (
                 open && <UserPasswordResetForm id={Number(editingId)} email={savedUserEmail} onClose={() => setOpen(false)} />
               ) : (
-                <>
+                <form className="flex min-h-0 flex-col" onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!save.isPending && !missingScopes) save.mutate();
+                }}>
                   <DialogBody>
                     <div className="grid gap-4 sm:grid-cols-2">
                       {cfg.fields
@@ -511,14 +503,14 @@ export function ResourcePage({
                         : undefined
                     }
                   >
-                    <Button variant="secondary" onClick={() => setOpen(false)}>
+                    <Button variant="secondary" disabled={save.isPending} onClick={() => setOpen(false)}>
                       {t("cancel")}
                     </Button>
-                    <Button onClick={() => save.mutate()} loading={save.isPending} disabled={missingScopes}>
+                    <Button variant="primary" type="submit" loading={save.isPending} disabled={save.isPending || missingScopes}>
                       {t("save")}
                     </Button>
                   </DialogFooter>
-                </>
+                </form>
               )}
             </Dialog>
           </Dialog.Root>

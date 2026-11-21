@@ -49,18 +49,19 @@ export function RegisterPage() {
   };
 
   return (
-    <div className="flex h-full items-center justify-center bg-kumo-base px-4 text-kumo-default">
+    <div className="grid min-h-full place-items-center bg-kumo-base px-4 py-6 text-kumo-default">
       <form
         onSubmit={submit}
-        className="w-full max-w-[380px] rounded-xl border border-kumo-line bg-kumo-elevated p-8 shadow-lg"
+        className="auth-form auth-panel w-full max-w-sm rounded-xl border border-kumo-line bg-kumo-elevated p-5 sm:p-8"
       >
-        <h1 className="mb-6 text-center text-xl font-semibold">
+        <h1 className="mb-5 text-2xl font-semibold">
           {t("register")}
         </h1>
         <div className="space-y-4">
           <label className="block">
             <span className="mb-1 block text-sm">{t("username")}</span>
             <Input
+              className="w-full"
               aria-label={t("username")}
               value={username}
               autoComplete="username"
@@ -71,6 +72,7 @@ export function RegisterPage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("email")}</span>
             <Input
+              className="w-full"
               aria-label={t("email")}
               type="email"
               value={email}
@@ -81,6 +83,7 @@ export function RegisterPage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("password")}</span>
             <Input
+              className="w-full"
               aria-label={t("password")}
               type="password"
               value={password}
@@ -91,6 +94,7 @@ export function RegisterPage() {
           <label className="block">
             <span className="mb-1 block text-sm">{t("confirmPassword")}</span>
             <Input
+              className="w-full"
               aria-label={t("confirmPassword")}
               type="password"
               value={confirmPassword}
@@ -100,7 +104,7 @@ export function RegisterPage() {
           </label>
           {error && <InlineMessage tone="error">{error}</InlineMessage>}
           <Button
-            type="submit"
+            variant="primary" type="submit"
             className="w-full justify-center"
             disabled={loading}
             loading={loading}

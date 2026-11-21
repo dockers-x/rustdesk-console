@@ -74,7 +74,7 @@ export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
         </h1>
         <p className="mt-1 text-sm text-kumo-subtle">{t("oauthCloseNote")}</p>
       </div>
-      <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+      <div className="admin-surface rounded-xl border border-kumo-line p-5">
         {isLoading ? (
           <p className="text-sm text-kumo-subtle">{t("loading")}</p>
         ) : (
@@ -103,7 +103,7 @@ export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
           <Button variant="secondary" onClick={() => window.close()}>
             {t("close")}
           </Button>
-          <Button onClick={submit} disabled={loading || !code || Boolean(message)}>
+          <Button variant="primary" onClick={submit} disabled={loading || !code || Boolean(message)}>
             {mode === "bind" ? t("bind") : t("confirmOauth")}
           </Button>
         </div>

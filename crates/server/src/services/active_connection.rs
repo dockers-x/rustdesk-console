@@ -1,7 +1,5 @@
 //! Active connection tracking from RustDesk heartbeat `conns`.
 
-use std::collections::BTreeSet;
-
 use chrono::{TimeDelta, Utc};
 use sea_orm::*;
 
@@ -10,6 +8,8 @@ use ::entity::active_connection;
 use crate::services::{now, paginate};
 
 const ACTIVE_CONNECTION_WINDOW: TimeDelta = TimeDelta::seconds(90);
+// Each snapshot row binds five values. Stay below SQLite's legacy 999-variable limit.
+const INSERT_BATCH_SIZE: usize = 180;
 
 pub struct ActiveConnectionListResult {
     pub list: Vec<active_connection::Model>,
@@ -50,6 +50,7 @@ pub async fn list(
     let total = q.clone().count(db).await? as i64;
     let list = q
         .order_by_desc(active_connection::Column::UpdatedAt)
+        .order_by_desc(active_connection::Column::Id)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all(db)
@@ -73,7 +74,9 @@ pub async fn sync_for_device(
         return Ok(());
     }
 
-    let conn_ids: BTreeSet<i64> = conn_ids.iter().copied().filter(|id| *id > 0).collect();
+    let mut conn_ids: Vec<_> = conn_ids.iter().copied().filter(|id| *id > 0).collect();
+    conn_ids.sort_unstable();
+    conn_ids.dedup();
     let mut previous = active_connection::Entity::delete_many();
     if !peer_id.is_empty() {
         previous = previous.filter(active_connection::Column::PeerId.eq(peer_id));
@@ -89,16 +92,18 @@ pub async fn sync_for_device(
     let txn = db.begin().await?;
     previous.exec(&txn).await?;
     let timestamp = now();
-    for conn_id in conn_ids {
-        let am = active_connection::ActiveModel {
+    for batch in conn_ids.chunks(INSERT_BATCH_SIZE) {
+        let rows = batch.iter().map(|&conn_id| active_connection::ActiveModel {
             conn_id: Set(conn_id),
             peer_id: Set(peer_id.to_string()),
             uuid: Set(uuid.to_string()),
             created_at: Set(timestamp),
             updated_at: Set(timestamp),
             ..Default::default()
-        };
-        am.insert(&txn).await?;
+        });
+        active_connection::Entity::insert_many(rows)
+            .exec_without_returning(&txn)
+            .await?;
     }
     txn.commit().await
 }
@@ -150,6 +155,22 @@ mod tests {
         assert_eq!(conn_ids, vec![101, 102]);
         assert!(rows.iter().all(|row| row.peer_id == "peer-1"));
         assert!(rows.iter().all(|row| row.uuid == "uuid-1"));
+    }
+
+    #[tokio::test]
+    async fn failed_later_batch_preserves_the_previous_snapshot() {
+        let db = setup_db().await;
+        sync_for_device(&db, "peer", "uuid", &[7]).await.unwrap();
+        let last = INSERT_BATCH_SIZE as i64 + 1;
+        db.execute_unprepared(&format!(
+            "CREATE TRIGGER fail_insert BEFORE INSERT ON active_connections WHEN NEW.conn_id = {last}
+             BEGIN SELECT RAISE(ABORT, 'test failure'); END"
+        )).await.unwrap();
+        let ids: Vec<_> = (1..=last).collect();
+        assert!(sync_for_device(&db, "peer", "uuid", &ids).await.is_err());
+        let rows = all_rows(&db).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].conn_id, 7);
     }
 
     #[tokio::test]

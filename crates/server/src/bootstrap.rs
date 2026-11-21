@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 282;
+pub const DATABASE_VERSION: i32 = 283;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 12] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 13] {
     [
         SchemaMigration {
             version: 271,
@@ -119,6 +119,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 12] {
             version: 282,
             name: "TOTP encryption and replay protection",
             apply: migration_282,
+        },
+        SchemaMigration {
+            version: 283,
+            name: "device lookup and active connection indexes",
+            apply: migration_283,
         },
     ]
 }
@@ -536,6 +541,29 @@ fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> Migrat
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
 }
 
+fn migration_283<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        for (table, name, column) in [
+            ("peers", "idx_peers_id", "id"),
+            ("peers", "idx_peers_uuid", "uuid"),
+            ("peers", "idx_peers_last_online", "last_online_time"),
+            (
+                "active_connections",
+                "idx_active_connections_peer",
+                "peer_id",
+            ),
+            (
+                "active_connections",
+                "idx_active_connections_updated",
+                "updated_at",
+            ),
+        ] {
+            create_index(db, table, name, &[column]).await?;
+        }
+        Ok(())
+    })
+}
+
 fn migration_282<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move {
         use crate::support::totp_vault::TotpVault;
@@ -788,7 +816,7 @@ fn migration_279<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> Migra
 
 fn migration_276<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move {
-        use sea_orm::sea_query::{Alias, Index};
+        use sea_orm::sea_query::Alias;
 
         for (table, column, mut definition) in [
             (
@@ -855,30 +883,45 @@ fn migration_276<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> Migra
                     .await?;
             }
         }
-        let index_name = "idx_webhook_delivery_schedule";
-        let backend = db.get_database_backend();
-        // MySQL's CREATE INDEX does not support IF NOT EXISTS.
-        let mut index = Index::create();
-        if backend == DatabaseBackend::MySql {
-            let statement = Statement::from_string(
-                backend,
-                format!("SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'webhook_deliveries' AND index_name = '{index_name}' LIMIT 1"),
-            );
-            if db.query_one(statement).await?.is_some() {
-                return Ok(());
-            }
-        } else {
-            index.if_not_exists();
-        }
-        index
-            .name(index_name)
-            .table(webhook_delivery::Entity)
-            .col(webhook_delivery::Column::Status)
-            .col(webhook_delivery::Column::ExecuteAt)
-            .col(webhook_delivery::Column::Id);
-        db.execute(backend.build(&index)).await?;
-        Ok(())
+        create_index(
+            db,
+            "webhook_deliveries",
+            "idx_webhook_delivery_schedule",
+            &["status", "execute_at", "id"],
+        )
+        .await
     })
+}
+
+async fn create_index(
+    db: &impl ConnectionTrait,
+    table: &str,
+    name: &str,
+    columns: &[&str],
+) -> anyhow::Result<()> {
+    use sea_orm::sea_query::{Alias, Index};
+
+    let backend = db.get_database_backend();
+    let mut index = Index::create();
+    if backend == DatabaseBackend::MySql {
+        // MySQL commits each DDL statement and has no CREATE INDEX IF NOT EXISTS.
+        let exists = Statement::from_sql_and_values(
+            backend,
+            "SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? LIMIT 1",
+            [table.into(), name.into()],
+        );
+        if db.query_one(exists).await?.is_some() {
+            return Ok(());
+        }
+    } else {
+        index.if_not_exists();
+    }
+    index.name(name).table(Alias::new(table));
+    for column in columns {
+        index.col(Alias::new(*column));
+    }
+    db.execute(backend.build(&index)).await?;
+    Ok(())
 }
 
 async fn migrate_271_legacy_columns(
@@ -1664,7 +1707,21 @@ mod tests {
 
         assert_eq!(
             versions,
-            vec![271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, DATABASE_VERSION]
+            vec![
+                271,
+                272,
+                273,
+                274,
+                275,
+                276,
+                277,
+                278,
+                279,
+                280,
+                281,
+                282,
+                DATABASE_VERSION
+            ]
         );
     }
 

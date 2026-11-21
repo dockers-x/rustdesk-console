@@ -35,7 +35,7 @@ interface OpenApi {
 
 const base = "/api/admin/developer";
 const inputClass = "w-full rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 text-sm text-kumo-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-kumo-brand";
-const cardClass = "rounded-xl border border-kumo-line bg-kumo-base p-5 sm:p-6";
+const cardClass = "admin-surface rounded-xl border border-kumo-line bg-kumo-base p-5 sm:p-6";
 const scopeMessages: Record<string, string> = {
   "profile:read": "developerScopeProfileRead",
   "devices:read": "developerScopeDevicesRead",

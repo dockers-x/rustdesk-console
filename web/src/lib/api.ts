@@ -54,8 +54,8 @@ http.interceptors.response.use(
 );
 
 /// GET helper that forwards query params.
-export async function apiGet<T>(url: string, params?: Record<string, unknown>) {
-  return (await http.get(url, { params })) as unknown as T;
+export async function apiGet<T>(url: string, params?: Record<string, unknown>, signal?: AbortSignal) {
+  return (await http.get(url, { params, signal })) as unknown as T;
 }
 
 export async function apiPost<T>(url: string, data?: unknown) {

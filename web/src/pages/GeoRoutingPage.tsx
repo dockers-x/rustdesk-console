@@ -346,7 +346,7 @@ export function GeoRoutingPage() {
           <Button variant="secondary" loading={reload.isPending} onClick={() => reload.mutate()}>
             {t("geoReload")}
           </Button>
-          <Button disabled={!settings || (!dirty && settings.revision > 0)} loading={save.isPending} onClick={() => save.mutate()}>
+          <Button variant="primary" disabled={!settings || (!dirty && settings.revision > 0)} loading={save.isPending} onClick={() => save.mutate()}>
             {t("save")}
           </Button>
         </div>

@@ -63,12 +63,6 @@ export function OAuthProviderActions({
       <Button size="sm" variant="secondary" onClick={() => void run()}>
         {t("testProvider")}
       </Button>
-      {open && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-40 bg-kumo-recessed opacity-95"
-        />
-      )}
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog size="lg" className={resourceFormDialogPanelClass}>
           <DialogHeader

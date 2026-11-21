@@ -84,7 +84,6 @@ pub(crate) async fn authority_transaction(
         created_at: Set(now()),
         value: Set(String::new()),
         updated_at: Set(now()),
-        ..Default::default()
     })
     .on_conflict(
         OnConflict::column(system_setting::Column::Id)

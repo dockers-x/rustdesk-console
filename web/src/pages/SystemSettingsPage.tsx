@@ -447,7 +447,7 @@ export function SystemSettingsPage() {
           </p>
         </div>
         {activeTab === "site" && (
-          <Button loading={save.isPending} disabled={readingLogo || !config.data || config.isError} onClick={saveSiteSettings}>
+          <Button variant="primary" loading={save.isPending} disabled={readingLogo || !config.data || config.isError} onClick={saveSiteSettings}>
             <GearSix size={16} />
             {t("writeSystemSettings")}
           </Button>
@@ -517,6 +517,7 @@ export function SystemSettingsPage() {
                   {t("siteTitle")}
                 </span>
                 <Input
+                  className="w-full sm:max-w-md"
                   aria-label={t("siteTitle")}
                   value={form.title}
                   maxLength={80}
@@ -560,6 +561,7 @@ export function SystemSettingsPage() {
                   {t("siteWelcomeFile")}
                 </span>
                 <Input
+                  className="w-full sm:max-w-md"
                   aria-label={t("siteWelcomeFile")}
                   value={form.hello_file}
                   maxLength={500}

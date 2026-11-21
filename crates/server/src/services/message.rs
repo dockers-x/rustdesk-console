@@ -132,7 +132,7 @@ pub async fn latest_for_user(
     }
     let rows = query
         .order_by_desc(message::Column::Id)
-        .limit(limit.max(1).min(10))
+        .limit(limit.clamp(1, 10))
         .all(db)
         .await?;
     let read_ids = read_message_ids(db, user_id, rows.iter().map(|row| row.id)).await?;

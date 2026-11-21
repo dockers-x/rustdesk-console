@@ -164,7 +164,7 @@ pub fn normalize_relay_pool(input: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for raw in input
-        .split(|ch| ch == ',' || ch == '\n' || ch == '\r' || ch == ';')
+        .split([',', '\n', '\r', ';'])
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {

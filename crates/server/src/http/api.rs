@@ -1070,33 +1070,28 @@ pub async fn device_deploy(
     audit: super::security_audit::AuditContext,
     Json(f): Json<DeviceDeployForm>,
 ) -> Response {
+    let event = services::deployment::EventSource {
+        token_id: auth.deployment_token_id(),
+        peer_id: &f.id,
+        uuid: &f.uuid,
+        action: deployment_event::ACTION_DEPLOY,
+        ip: &ip,
+    };
     if f.id.trim().is_empty() || f.uuid.trim().is_empty() {
-        let _ = record_deployment_event(
-            &state,
-            &auth,
-            deployment_event::ACTION_DEPLOY,
-            &f.id,
-            &f.uuid,
-            "INVALID_INPUT",
-            "missing id or uuid",
-            &ip,
-        )
-        .await;
+        let _ = event
+            .record(&state.db, "INVALID_INPUT", "missing id or uuid")
+            .await;
         audit.decision("device_deploy", "rejected", "invalid_input");
         return Json(json!({ "result": "INVALID_INPUT" })).into_response();
     }
     if !auth.has_scope(deployment_token::SCOPE_DEPLOY) {
-        let _ = record_deployment_event(
-            &state,
-            &auth,
-            deployment_event::ACTION_DEPLOY,
-            &f.id,
-            &f.uuid,
-            "UNAUTHORIZED",
-            "deployment token lacks deploy scope",
-            &ip,
-        )
-        .await;
+        let _ = event
+            .record(
+                &state.db,
+                "UNAUTHORIZED",
+                "deployment token lacks deploy scope",
+            )
+            .await;
         audit.decision("device_deploy", "rejected", "authorization_denied");
         return Json(json!({ "error": "Unauthorized" })).into_response();
     }
@@ -1138,62 +1133,30 @@ pub async fn device_deploy(
                 )
                 .await;
             }
-            let _ = record_deployment_event(
-                &state,
-                &auth,
-                deployment_event::ACTION_DEPLOY,
-                &f.id,
-                &f.uuid,
-                "OK",
-                "",
-                &ip,
-            )
-            .await;
+            let _ = event.record(&state.db, "OK", "").await;
             audit.decision("device_deploy", "accepted", "device_deployed");
             Json(json!({ "result": "OK" })).into_response()
         }
         Err(DeviceDeployError::IdTaken) => {
-            let _ = record_deployment_event(
-                &state,
-                &auth,
-                deployment_event::ACTION_DEPLOY,
-                &f.id,
-                &f.uuid,
-                "ID_TAKEN",
-                "device id belongs to another uuid",
-                &ip,
-            )
-            .await;
+            let _ = event
+                .record(&state.db, "ID_TAKEN", "device id belongs to another uuid")
+                .await;
             audit.decision("device_deploy", "rejected", "device_id_taken");
             Json(json!({ "result": "ID_TAKEN" })).into_response()
         }
         Err(DeviceDeployError::InvalidInput) => {
-            let _ = record_deployment_event(
-                &state,
-                &auth,
-                deployment_event::ACTION_DEPLOY,
-                &f.id,
-                &f.uuid,
-                "INVALID_INPUT",
-                "invalid device deployment input",
-                &ip,
-            )
-            .await;
+            let _ = event
+                .record(
+                    &state.db,
+                    "INVALID_INPUT",
+                    "invalid device deployment input",
+                )
+                .await;
             audit.decision("device_deploy", "rejected", "invalid_input");
             Json(json!({ "result": "INVALID_INPUT" })).into_response()
         }
         Err(DeviceDeployError::Other(e)) => {
-            let _ = record_deployment_event(
-                &state,
-                &auth,
-                deployment_event::ACTION_DEPLOY,
-                &f.id,
-                &f.uuid,
-                "ERROR",
-                &e,
-                &ip,
-            )
-            .await;
+            let _ = event.record(&state.db, "ERROR", &e).await;
             audit.decision("device_deploy", "error", "deployment_failed");
             Json(json!({ "error": e })).into_response()
         }
@@ -1244,16 +1207,23 @@ pub async fn device_cli(
     audit: super::security_audit::AuditContext,
     Json(f): Json<DeviceCliForm>,
 ) -> Response {
+    let event = services::deployment::EventSource {
+        token_id: auth.deployment_token_id(),
+        peer_id: "",
+        uuid: "",
+        action: deployment_event::ACTION_ASSIGN,
+        ip: &ip,
+    };
     if !auth.has_scope(deployment_token::SCOPE_ASSIGN) {
-        let _ = record_deployment_event(
-            &state,
-            &auth,
-            deployment_event::ACTION_ASSIGN,
-            &f.id,
-            &f.uuid,
+        let _ = services::deployment::EventSource {
+            peer_id: &f.id,
+            uuid: &f.uuid,
+            ..event
+        }
+        .record(
+            &state.db,
             "UNAUTHORIZED",
             "deployment token lacks assign scope",
-            &ip,
         )
         .await;
         audit.decision("device_assignment", "rejected", "authorization_denied");
@@ -1273,32 +1243,12 @@ pub async fn device_cli(
     }
     match apply_device_cli_assignment(&state, &auth, f).await {
         Ok(message) => {
-            let _ = record_deployment_event(
-                &state,
-                &auth,
-                deployment_event::ACTION_ASSIGN,
-                "",
-                "",
-                "OK",
-                "",
-                &ip,
-            )
-            .await;
+            let _ = event.record(&state.db, "OK", "").await;
             audit.decision("device_assignment", "accepted", "device_assigned");
             message.into_response()
         }
         Err(message) => {
-            let _ = record_deployment_event(
-                &state,
-                &auth,
-                deployment_event::ACTION_ASSIGN,
-                "",
-                "",
-                "ERROR",
-                &message,
-                &ip,
-            )
-            .await;
+            let _ = event.record(&state.db, "ERROR", &message).await;
             audit.decision("device_assignment", "rejected", "assignment_failed");
             message.into_response()
         }
@@ -1533,29 +1483,6 @@ async fn resolve_deployment_default_user(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "deployment token default user not found".to_string())
-}
-
-async fn record_deployment_event(
-    state: &AppState,
-    auth: &DeploymentAuth,
-    action: &str,
-    peer_id: &str,
-    uuid: &str,
-    result: &str,
-    message: &str,
-    ip: &str,
-) -> Result<(), sea_orm::DbErr> {
-    services::deployment::record_event(
-        &state.db,
-        auth.deployment_token_id(),
-        peer_id,
-        uuid,
-        action,
-        result,
-        message,
-        ip,
-    )
-    .await
 }
 
 async fn assign_peer_to_address_book(
@@ -2178,29 +2105,29 @@ async fn check_guid(
     state: &AppState,
     cur: &entity::user::Model,
     guid: &str,
-) -> Result<(i32, i32), Response> {
+) -> Result<(i32, i32), &'static str> {
     let (gid, uid, cid) = parse_guid(guid);
     if gid == 0 || uid == 0 {
-        return Err(resp::error("ParamsError"));
+        return Err("ParamsError");
     }
-    let u = if cur.id == uid {
-        cur.clone()
+    let group_id = if cur.id == uid {
+        cur.group_id
     } else {
         match services::user::info_by_id(&state.db, uid).await {
-            Ok(Some(u)) => u,
-            _ => return Err(resp::error("ParamsError")),
+            Ok(Some(u)) => u.group_id,
+            _ => return Err("ParamsError"),
         }
     };
-    if u.group_id != gid {
-        return Err(resp::error("ParamsError"));
+    if group_id != gid {
+        return Err("ParamsError");
     }
     if cid == 0 && cur.id != uid {
-        return Err(resp::error("ParamsError"));
+        return Err("ParamsError");
     }
     if cid > 0 {
         match services::address_book::collection_info_by_id(&state.db, cid).await {
             Ok(Some(c)) if c.user_id == uid => {}
-            _ => return Err(resp::error("ParamsError")),
+            _ => return Err("ParamsError"),
         }
     }
     Ok((uid, cid))
@@ -2210,26 +2137,26 @@ async fn full_control_collection(
     state: &AppState,
     cur: &entity::user::Model,
     guid: &str,
-) -> Result<(entity::user::Model, address_book_collection::Model), Response> {
+) -> Result<(entity::user::Model, address_book_collection::Model), &'static str> {
     let (uid, cid) = check_guid(state, cur, guid).await?;
     if cid == 0 {
-        return Err(resp::error("ParamsError"));
+        return Err("ParamsError");
     }
     let collection = match services::address_book::collection_info_by_id(&state.db, cid).await {
         Ok(Some(row)) => row,
-        _ => return Err(resp::error("ItemNotFound")),
+        _ => return Err("ItemNotFound"),
     };
     if !cur.is_admin() {
         match services::address_book::can_full_control(&state.db, cur.id, cur.group_id, uid, cid)
             .await
         {
             Ok(true) => {}
-            _ => return Err(resp::error("NoAccess")),
+            _ => return Err("NoAccess"),
         }
     }
     let owner = match services::user::info_by_id(&state.db, uid).await {
         Ok(Some(row)) => row,
-        _ => return Err(resp::error("ItemNotFound")),
+        _ => return Err("ItemNotFound"),
     };
     Ok((owner, collection))
 }
@@ -2256,24 +2183,24 @@ async fn can_control_collection_id(
         .unwrap_or(false)
 }
 
-async fn resolve_rule_target(state: &AppState, f: &AbRuleForm) -> Result<(i32, i32), Response> {
+async fn resolve_rule_target(state: &AppState, f: &AbRuleForm) -> Result<(i32, i32), &'static str> {
     if !matches!(
         f.rule,
         address_book_collection_rule::RULE_READ
             | address_book_collection_rule::RULE_READ_WRITE
             | address_book_collection_rule::RULE_FULL_CONTROL
     ) {
-        return Err(resp::error("ParamsError"));
+        return Err("ParamsError");
     }
     let user_name = f.user.trim();
     let group_name = f.group.trim();
     if !user_name.is_empty() && !group_name.is_empty() {
-        return Err(resp::error("ParamsError"));
+        return Err("ParamsError");
     }
     if !user_name.is_empty() {
         let user = match services::user::info_by_username(&state.db, user_name).await {
             Ok(Some(row)) => row,
-            _ => return Err(resp::error("user not found")),
+            _ => return Err("user not found"),
         };
         return Ok((address_book_collection_rule::RULE_TYPE_PERSONAL, user.id));
     }
@@ -2284,7 +2211,7 @@ async fn resolve_rule_target(state: &AppState, f: &AbRuleForm) -> Result<(i32, i
             .await
         {
             Ok(Some(row)) => row,
-            _ => return Err(resp::error("group not found")),
+            _ => return Err("group not found"),
         };
         return Ok((address_book_collection_rule::RULE_TYPE_GROUP, group.id));
     }
@@ -2460,7 +2387,7 @@ pub async fn ab_shared_update_profile(
 ) -> Response {
     let (owner, collection) = match full_control_collection(&state, &user.user, &f.guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     let new_name = if f.name.trim().is_empty() {
         collection.name.clone()
@@ -2502,7 +2429,7 @@ pub async fn ab_shared_delete(
     for guid in guids {
         let (_, collection) = match full_control_collection(&state, &user.user, &guid).await {
             Ok(v) => v,
-            Err(r) => return r,
+            Err(message) => return resp::error(message),
         };
         if let Err(e) = services::address_book::delete_collection(&state.db, collection.id).await {
             return resp::error(e.to_string());
@@ -2543,7 +2470,7 @@ pub async fn ab_peers(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &q.ab).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_read(&state.db, user.user.id, user.user.group_id, uid, cid)
         .await
@@ -2688,7 +2615,7 @@ pub async fn ab_tags(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_read(&state.db, user.user.id, user.user.group_id, uid, cid)
         .await
@@ -2719,7 +2646,7 @@ pub async fn ab_peer_add(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_write(&state.db, user.user.id, user.user.group_id, uid, cid)
         .await
@@ -2791,7 +2718,7 @@ pub async fn ab_peer_del(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_full_control(
         &state.db,
@@ -2827,7 +2754,7 @@ pub async fn ab_peer_update(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_write(&state.db, user.user.id, user.user.group_id, uid, cid)
         .await
@@ -2865,7 +2792,7 @@ pub async fn ab_tag_add(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_write(&state.db, user.user.id, user.user.group_id, uid, cid)
         .await
@@ -2900,7 +2827,7 @@ pub async fn ab_tag_rename(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_write(&state.db, user.user.id, user.user.group_id, uid, cid)
         .await
@@ -2945,7 +2872,7 @@ pub async fn ab_tag_update(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_write(&state.db, user.user.id, user.user.group_id, uid, cid)
         .await
@@ -2974,7 +2901,7 @@ pub async fn ab_tag_del(
 ) -> Response {
     let (uid, cid) = match check_guid(&state, &user.user, &guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     match services::address_book::can_full_control(
         &state.db,
@@ -3029,7 +2956,7 @@ pub async fn ab_rules(
 ) -> Response {
     let (_, collection) = match full_control_collection(&state, &user.user, &q.ab).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     let (page, page_size) = script_page(q.page, q.page_size);
     let rules = match services::address_book::rules_by_collection(
@@ -3116,11 +3043,11 @@ pub async fn ab_rule_add(
 ) -> Response {
     let (owner, collection) = match full_control_collection(&state, &user.user, &f.guid).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     let (rule_type, to_id) = match resolve_rule_target(&state, &f).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(message) => return resp::error(message),
     };
     let mut row = match services::address_book::rule_info_by_type_to_cid(
         &state.db,
@@ -3245,7 +3172,7 @@ async fn trash_book_scope(
     state: &AppState,
     caller: &entity::user::Model,
     guid: &str,
-) -> Result<(i32, i32), Response> {
+) -> Result<(i32, i32), &'static str> {
     let (uid, cid) = check_guid(state, caller, guid).await?;
     if services::address_book::can_full_control(&state.db, caller.id, caller.group_id, uid, cid)
         .await
@@ -3253,7 +3180,7 @@ async fn trash_book_scope(
     {
         Ok((uid, cid))
     } else {
-        Err(resp::error("NoAccess"))
+        Err("NoAccess")
     }
 }
 
@@ -3265,7 +3192,7 @@ pub async fn ab_trash_list(
 ) -> Response {
     let (uid, cid) = match trash_book_scope(&state, &user.user, &guid).await {
         Ok(scope) => scope,
-        Err(response) => return response,
+        Err(message) => return resp::error(message),
     };
     let entries = match services::address_book::trash_entries(&state.db, uid, cid).await {
         Ok(entries) => entries,
@@ -3312,7 +3239,7 @@ pub async fn ab_trash_restore(
 ) -> Response {
     let (uid, cid) = match trash_book_scope(&state, &user.user, &guid).await {
         Ok(scope) => scope,
-        Err(response) => return response,
+        Err(message) => return resp::error(message),
     };
     let Some(id) = form.id.filter(|id| *id > 0) else {
         return resp::error("ParamsError");
@@ -3333,7 +3260,7 @@ pub async fn ab_trash_purge(
 ) -> Response {
     let (uid, cid) = match trash_book_scope(&state, &user.user, &guid).await {
         Ok(scope) => scope,
-        Err(response) => return response,
+        Err(message) => return resp::error(message),
     };
     if form.id.is_some_and(|id| id <= 0) {
         return resp::error("ParamsError");
@@ -3357,7 +3284,7 @@ pub async fn ab_peer_import(
 ) -> Response {
     let (owner_id, collection_id) = match check_guid(&state, &user.user, &guid).await {
         Ok(scope) => scope,
-        Err(response) => return response,
+        Err(message) => return resp::error(message),
     };
     if !services::address_book::can_write(
         &state.db, user.user.id, user.user.group_id, owner_id, collection_id,

@@ -100,7 +100,7 @@ export function OverviewPage() {
         </div>
       </div>
 
-      <div className="admin-overview-metrics grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <MetricCard
           icon={<Users size={20} />}
           label={t("users")}
@@ -128,7 +128,7 @@ export function OverviewPage() {
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
-        <section className="admin-overview-panel admin-surface rounded-xl border border-kumo-line bg-kumo-base p-5">
+        <section className="admin-surface min-w-0 rounded-xl border border-kumo-line p-4 sm:p-5">
           <div className="mb-4 flex items-center gap-3">
             <ChartBar className="mt-0.5 shrink-0 text-kumo-brand" size={20} />
             <div>
@@ -150,10 +150,10 @@ export function OverviewPage() {
                     {row.count}
                   </span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-kumo-base">
+                <div aria-hidden className="h-1.5 overflow-hidden rounded-full bg-kumo-tint">
                   <div
                     className="h-full rounded-full bg-kumo-brand"
-                    style={{ width: `${Math.max(6, (row.count / maxPlatform) * 100)}%` }}
+                    style={{ width: `${(row.count / maxPlatform) * 100}%` }}
                   />
                 </div>
               </div>
@@ -161,7 +161,7 @@ export function OverviewPage() {
           </div>
         </section>
 
-        <section className="admin-overview-panel admin-surface rounded-xl border border-kumo-line bg-kumo-base p-5">
+        <section className="admin-surface min-w-0 rounded-xl border border-kumo-line p-4 sm:p-5">
           <div className="mb-4 flex items-center gap-3">
             <ClockCounterClockwise
               className="mt-0.5 shrink-0 text-kumo-brand"
@@ -179,7 +179,7 @@ export function OverviewPage() {
         </section>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="admin-surface grid overflow-hidden rounded-xl border border-kumo-line sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           icon={<SignIn size={20} />}
           label={t("loginLogs")}
@@ -228,26 +228,29 @@ function MetricCard({
   detail: string;
   secondary?: boolean;
 }) {
+  const { i18n } = useTranslation();
   return (
     <section
-      className="admin-surface rounded-xl border border-kumo-line bg-kumo-base p-5"
+      className={secondary
+        ? "admin-secondary-metric min-w-0 px-4 py-4 sm:px-5"
+        : "admin-surface min-w-0 rounded-xl border border-kumo-line p-3.5 sm:p-5"}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
           <p className="text-sm font-medium text-kumo-subtle">{label}</p>
           <p
-            className={`mt-2 font-semibold tabular-nums ${
-              secondary ? "text-xl" : "text-3xl tracking-tight"
+            className={`mt-2 break-words font-semibold tabular-nums ${
+              secondary ? "text-xl" : "text-2xl tracking-tight sm:text-3xl"
             }`}
           >
-            {value}
+            {typeof value === "number" ? value.toLocaleString(i18n.language) : value}
           </p>
         </div>
-        <div className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${secondary ? "text-kumo-subtle" : "bg-kumo-tint text-kumo-brand"}`} aria-hidden="true">
+        <div className={`grid size-7 shrink-0 place-items-center rounded-lg sm:size-9 ${secondary ? "text-kumo-subtle" : "bg-kumo-tint text-kumo-brand"}`} aria-hidden="true">
           {icon}
         </div>
       </div>
-      <p className="mt-4 break-words border-t border-kumo-line/60 pt-3 text-xs leading-5 text-kumo-subtle">
+      <p className={`break-words text-xs leading-5 text-kumo-subtle ${secondary ? "mt-1" : "mt-3 border-t border-kumo-line/60 pt-2.5"}`}>
         {detail}
       </p>
     </section>

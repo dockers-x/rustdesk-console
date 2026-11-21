@@ -72,8 +72,8 @@ export function EnrollTotpPage() {
   };
 
   return (
-    <section className="min-h-full bg-kumo-base px-4 py-12 text-kumo-default">
-      <div className="mx-auto max-w-md space-y-4 rounded-lg border border-kumo-line bg-kumo-elevated p-5 sm:p-7">
+    <section className="grid min-h-full place-items-center bg-kumo-base px-4 py-6 text-kumo-default">
+      <div className="auth-form auth-panel mx-auto w-full max-w-md space-y-4 rounded-xl border border-kumo-line bg-kumo-elevated p-5 sm:p-7">
         <h1 className="text-xl font-semibold">{t("totpEnrollmentRequired")}</h1>
         <p className="text-sm leading-6 text-kumo-subtle">{t("totpSetupHint")}</p>
         {error && <InlineMessage tone="error">{error}</InlineMessage>}
@@ -94,12 +94,12 @@ export function EnrollTotpPage() {
               maxLength={6}
               onChange={(event) => setCode(event.target.value)}
             />
-            <Button type="submit" loading={busy} disabled={!/^\d{6}$/.test(code)}>
+            <Button variant="primary" type="submit" loading={busy} disabled={!/^\d{6}$/.test(code)}>
               {t("enableTotp")}
             </Button>
           </form>
         ) : (
-          <Button loading={busy} onClick={() => void start()}>{t("setupTotp")}</Button>
+          <Button variant="primary" loading={busy} onClick={() => void start()}>{t("setupTotp")}</Button>
         )}
         <Button variant="secondary" disabled={busy} onClick={() => void signOut()}>
           {t("logout")}

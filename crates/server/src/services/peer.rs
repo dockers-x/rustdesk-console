@@ -31,15 +31,11 @@ pub async fn info_by_row_id(
 }
 
 pub async fn erase_user_id(db: &DatabaseConnection, user_id: i32) -> Result<(), DbErr> {
-    let peers = peer::Entity::find()
+    peer::Entity::update_many()
+        .col_expr(peer::Column::UserId, sea_orm::sea_query::Expr::value(0))
         .filter(peer::Column::UserId.eq(user_id))
-        .all(db)
+        .exec(db)
         .await?;
-    for p in peers {
-        let mut am: peer::ActiveModel = p.into();
-        am.user_id = Set(0);
-        am.update(db).await?;
-    }
     Ok(())
 }
 
@@ -60,6 +56,7 @@ pub async fn list_by_user_ids(
     let q = peer::Entity::find().filter(peer::Column::UserId.is_in(user_ids.to_vec()));
     let total = q.clone().count(db).await? as i64;
     let list = q
+        .order_by_asc(peer::Column::RowId)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all(db)
@@ -85,6 +82,7 @@ pub async fn list(
     }
     let total = q.clone().count(db).await? as i64;
     let list = q
+        .order_by_asc(peer::Column::RowId)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all(db)
@@ -276,6 +274,7 @@ pub(crate) async fn list_filtered_in_groups(
     }
     let total = q.clone().count(db).await? as i64;
     let list = q
+        .order_by_asc(peer::Column::RowId)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all(db)
@@ -308,11 +307,15 @@ pub async fn simple_data(
     ids: &[String],
 ) -> Result<Vec<serde_json::Value>, DbErr> {
     let peers = peer::Entity::find()
-        .filter(peer::Column::Id.is_in(ids.to_vec()))
+        .select_only()
+        .column(peer::Column::Id)
+        .column(peer::Column::Version)
+        .filter(peer::Column::Id.is_in(ids.iter().cloned()))
+        .into_tuple::<(String, String)>()
         .all(db)
         .await?;
     Ok(peers
         .into_iter()
-        .map(|p| serde_json::json!({ "id": p.id, "version": p.version }))
+        .map(|(id, version)| serde_json::json!({ "id": id, "version": version }))
         .collect())
 }

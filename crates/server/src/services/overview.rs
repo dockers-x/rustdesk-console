@@ -3,15 +3,14 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
+use sea_orm::sea_query::{Expr, Func};
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::Serialize;
 
-use entity::{
-    address_book, audit_conn, audit_file, login_log, peer, share_record, user,
-};
+use entity::{address_book, audit_conn, audit_file, login_log, peer, share_record, user};
 
 use super::active_connection;
 
@@ -79,7 +78,7 @@ pub async fn load(
 ) -> Result<Overview, sea_orm::DbErr> {
     let now = Utc::now().timestamp();
     let online_since = now - ONLINE_WINDOW_SECONDS;
-    let peers = peer::Entity::find().all(db).await?;
+    let fleet = fleet_summary(db, online_since).await?;
 
     let recent_logins = login_log::Entity::find()
         .order_by_desc(login_log::Column::Id)
@@ -126,11 +125,8 @@ pub async fn load(
                 .filter(user::Column::IsAdmin.eq(true))
                 .count(db)
                 .await?,
-            devices: peers.len() as u64,
-            online_devices: peers
-                .iter()
-                .filter(|p| p.last_online_time >= online_since)
-                .count() as u64,
+            devices: fleet.devices,
+            online_devices: fleet.online,
             active_connections: active_connection::count(db).await?,
             address_books: address_book::Entity::find().count(db).await?,
             share_records: share_record::Entity::find().count(db).await?,
@@ -138,40 +134,77 @@ pub async fn load(
             audit_connections: audit_conn::Entity::find().count(db).await?,
             audit_files: audit_file::Entity::find().count(db).await?,
         },
-        platforms: platform_counts(peers.iter().map(|p| p.os.as_str())),
+        platforms: fleet.platforms,
         recent_logins,
         recent_connections,
     })
 }
 
-pub fn platform_name(os: &str) -> String {
+fn platform_name(os: &str) -> &'static str {
     let lower = os.to_lowercase();
     if lower.contains("windows") {
-        "Windows".to_string()
+        "Windows"
     } else if lower.contains("android") {
-        "Android".to_string()
+        "Android"
     } else if lower.contains("linux") {
-        "Linux".to_string()
+        "Linux"
     } else if lower.contains("mac") || lower.contains("darwin") || lower.contains("osx") {
-        "macOS".to_string()
+        "macOS"
     } else if os.trim().is_empty() {
-        "Unknown".to_string()
+        "Unknown"
     } else {
-        "Other".to_string()
+        "Other"
     }
 }
 
-pub fn platform_counts<'a>(items: impl Iterator<Item = &'a str>) -> Vec<NameCount> {
-    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
-    for item in items {
-        *counts.entry(platform_name(item)).or_insert(0) += 1;
+struct FleetSummary {
+    devices: u64,
+    online: u64,
+    platforms: Vec<NameCount>,
+}
+
+async fn fleet_summary(
+    db: &DatabaseConnection,
+    online_since: i64,
+) -> Result<FleetSummary, sea_orm::DbErr> {
+    // Keep both totals in the same snapshot. MySQL's default text collation
+    // can merge OS strings that the Rust platform classifier treats differently.
+    let os_key = match db.get_database_backend() {
+        DatabaseBackend::MySql => Expr::cust("BINARY os"),
+        _ => Expr::col(peer::Column::Os).into(),
+    };
+    let online =
+        Expr::case(peer::Column::LastOnlineTime.gte(online_since), 1).finally(Option::<i32>::None);
+    let groups = peer::Entity::find()
+        .select_only()
+        .column_as(peer::Column::Os.min(), "os_name")
+        .column_as(peer::Column::RowId.count(), "devices")
+        .expr_as(Func::count(online), "online")
+        .group_by(os_key)
+        .into_tuple::<(String, i64, i64)>()
+        .all(db)
+        .await?;
+    let mut devices = 0;
+    let mut online = 0;
+    let mut counts = BTreeMap::new();
+    for (os, total, active) in groups {
+        devices += total as u64;
+        online += active as u64;
+        *counts.entry(platform_name(&os)).or_insert(0) += total as u64;
     }
-    let mut out: Vec<NameCount> = counts
+    let mut platforms: Vec<_> = counts
         .into_iter()
-        .map(|(name, count)| NameCount { name, count })
+        .map(|(name, count)| NameCount {
+            name: name.to_owned(),
+            count,
+        })
         .collect();
-    out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
-    out
+    platforms.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    Ok(FleetSummary {
+        devices,
+        online,
+        platforms,
+    })
 }
 
 pub fn uptime_seconds(start_time: &str) -> i64 {
@@ -197,15 +230,29 @@ mod tests {
         assert_eq!(platform_name("FreeBSD"), "Other");
     }
 
-    #[test]
-    fn platform_counts_orders_by_count_then_name() {
-        let counts = platform_counts(["Windows", "linux", "Windows", "", "FreeBSD"].into_iter());
+    #[tokio::test]
+    async fn fleet_summary_preserves_platform_counts_and_inclusive_online_boundary() {
+        use sea_orm::{Database, Schema};
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let backend = db.get_database_backend();
+        db.execute(backend.build(&Schema::new(backend).create_table_from_entity(peer::Entity)))
+            .await
+            .unwrap();
+        let empty = fleet_summary(&db, 100).await.unwrap();
         assert_eq!(
-            counts,
+            (empty.devices, empty.online, empty.platforms.len()),
+            (0, 0, 0)
+        );
+        db.execute_unprepared("INSERT INTO peers (os, last_online_time) VALUES ('Windows 10', 99), ('Windows 10', 100), ('Windows 11', 101), ('linux', 0), (' ', 0), ('FreeBSD', 0)").await.unwrap();
+        let summary = fleet_summary(&db, 100).await.unwrap();
+        assert_eq!((summary.devices, summary.online), (6, 2));
+        assert_eq!(
+            summary.platforms,
             vec![
                 NameCount {
                     name: "Windows".to_string(),
-                    count: 2,
+                    count: 3,
                 },
                 NameCount {
                     name: "Linux".to_string(),

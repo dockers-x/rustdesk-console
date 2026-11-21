@@ -39,6 +39,7 @@ import {
   Users,
   UsersThree,
   VideoCamera,
+  X,
 } from "@phosphor-icons/react";
 import { clearToken, getAuthSessionId } from "../lib/auth";
 import { canAccessConsolePath, type RestrictedConsoleRole } from "../lib/access";
@@ -51,7 +52,7 @@ import {
   MY_RESOURCES,
   resourcePath,
 } from "../resource/registry";
-import i18n from "../i18n";
+import { LanguageSelect } from "./LanguageSelect";
 
 type IconType = ComponentType<{ size?: number; weight?: "regular" | "fill" }>;
 
@@ -250,6 +251,7 @@ export function AppShell({
   const mobileNavRef = useRef<HTMLElement>(null);
   const mobileNavToggleRef = useRef<HTMLButtonElement>(null);
   const mobileNavWasOpen = useRef(false);
+  const workspaceRef = useRef<HTMLElement>(null);
   const [dark, setDark] = useState(() => getMode() === "dark");
   const visibleNavSections = useMemo(
     () =>
@@ -300,6 +302,10 @@ export function AppShell({
   }, [isMobile, location.pathname, location.search]);
 
   useEffect(() => {
+    if (!location.hash) workspaceRef.current?.scrollTo(0, 0);
+  }, [location.pathname, location.hash]);
+
+  useEffect(() => {
     if (!isMobile) {
       mobileNavWasOpen.current = false;
       return;
@@ -325,14 +331,6 @@ export function AppShell({
     const next = !dark;
     setDark(next);
     setMode(next ? "dark" : "light");
-  };
-
-  const toggleLang = () => {
-    const order = ["en", "ru", "zh-CN"];
-    const current = i18n.language;
-    const next = order[(order.indexOf(current) + 1) % order.length];
-    localStorage.setItem("lang", next);
-    void i18n.changeLanguage(next);
   };
 
   const logout = () => {
@@ -368,24 +366,45 @@ export function AppShell({
       <a
         href="#main-content"
         inert={isMobile && mobileNavOpen}
+        onClick={(event) => {
+          event.preventDefault();
+          workspaceRef.current?.focus();
+        }}
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-kumo-elevated focus:px-3 focus:py-2 focus:text-sm focus:shadow"
       >
         {t("skipToContent")}
       </a>
-      {isMobile && mobileNavOpen && (
+      {isMobile && (
         <button
           type="button"
           tabIndex={-1}
-          className="admin-mobile-backdrop fixed inset-0 z-30 bg-black/50"
+          inert={!mobileNavOpen}
+          aria-hidden
+          data-open={mobileNavOpen}
+          className="admin-mobile-backdrop fixed inset-0 z-30 bg-black/45"
           aria-label={t("collapseSidebar")}
           onClick={() => setMobileNavOpen(false)}
         />
       )}
       <aside
+        id="console-navigation"
         ref={mobileNavRef}
+        onKeyDown={(event) => {
+          if (!mobileNavOpen || event.key !== "Tab") return;
+          const items = event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled]), a[href]");
+          const first = items[0];
+          const last = items[items.length - 1];
+          if (event.shiftKey && event.target === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && event.target === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }}
         className={cn(
           "admin-mobile-nav fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-kumo-line bg-kumo-elevated",
-          "transition-transform duration-[180ms] motion-reduce:transition-none",
+          "transition-transform duration-200 motion-reduce:transition-none",
           "[transition-timing-function:var(--ease-out)]",
           isMobile && !mobileNavOpen && "pointer-events-none -translate-x-full",
           isMobile && mobileNavOpen && "translate-x-0",
@@ -406,7 +425,7 @@ export function AppShell({
       >
         <div
           className={cn(
-            "flex h-14 items-center gap-2 px-4 font-semibold",
+            "flex h-14 shrink-0 items-center gap-2.5 border-b border-kumo-line px-4 font-semibold",
             navCompact && "justify-center px-0",
           )}
         >
@@ -415,6 +434,11 @@ export function AppShell({
             <span className="truncate" title={appTitle}>
               {appTitle}
             </span>
+          )}
+          {isMobile && (
+            <Button variant="ghost" className="ml-auto min-h-11 min-w-11" aria-label={t("collapseSidebar")} onClick={closeMobileNav}>
+              <X size={18} aria-hidden />
+            </Button>
           )}
         </div>
         <nav
@@ -465,14 +489,15 @@ export function AppShell({
                       to={item.to}
                       end={item.end}
                       title={t(item.key)}
+                      aria-label={t(item.key)}
                       onClick={closeMobileNav}
                       className={({ isActive }) =>
                         cn(
-                          "group relative flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-[background-color,color,box-shadow,scale] duration-150 active:scale-[0.98] focus-visible:scale-100 max-md:min-h-11",
+                          "admin-nav-link relative flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-2 text-sm max-md:min-h-11",
                           navCompact && "justify-center",
                           item.indent && !navCompact && "pl-7",
                           isActive
-                            ? "bg-kumo-tint font-medium text-kumo-default shadow-xs ring-1 ring-kumo-line/70"
+                            ? "bg-kumo-tint font-semibold text-kumo-default"
                             : "text-kumo-subtle hover:bg-kumo-tint/70 hover:text-kumo-default",
                         )
                       }
@@ -521,6 +546,7 @@ export function AppShell({
               else setDesktopCollapsed((collapsed) => !collapsed);
             }}
             aria-expanded={navExpanded}
+            aria-controls="console-navigation"
             aria-label={
               navExpanded ? t("collapseSidebar") : t("expandSidebar")
             }
@@ -529,22 +555,15 @@ export function AppShell({
             <List size={18} />
           </Button>
           {activeSection && activeItem && (
-            <div className="hidden min-w-0 items-center gap-2 text-xs sm:flex">
-              <span className="truncate text-kumo-subtle">{t(activeSection.key)}</span>
-              <span className="text-kumo-subtle" aria-hidden="true">/</span>
-              <span className="truncate font-medium">{t(activeItem.key)}</span>
+            <div className="flex min-w-0 items-center gap-2 text-sm">
+              <span className="hidden shrink-0 text-kumo-subtle sm:inline">{t(activeSection.key)}</span>
+              <span className="hidden text-kumo-subtle sm:inline" aria-hidden="true">/</span>
+              <span className="truncate font-medium" title={t(activeItem.key)}>{t(activeItem.key)}</span>
             </div>
           )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="min-h-11 md:min-h-0"
-              onClick={toggleLang}
-            >
-              {i18n.language === "zh-CN" ? "EN" : i18n.language === "ru" ? "中文" : "RU"}
-            </Button>
+            <LanguageSelect />
             <Button
               variant="ghost"
               size="sm"
@@ -557,37 +576,40 @@ export function AppShell({
             <Button
               variant="ghost"
               size="sm"
-              className="min-h-11 md:min-h-0"
+              className="min-h-11 min-w-11 justify-center md:min-h-0 md:min-w-0"
               onClick={logout}
+              title={t("logout")}
             >
               <SignOut size={18} />
-              <span className="ml-1 max-[359px]:sr-only max-[359px]:ml-0">
+              <span className="sr-only sm:not-sr-only">
                 {t("logout")}
               </span>
             </Button>
           </div>
         </header>
-        <main id="main-content" className="admin-workspace min-h-0 flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
-          {showTotpReminder && skippedTotpSession !== authSession && (
-            <Banner
-              className="mb-4"
-              variant="alert"
-              icon={<ShieldCheck size={18} />}
-              title={t("adminTotpReminder")}
-              action={
-                <>
-                  <Banner.Action onClick={() => navigate("/my#account-security")}>
-                    {t("accountSecurity")}
-                  </Banner.Action>
-                  <Banner.Action variant="secondary" onClick={skipTotpReminder}>
-                    {t("adminTotpSkipSession")}
-                  </Banner.Action>
-                </>
-              }
-            />
-          )}
-          <div key={location.pathname} className="admin-page-enter min-h-full">
-            <Outlet />
+        <main id="main-content" ref={workspaceRef} tabIndex={-1} className="admin-workspace min-h-0 flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
+          <div className="mx-auto w-full max-w-[96rem]">
+            {showTotpReminder && skippedTotpSession !== authSession && (
+              <Banner
+                className="mb-4"
+                variant="alert"
+                icon={<ShieldCheck size={18} />}
+                title={t("adminTotpReminder")}
+                action={
+                  <>
+                    <Banner.Action onClick={() => navigate("/my#account-security")}>
+                      {t("accountSecurity")}
+                    </Banner.Action>
+                    <Banner.Action variant="secondary" onClick={skipTotpReminder}>
+                      {t("adminTotpSkipSession")}
+                    </Banner.Action>
+                  </>
+                }
+              />
+            )}
+            <div className="admin-page min-w-0">
+              <Outlet />
+            </div>
           </div>
         </main>
       </div>

@@ -250,6 +250,7 @@ async fn write_at(path: &Path, offset: u64, body: &[u8]) -> Result<(), String> {
     ensure_parent(path).await?;
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(path)
         .await

@@ -68,6 +68,31 @@ fn image_extension(data: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// `GET /api/admin/file/oss_token` — signed OSS post-policy for direct upload.
+pub async fn oss_token(State(state): State<AppState>, _user: AdminUser) -> Response {
+    let token = crate::support::oss::get_policy_token(&state.config.oss, "");
+    resp::success(token)
+}
+
+/// `POST /api/admin/file/notify` — OSS upload callback; returns the file URL.
+/// (The RSA callback-signature verification of the Go version is omitted; rely
+/// on OSS callback being configured to a trusted endpoint.)
+pub async fn notify(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    let filename = body
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut out = body.clone();
+    if let Value::Object(ref mut m) = out {
+        m.insert(
+            "url".into(),
+            Value::String(format!("{}/{}", state.config.oss.host, filename)),
+        );
+    }
+    resp::success(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,29 +121,4 @@ mod tests {
             assert_eq!(image_extension(data), Some(extension));
         }
     }
-}
-
-/// `GET /api/admin/file/oss_token` — signed OSS post-policy for direct upload.
-pub async fn oss_token(State(state): State<AppState>, _user: AdminUser) -> Response {
-    let token = crate::support::oss::get_policy_token(&state.config.oss, "");
-    resp::success(token)
-}
-
-/// `POST /api/admin/file/notify` — OSS upload callback; returns the file URL.
-/// (The RSA callback-signature verification of the Go version is omitted; rely
-/// on OSS callback being configured to a trusted endpoint.)
-pub async fn notify(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
-    let filename = body
-        .get("filename")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let mut out = body.clone();
-    if let Value::Object(ref mut m) = out {
-        m.insert(
-            "url".into(),
-            Value::String(format!("{}/{}", state.config.oss.host, filename)),
-        );
-    }
-    resp::success(out)
 }

@@ -95,15 +95,15 @@ export function ForceChangePasswordPage() {
       <div className="login-grid-bg pointer-events-none absolute inset-0 opacity-60" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-kumo-brand/70" />
       <div className="relative z-10 mx-auto grid min-h-[calc(100dvh-3rem)] w-full max-w-5xl items-center">
-        <div className="grid overflow-hidden rounded-lg border border-kumo-line bg-kumo-elevated shadow-lg lg:grid-cols-[minmax(0,1fr)_420px]">
-          <section className="relative overflow-hidden p-6 sm:p-8 lg:p-10">
-            <div className="flex h-full min-h-[220px] flex-col justify-between gap-8">
+        <div className="auth-panel grid overflow-hidden rounded-xl border border-kumo-line bg-kumo-elevated lg:grid-cols-[minmax(0,1fr)_420px]">
+          <section className="login-brand relative isolate overflow-hidden p-5 sm:p-8 lg:p-10">
+            <div className="flex h-full flex-col justify-between gap-4 lg:min-h-56 lg:gap-8">
               <div>
                 <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 text-xs font-semibold uppercase text-kumo-subtle">
                   <img src={logoUrl} alt="" className="size-5 object-contain" />
                   <span>{appTitle}</span>
                 </div>
-                <h1 className="mt-6 max-w-[16ch] break-words text-3xl font-semibold leading-tight sm:text-4xl">
+                <h1 className="mt-3 break-words text-xl font-semibold leading-tight lg:mt-6 lg:max-w-[16ch] lg:text-4xl">
                   {t("changePasswordRequiredTitle")}
                 </h1>
                 <p className="mt-4 max-w-md text-sm leading-6 text-kumo-subtle sm:text-base">
@@ -111,7 +111,7 @@ export function ForceChangePasswordPage() {
                 </p>
               </div>
 
-              <dl className="grid max-w-md gap-3 border-t border-kumo-line pt-4 text-sm">
+              <dl className="grid max-w-md gap-2 border-t border-kumo-line pt-4 text-sm">
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-kumo-subtle">{t("signedInAs")}</dt>
                   <dd className="min-w-0 truncate font-medium">
@@ -128,7 +128,7 @@ export function ForceChangePasswordPage() {
 
           <form
             onSubmit={submit}
-            className="border-t border-kumo-line bg-kumo-base p-6 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
+            className="auth-form border-t border-kumo-line bg-kumo-base p-5 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
           >
             <div className="mb-8">
               <div className="flex min-h-6 items-center gap-2 text-xs font-semibold uppercase text-kumo-subtle">
@@ -186,7 +186,7 @@ export function ForceChangePasswordPage() {
               </label>
               {error && <InlineMessage tone="error">{error}</InlineMessage>}
               <Button
-                type="submit"
+                variant="primary" type="submit"
                 className="w-full justify-center"
                 disabled={loading || logoutLoading}
                 loading={loading}

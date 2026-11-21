@@ -257,7 +257,7 @@ export function UserControlRoleAction({ userId, username }: { userId: number; us
         </DialogBody>
         <DialogFooter error={save.error?.message}>
           <Button variant="secondary" onClick={() => setOpen(false)} disabled={save.isPending}>{t("cancel")}</Button>
-          <Button onClick={() => { if (draft) save.mutate(draft); }} disabled={!draft || save.isPending} loading={save.isPending}>{t("save")}</Button>
+          <Button variant="primary" onClick={() => { if (draft) save.mutate(draft); }} disabled={!draft || save.isPending} loading={save.isPending}>{t("save")}</Button>
         </DialogFooter>
       </Dialog>
     </Dialog.Root>

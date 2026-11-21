@@ -2207,7 +2207,7 @@ async fn save_strategy_assignment(
     .await
     {
         Ok(_) => resp::success(Value::Null),
-        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        Err(e) => resp::fail(101, format!("{}{}", state.tr(lang, "OperationFailed"), e)),
     }
 }
 

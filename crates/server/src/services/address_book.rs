@@ -94,13 +94,13 @@ pub async fn info_by_user_id_and_id_and_cid(
     id: &str,
     collection_id: i32,
 ) -> Result<Option<address_book::Model>, DbErr> {
-    Ok(address_book::Entity::find()
+    address_book::Entity::find()
         .filter(address_book::Column::UserId.eq(user_id))
         .filter(address_book::Column::Id.eq(id))
         .filter(address_book::Column::CollectionId.eq(collection_id))
         .order_by_asc(address_book::Column::RowId)
         .one(db)
-        .await?)
+        .await
 }
 
 pub async fn list_by_user_id_and_id_and_cid(
@@ -1108,6 +1108,139 @@ pub(crate) async fn clear_unshared_delegation(tx: &DatabaseTransaction, collecti
     Ok(())
 }
 
+pub async fn move_to_trash(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+    ids: &[String],
+) -> Result<(), DbErr> {
+    let tx = db.begin().await?;
+    // Serialize archive and restore for this owner. Take the lock before reading.
+    super::user::lock_account(&tx, user_id)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("Address book owner".into()))?;
+    for id in ids {
+        let rows = list_by_user_id_and_id_and_cid(&tx, user_id, id, collection_id).await?;
+        let Some((row, duplicates)) = rows.split_first() else {
+            return Err(DbErr::RecordNotFound("Address book entry".into()));
+        };
+        let mut snapshot = row.clone();
+        for duplicate in duplicates {
+            merge_peer_for_add(&mut snapshot, duplicate.clone());
+        }
+        address_book_trash::ActiveModel {
+            user_id: Set(user_id),
+            collection_id: Set(collection_id),
+            snapshot: Set(serde_json::to_value(snapshot).map_err(|e| DbErr::Json(e.to_string()))?),
+            deleted_at: Set(chrono::Utc::now().naive_utc()),
+            ..Default::default()
+        }
+        .insert(&tx)
+        .await?;
+        address_book::Entity::delete_many()
+            .filter(address_book::Column::RowId.is_in(rows.iter().map(|row| row.row_id)))
+            .exec(&tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
+fn trash_scope(user_id: i32, collection_id: i32) -> Condition {
+    Condition::all()
+        .add(address_book_trash::Column::UserId.eq(user_id))
+        .add(address_book_trash::Column::CollectionId.eq(collection_id))
+}
+
+pub async fn trash_entries(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+) -> Result<Vec<address_book_trash::Model>, DbErr> {
+    address_book_trash::Entity::find()
+        .filter(trash_scope(user_id, collection_id))
+        .order_by_desc(address_book_trash::Column::Id)
+        .all(db)
+        .await
+}
+
+pub async fn restore_from_trash(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+    id: i32,
+) -> Result<(), DbErr> {
+    let tx = db.begin().await?;
+    super::user::lock_account(&tx, user_id)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("Address book owner".into()))?;
+    let entry = address_book_trash::Entity::find_by_id(id)
+        .filter(trash_scope(user_id, collection_id))
+        .one(&tx)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("Recycle bin entry".into()))?;
+    let mut peer: address_book::Model =
+        serde_json::from_value(entry.snapshot).map_err(|e| DbErr::Json(e.to_string()))?;
+    if !list_by_user_id_and_id_and_cid(&tx, user_id, &peer.id, collection_id)
+        .await?
+        .is_empty()
+    {
+        return Err(DbErr::Custom(
+            "An active entry already uses this device ID".into(),
+        ));
+    }
+    peer.user_id = user_id;
+    peer.collection_id = collection_id;
+    peer.online = false;
+    create(&tx, peer).await?;
+    address_book_trash::Entity::delete_by_id(id)
+        .exec(&tx)
+        .await?;
+    tx.commit().await
+}
+
+pub async fn purge_trash(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+    id: Option<i32>,
+) -> Result<(), DbErr> {
+    let mut query =
+        address_book_trash::Entity::delete_many().filter(trash_scope(user_id, collection_id));
+    if let Some(id) = id {
+        query = query.filter(address_book_trash::Column::Id.eq(id));
+    }
+    query.exec(db).await?;
+    Ok(())
+}
+
+pub async fn import_peers(
+    db: &DatabaseConnection,
+    user_id: i32,
+    collection_id: i32,
+    peers: &[::entity::peer::Model],
+) -> Result<usize, DbErr> {
+    let tx = db.begin().await?;
+    super::user::lock_account(&tx, user_id)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("Address book owner".into()))?;
+    let mut added = 0;
+    for peer in peers {
+        if !list_by_user_id_and_id_and_cid(&tx, user_id, &peer.id, collection_id)
+            .await?
+            .is_empty()
+        {
+            continue;
+        }
+        let mut book_peer = from_peer(peer);
+        book_peer.user_id = user_id;
+        book_peer.collection_id = collection_id;
+        create(&tx, book_peer).await?;
+        added += 1;
+    }
+    tx.commit().await?;
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1721,123 +1854,4 @@ mod tests {
         assert!(can_write(&db, 42, 99, 1, 7).await.unwrap());
         assert!(!can_full_control(&db, 42, 99, 1, 7).await.unwrap());
     }
-}
-
-pub async fn move_to_trash(
-    db: &DatabaseConnection,
-    user_id: i32,
-    collection_id: i32,
-    ids: &[String],
-) -> Result<(), DbErr> {
-    let tx = db.begin().await?;
-    // Serialize archive and restore for this owner. Take the lock before reading.
-    super::user::lock_account(&tx, user_id).await?
-        .ok_or_else(|| DbErr::RecordNotFound("Address book owner".into()))?;
-    for id in ids {
-        let rows = list_by_user_id_and_id_and_cid(&tx, user_id, id, collection_id).await?;
-        let Some((row, duplicates)) = rows.split_first() else {
-            return Err(DbErr::RecordNotFound("Address book entry".into()));
-        };
-        let mut snapshot = row.clone();
-        for duplicate in duplicates {
-            merge_peer_for_add(&mut snapshot, duplicate.clone());
-        }
-        address_book_trash::ActiveModel {
-            user_id: Set(user_id),
-            collection_id: Set(collection_id),
-            snapshot: Set(serde_json::to_value(snapshot).map_err(|e| DbErr::Json(e.to_string()))?),
-            deleted_at: Set(chrono::Utc::now().naive_utc()),
-            ..Default::default()
-        }
-        .insert(&tx)
-        .await?;
-        address_book::Entity::delete_many()
-            .filter(address_book::Column::RowId.is_in(rows.iter().map(|row| row.row_id)))
-            .exec(&tx)
-            .await?;
-    }
-    tx.commit().await
-}
-
-fn trash_scope(user_id: i32, collection_id: i32) -> Condition {
-    Condition::all()
-        .add(address_book_trash::Column::UserId.eq(user_id))
-        .add(address_book_trash::Column::CollectionId.eq(collection_id))
-}
-
-pub async fn trash_entries(
-    db: &DatabaseConnection,
-    user_id: i32,
-    collection_id: i32,
-) -> Result<Vec<address_book_trash::Model>, DbErr> {
-    address_book_trash::Entity::find()
-        .filter(trash_scope(user_id, collection_id))
-        .order_by_desc(address_book_trash::Column::Id)
-        .all(db)
-        .await
-}
-
-pub async fn restore_from_trash(
-    db: &DatabaseConnection,
-    user_id: i32,
-    collection_id: i32,
-    id: i32,
-) -> Result<(), DbErr> {
-    let tx = db.begin().await?;
-    super::user::lock_account(&tx, user_id).await?
-        .ok_or_else(|| DbErr::RecordNotFound("Address book owner".into()))?;
-    let entry = address_book_trash::Entity::find_by_id(id)
-        .filter(trash_scope(user_id, collection_id))
-        .one(&tx)
-        .await?
-        .ok_or_else(|| DbErr::RecordNotFound("Recycle bin entry".into()))?;
-    let mut peer: address_book::Model =
-        serde_json::from_value(entry.snapshot).map_err(|e| DbErr::Json(e.to_string()))?;
-    if !list_by_user_id_and_id_and_cid(&tx, user_id, &peer.id, collection_id).await?.is_empty() {
-        return Err(DbErr::Custom("An active entry already uses this device ID".into()));
-    }
-    peer.user_id = user_id;
-    peer.collection_id = collection_id;
-    peer.online = false;
-    create(&tx, peer).await?;
-    address_book_trash::Entity::delete_by_id(id).exec(&tx).await?;
-    tx.commit().await
-}
-
-pub async fn purge_trash(
-    db: &DatabaseConnection,
-    user_id: i32,
-    collection_id: i32,
-    id: Option<i32>,
-) -> Result<(), DbErr> {
-    let mut query = address_book_trash::Entity::delete_many().filter(trash_scope(user_id, collection_id));
-    if let Some(id) = id {
-        query = query.filter(address_book_trash::Column::Id.eq(id));
-    }
-    query.exec(db).await?;
-    Ok(())
-}
-
-pub async fn import_peers(
-    db: &DatabaseConnection,
-    user_id: i32,
-    collection_id: i32,
-    peers: &[::entity::peer::Model],
-) -> Result<usize, DbErr> {
-    let tx = db.begin().await?;
-    super::user::lock_account(&tx, user_id).await?
-        .ok_or_else(|| DbErr::RecordNotFound("Address book owner".into()))?;
-    let mut added = 0;
-    for peer in peers {
-        if !list_by_user_id_and_id_and_cid(&tx, user_id, &peer.id, collection_id).await?.is_empty() {
-            continue;
-        }
-        let mut book_peer = from_peer(peer);
-        book_peer.user_id = user_id;
-        book_peer.collection_id = collection_id;
-        create(&tx, book_peer).await?;
-        added += 1;
-    }
-    tx.commit().await?;
-    Ok(added)
 }

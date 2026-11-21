@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
 import { InlineMessage } from "../components/InlineMessage";
+import { LanguageSelect } from "../components/LanguageSelect";
 import {
   authenticatedHome,
   canAccessConsolePath,
@@ -465,23 +466,26 @@ export function LoginPage() {
       <div className="login-grid-bg pointer-events-none absolute inset-0 opacity-60" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-kumo-brand/70" />
       <div className="relative z-10 mx-auto grid min-h-[calc(100dvh-3rem)] w-full max-w-6xl items-center">
-        <div className="grid overflow-hidden rounded-lg border border-kumo-line bg-kumo-elevated shadow-lg lg:grid-cols-[minmax(0,1fr)_420px]">
-          <section className="login-brand relative isolate min-w-0 overflow-hidden p-6 sm:p-8 lg:flex lg:flex-col lg:justify-center lg:p-10">
-            <img src={largeLogoUrl} alt="" className="login-brand-logo size-14 object-contain" />
-            <h1 className="mt-5 max-w-xl break-words text-3xl font-semibold leading-tight sm:text-4xl">
+        <div className="auth-panel grid overflow-hidden rounded-xl border border-kumo-line bg-kumo-elevated lg:grid-cols-[minmax(0,1fr)_minmax(24rem,28rem)]">
+          <section className="login-brand relative isolate grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 overflow-hidden p-5 sm:p-8 lg:flex lg:flex-col lg:items-start lg:justify-center lg:p-10">
+            <img src={largeLogoUrl} alt="" className="size-10 object-contain lg:size-14" />
+            <h1 className="max-w-xl break-words text-xl font-semibold leading-tight lg:mt-5 lg:text-4xl">
               {appTitle}
             </h1>
-            <p className="mt-4 max-w-md text-sm leading-6 text-kumo-subtle sm:text-base">
+            <p className="col-span-2 mt-2 max-w-md text-sm leading-6 text-kumo-subtle lg:mt-4 lg:text-base">
               {t("loginSubtitle")}
             </p>
           </section>
 
           <form
             onSubmit={submitActiveForm}
-            className="auth-form border-t border-kumo-line bg-kumo-base p-6 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
+            className="auth-form border-t border-kumo-line bg-kumo-base p-5 sm:p-8 lg:border-l lg:border-t-0 lg:p-10"
           >
             <div className="mb-6">
-              <h2 className="text-2xl font-semibold">{formTitle}</h2>
+              <div className="flex flex-wrap items-center justify-between gap-x-3">
+                <h2 className="text-2xl font-semibold">{formTitle}</h2>
+                <LanguageSelect />
+              </div>
               {formSubtitle && <p className="mt-2 text-sm text-kumo-subtle">{formSubtitle}</p>}
             </div>
 
@@ -588,7 +592,7 @@ export function LoginPage() {
                   )}
                   {error && <InlineMessage tone="error">{error}</InlineMessage>}
                   <Button
-                    type="submit"
+                    variant="primary" type="submit"
                     className="w-full justify-center"
                     disabled={loading}
                     loading={loading}
@@ -635,7 +639,7 @@ export function LoginPage() {
                   )}
                   {error && <InlineMessage tone="error">{error}</InlineMessage>}
                   <Button
-                    type="submit"
+                    variant="primary" type="submit"
                     className="w-full justify-center"
                     disabled={loading}
                     loading={loading}
@@ -679,7 +683,7 @@ export function LoginPage() {
                   )}
                   {error && <InlineMessage tone="error">{error}</InlineMessage>}
                   <Button
-                    type="submit"
+                    variant="primary" type="submit"
                     className="w-full justify-center"
                     disabled={loading}
                     loading={loading}
@@ -770,7 +774,7 @@ export function LoginPage() {
                   )}
                   {error && <InlineMessage tone="error">{error}</InlineMessage>}
                   <Button
-                    type="submit"
+                    variant="primary" type="submit"
                     className="w-full justify-center"
                     disabled={loading}
                     loading={loading}
@@ -854,7 +858,7 @@ export function LoginPage() {
                   {!options.disable_pwd && (
                     <>
                       <Button
-                        type="submit"
+                        variant="primary" type="submit"
                         className="w-full justify-center"
                         disabled={loading}
                         loading={loading}

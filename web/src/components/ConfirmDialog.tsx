@@ -31,7 +31,7 @@ export function ConfirmDialog({
   return (
     <Dialog.Root role="alertdialog" open={open} onOpenChange={onOpenChange}>
       <Dialog size="sm" className={compactDialogPanelClass}>
-        <div className="px-5 pt-5">
+        <div className="min-h-0 overflow-y-auto px-5 pt-5">
           <div className="flex items-start gap-3">
             <div className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg ${destructive ? "bg-kumo-danger/10 text-kumo-danger" : "bg-kumo-fill text-kumo-default"}`}>
               {destructive ? <WarningCircle aria-hidden size={20} weight="fill" /> : <ShieldCheck aria-hidden size={20} />}
@@ -51,7 +51,7 @@ export function ConfirmDialog({
             </div>
           </div>
         </div>
-        <div className="mt-5 flex justify-end gap-2 border-t border-kumo-line bg-kumo-recessed px-5 py-4">
+        <div className="mt-5 flex shrink-0 flex-wrap justify-end gap-2 border-t border-kumo-line bg-kumo-recessed px-5 py-4">
           <Button
             variant="secondary"
             className="max-sm:min-h-11"

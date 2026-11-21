@@ -214,7 +214,7 @@ export function MessageCenterPage() {
           <Badge>
             {t("messageUnreadCount", { count: unread.data?.unread ?? 0 })}
           </Badge>
-          <Button onClick={openCompose}>
+          <Button variant="primary" onClick={openCompose}>
             <PaperPlaneTilt size={16} />
             {t("messageCompose")}
           </Button>
@@ -396,7 +396,7 @@ export function MessageCenterPage() {
             <Button variant="secondary" onClick={() => setComposeOpen(false)}>
               {t("cancel")}
             </Button>
-            <Button loading={save.isPending} onClick={() => save.mutate()}>
+            <Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>
               {t("send")}
             </Button>
           </DialogFooter>

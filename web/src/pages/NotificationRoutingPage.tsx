@@ -370,7 +370,7 @@ export function NotificationRoutingPage() {
             {t("notificationRoutingHint")}
           </p>
         </div>
-        <Button onClick={openCreate}>{t("createNotificationRule")}</Button>
+        <Button variant="primary" onClick={openCreate}>{t("createNotificationRule")}</Button>
       </div>
 
       {message && (
@@ -837,7 +837,7 @@ export function NotificationRoutingPage() {
                 {t("notificationSendTest")}
               </Button>
               <Button
-                type="submit"
+                variant="primary" type="submit"
                 form="notification-rule-form"
                 loading={save.isPending}
                 disabled={formActionDisabled}

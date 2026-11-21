@@ -189,30 +189,38 @@ pub fn has_scope(row: &deployment_token::Model, scope: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub async fn record_event(
-    db: &DatabaseConnection,
-    token_id: i32,
-    peer_id: &str,
-    uuid: &str,
-    action: &str,
-    result: &str,
-    message: &str,
-    ip: &str,
-) -> Result<(), DbErr> {
-    let am = deployment_event::ActiveModel {
-        token_id: Set(token_id),
-        peer_id: Set(peer_id.to_string()),
-        uuid: Set(uuid.to_string()),
-        action: Set(action.to_string()),
-        result: Set(result.to_string()),
-        message: Set(message.to_string()),
-        ip: Set(ip.to_string()),
-        created_at: Set(now()),
-        updated_at: Set(now()),
-        ..Default::default()
-    };
-    am.insert(db).await?;
-    Ok(())
+pub(crate) struct EventSource<'a> {
+    pub token_id: i32,
+    pub peer_id: &'a str,
+    pub uuid: &'a str,
+    pub action: &'a str,
+    pub ip: &'a str,
+}
+
+impl EventSource<'_> {
+    pub async fn record(
+        &self,
+        db: &DatabaseConnection,
+        result: &str,
+        message: &str,
+    ) -> Result<(), DbErr> {
+        let timestamp = now();
+        deployment_event::Entity::insert(deployment_event::ActiveModel {
+            token_id: Set(self.token_id),
+            peer_id: Set(self.peer_id.to_owned()),
+            uuid: Set(self.uuid.to_owned()),
+            action: Set(self.action.to_owned()),
+            result: Set(result.to_owned()),
+            message: Set(message.to_owned()),
+            ip: Set(self.ip.to_owned()),
+            created_at: Set(timestamp),
+            updated_at: Set(timestamp),
+            ..Default::default()
+        })
+        .exec_without_returning(db)
+        .await?;
+        Ok(())
+    }
 }
 
 pub fn default_scopes() -> Vec<String> {

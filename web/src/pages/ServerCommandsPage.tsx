@@ -304,7 +304,7 @@ export function ServerCommandsPage() {
             value={status[RELAY_TARGET]}
             onRefresh={() => void structured.refetch()}
           />
-          <Button onClick={openCreate}>{t("create")}</Button>
+          <Button variant="primary" onClick={openCreate}>{t("create")}</Button>
           <Button
             variant="secondary"
             disabled={!status[ID_TARGET]}

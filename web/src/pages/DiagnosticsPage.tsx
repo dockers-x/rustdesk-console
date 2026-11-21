@@ -52,6 +52,7 @@ export function DiagnosticsPage() {
           </p>
         </div>
         <Button
+          variant="primary"
           onClick={() => diagnostics.mutate()}
           loading={diagnostics.isPending}
         >

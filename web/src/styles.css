@@ -47,7 +47,18 @@
 
 :root {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --console-canvas: light-dark(#f5f6f8, #141517);
+  --console-panel: light-dark(var(--color-kumo-base), #1d1e21);
+  --console-edge: color-mix(in srgb, var(--color-kumo-line) 78%, transparent);
+  --shadow-panel: 0 1px 2px rgb(16 24 40 / 5%), 0 3px 8px -5px rgb(16 24 40 / 12%);
+  --shadow-popover: 0 2px 5px rgb(16 24 40 / 10%), 0 10px 28px -8px rgb(16 24 40 / 22%);
+  --shadow-dialog: 0 3px 8px rgb(0 0 0 / 12%), 0 24px 72px -16px rgb(0 0 0 / 32%);
+}
+
+[data-mode="dark"] {
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 20%), 0 3px 8px -5px rgb(0 0 0 / 32%);
+  --shadow-popover: 0 2px 5px rgb(0 0 0 / 32%), 0 10px 28px -8px rgb(0 0 0 / 55%);
+  --shadow-dialog: 0 3px 8px rgb(0 0 0 / 30%), 0 24px 72px -16px rgb(0 0 0 / 65%);
 }
 
 html,
@@ -66,12 +77,69 @@ body {
 }
 
 .admin-workspace {
-  background: color-mix(in srgb, var(--color-kumo-elevated) 65%, var(--color-kumo-base));
+  background: var(--console-canvas);
   scrollbar-gutter: stable;
+  scroll-padding-block: 1rem;
 }
 
-.admin-surface {
-  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
+.admin-workspace:focus-visible,
+:where(a, button, [tabindex="0"]):focus-visible {
+  outline: 2px solid var(--color-kumo-brand);
+  outline-offset: 2px;
+}
+
+.admin-workspace:focus-visible {
+  outline-offset: -2px;
+}
+
+.admin-page h1 {
+  font-size: clamp(1.375rem, 1.1rem + 0.7vw, 1.75rem);
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.admin-nav-link[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  height: 1.1rem;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--color-kumo-brand);
+}
+
+.admin-surface,
+.admin-filter-panel,
+.admin-page :where(section.rounded-lg.border, [data-kumo-component="Surface"]) {
+  background-color: var(--console-panel);
+  border-color: var(--console-edge);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-panel);
+}
+
+.admin-filter-panel {
+  background-color: color-mix(in srgb, var(--console-panel) 75%, var(--console-canvas));
+}
+
+.admin-secondary-metric + .admin-secondary-metric {
+  border-block-start: 1px solid var(--console-edge);
+}
+
+@media (min-width: 640px) {
+  .admin-secondary-metric + .admin-secondary-metric {
+    border-block-start: 0;
+  }
+
+  .admin-secondary-metric:nth-child(even) {
+    border-inline-start: 1px solid var(--console-edge);
+  }
+}
+
+@media (min-width: 1280px) {
+  .admin-secondary-metric + .admin-secondary-metric {
+    border-inline-start: 1px solid var(--console-edge);
+  }
 }
 
 .admin-shell table {
@@ -82,25 +150,53 @@ body {
   background: var(--color-kumo-elevated);
 }
 
-.admin-shell tbody tr:hover {
-  background: var(--color-kumo-tint);
+@media (hover: hover) and (pointer: fine) {
+  .admin-shell tbody tr:hover {
+    --kumo-table-row-bg: var(--color-kumo-tint);
+    background: var(--color-kumo-tint);
+  }
 }
 
-button[data-kumo-component="Button"]:not(:disabled) {
-  transition-property: transform;
-  transition-duration: 140ms;
-  transition-timing-function: var(--ease-out);
+.admin-mobile-backdrop {
+  transition: opacity 150ms var(--ease-out);
 }
 
-button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
-  transform: scale(0.98);
+.admin-mobile-backdrop[data-open="false"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.admin-mobile-nav[aria-modal="true"]:not([aria-hidden="true"]) {
+  box-shadow: var(--shadow-dialog);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-keyboard]) button[data-kumo-component="Button"]:enabled {
+    transition: transform 120ms var(--ease-out);
+  }
+
+  :root:not([data-keyboard]) button[data-kumo-component="Button"]:enabled:active {
+    transform: scale(0.98);
+  }
 }
 
 @media (max-width: 639px) {
-  .auth-form input,
-  .auth-form button,
-  .auth-form a {
+  .auth-form :is(input, button, a),
+  :where(.admin-page, .admin-dialog-panel) :is(button[data-kumo-component="Button"], button[data-kumo-part="tab"], select, input:not([type="checkbox"], [type="radio"], [type="file"], [type="color"], [type="hidden"])) {
     min-height: 44px;
+  }
+
+  .resource-table :is(td, th).sticky {
+    position: static;
+  }
+
+  .resource-table :is(td, th).sticky::before {
+    display: none;
+  }
+
+  .admin-workspace {
+    scrollbar-gutter: auto;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
   }
 }
 
@@ -126,85 +222,50 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
   .login-brand::before {
     animation: login-grid-enter 260ms var(--ease-out) both;
   }
-
-  .login-brand-logo {
-    animation: admin-page-enter 200ms var(--ease-out) 40ms both;
-  }
 }
 
 @keyframes login-grid-enter {
-  from {
-    opacity: 0;
-    transform: translateX(-12px);
-  }
+  from { opacity: 0; }
 }
 
-@keyframes admin-page-enter {
-  from {
-    opacity: 0.82;
-    transform: translateY(4px);
-  }
+.auth-panel {
+  box-shadow: var(--shadow-dialog);
 }
 
-@keyframes admin-card-enter {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
+[data-side]:has(> [role="listbox"]) {
+  transform-origin: var(--transform-origin);
+  box-shadow: var(--shadow-popover), 0 0 0 1px var(--console-edge);
 }
 
-@keyframes admin-backdrop-enter {
-  from {
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-keyboard]) [data-side]:has(> [role="listbox"]) {
+    transition: transform 150ms var(--ease-out), opacity 150ms var(--ease-out);
+  }
+
+  :root:not([data-keyboard]) [data-side]:has(> [role="listbox"]):is([data-starting-style], [data-ending-style]) {
+    transform: scale(0.97);
     opacity: 0;
   }
-}
-
-.admin-page-enter {
-  animation: admin-page-enter 160ms var(--ease-out) both;
-}
-
-.admin-overview-metrics > * {
-  animation: admin-card-enter 220ms var(--ease-out) both;
-}
-
-.admin-overview-metrics > :nth-child(2) {
-  animation-delay: 35ms;
-}
-
-.admin-overview-metrics > :nth-child(3) {
-  animation-delay: 70ms;
-}
-
-.admin-overview-metrics > :nth-child(4) {
-  animation-delay: 105ms;
-}
-
-.admin-overview-panel {
-  animation: admin-card-enter 220ms var(--ease-out) 90ms both;
-}
-
-.admin-mobile-backdrop {
-  animation: admin-backdrop-enter 160ms var(--ease-out) both;
 }
 
 .admin-dialog-panel {
   display: flex;
-  top: 0.5rem !important;
-  /* Kumo центрирует диалог через translate(-50%, -50%). Мы переопределяем top,
-     поэтому вертикальный сдвиг нужно убрать, иначе окно уезжает выше экрана. */
-  translate: -50% 0 !important;
-  width: calc(100vw - 1rem) !important;
+  top: 50% !important;
+  translate: -50% -50% !important;
+  width: calc(100% - 1rem) !important;
   min-width: 0 !important;
-  max-width: calc(100vw - 1rem) !important;
-  max-height: calc(100svh - 1rem);
+  max-width: calc(100% - 1rem) !important;
+  max-height: calc(100dvh - 2rem);
+  box-shadow: var(--shadow-dialog);
+  transition-timing-function: var(--ease-out) !important;
+  transition-duration: 200ms;
   flex-direction: column;
   overflow: hidden;
 }
 
 @media (min-width: 640px) {
   .admin-dialog-panel {
-    top: min(4rem, 5svh) !important;
-    max-height: min(90svh, 760px);
+    max-height: min(calc(100dvh - 3rem), 52rem);
   }
 
   .admin-dialog-panel--compact {
@@ -228,34 +289,30 @@ button[data-kumo-component="Button"]:not(:disabled):active:not(:focus-visible) {
   }
 }
 
+.admin-dialog-panel:is([data-starting-style], [data-ending-style]) {
+  scale: 0.97;
+}
+
+.admin-dialog-panel[data-ending-style] {
+  transition-duration: 150ms;
+}
+
+:root[data-keyboard] :is(.admin-dialog-panel, .admin-mobile-nav, .admin-mobile-backdrop, [role="tablist"] *, nav svg) {
+  transition-duration: 0s !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
   }
 
-  button[data-kumo-component="Button"]:not(:disabled) {
-    transition: none;
+  :is(.admin-mobile-nav, .admin-mobile-backdrop, [role="tablist"] *, nav svg) {
+    transition-duration: 0s !important;
   }
 
-  button[data-kumo-component="Button"]:not(:disabled):active {
-    transform: none;
-  }
-
-  .admin-mobile-nav {
-    transition: none !important;
-  }
-
-  .admin-mobile-backdrop,
-  .admin-overview-metrics > *,
-  .admin-overview-panel,
-  .admin-page-enter {
-    animation: none;
-  }
-
-  [role="dialog"]:not(.admin-mobile-nav) {
+  :is([role="dialog"], [role="alertdialog"]):not(.admin-mobile-nav) {
     scale: 1 !important;
-    transition-property: opacity !important;
-    transition-duration: 80ms !important;
+    transition: opacity 80ms linear !important;
   }
 }
 

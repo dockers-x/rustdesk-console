@@ -37,7 +37,7 @@ export function StorageSettingsPage() {
           <h1 className="text-2xl font-semibold">{t("storageConfiguration")}</h1>
           <p className="mt-1 text-sm leading-6 text-kumo-subtle">{t("storageConfigurationHint")}</p>
         </div>
-        <Button className="max-sm:min-h-11" onClick={() => setEditor("new")} disabled={!query.isSuccess}>
+        <Button variant="primary" className="max-sm:min-h-11" onClick={() => setEditor("new")} disabled={!query.isSuccess}>
           <Plus size={16} aria-hidden />{t("storageAddProfile")}
         </Button>
       </header>
@@ -45,7 +45,7 @@ export function StorageSettingsPage() {
       {query.isError && <InlineMessage tone="error">{query.error.message}</InlineMessage>}
       {query.data?.entries.length === 0 && <TableState tone="empty">{t("storageNoProfiles")}</TableState>}
       {!!query.data?.entries.length && (
-        <ul className="divide-y divide-kumo-line rounded-lg border border-kumo-line bg-kumo-elevated">
+        <ul className="admin-surface divide-y divide-kumo-line rounded-lg border border-kumo-line bg-kumo-elevated">
           {query.data.entries.map((profile) => {
             const recording = query.data.recording === profile.id;
             const backup = query.data.backup?.profile_ids.includes(profile.id);
@@ -125,7 +125,7 @@ function ProfileEditor({ profile, close, saved }: {
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="secondary" disabled={save.isPending} onClick={close}>{t("cancel")}</Button>
-            <Button type="submit" loading={save.isPending} disabled={!name.trim()}>{t("save")}</Button>
+            <Button variant="primary" type="submit" loading={save.isPending} disabled={!name.trim()}>{t("save")}</Button>
           </DialogFooter>
         </form>
       </Dialog>
