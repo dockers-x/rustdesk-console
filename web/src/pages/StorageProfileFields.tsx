@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Input } from "@cloudflare/kumo/components/input";
-import { Select } from "@cloudflare/kumo/components/select";
+import { Radio } from "@cloudflare/kumo/components/radio";
 import { Switch } from "@cloudflare/kumo/components/switch";
 import { ConfigField } from "../components/ConfigField";
 import type { StorageConfig, StorageType } from "../lib/storageProfiles";
@@ -11,11 +11,6 @@ export function StorageProfileFields({ config, onChange, locked }: {
   locked: boolean;
 }) {
   const { t } = useTranslation();
-  const options: { value: StorageType; label: string }[] = [
-    { value: "local", label: t("recordStorageLocal") },
-    { value: "s3", label: "S3" },
-    { value: "webdav", label: "WebDAV" },
-  ];
   const setRoot = (field: "local_dir" | "temp_dir", value: string) => onChange({ ...config, [field]: value });
   const setS3 = <K extends keyof StorageConfig["s3"]>(field: K, value: StorageConfig["s3"][K]) =>
     onChange({ ...config, s3: { ...config.s3, [field]: value } });
@@ -25,12 +20,18 @@ export function StorageProfileFields({ config, onChange, locked }: {
 
   return (
     <div className="grid gap-4">
-      <Select<StorageType>
-        label={t("recordStorageBackend")} items={options} value={config.type} disabled={locked} className="w-full max-sm:min-h-11"
-        onValueChange={(type) => { if (type) onChange({ ...config, type }); }}
+      <Radio.Group<StorageType>
+        legend={t("recordStorageBackend")}
+        appearance="segmented"
+        orientation="horizontal"
+        value={config.type}
+        disabled={locked}
+        onValueChange={(type) => onChange({ ...config, type })}
       >
-        {options.map(({ value, label }) => <Select.Option key={value} value={value}>{label}</Select.Option>)}
-      </Select>
+        <Radio.Item value="local" label={t("recordStorageLocal")} className="max-sm:min-h-11" />
+        <Radio.Item value="s3" label="S3" className="max-sm:min-h-11" />
+        <Radio.Item value="webdav" label="WebDAV" className="max-sm:min-h-11" />
+      </Radio.Group>
       <div className="grid gap-4">
         {config.type === "local" && (
           <ConfigField

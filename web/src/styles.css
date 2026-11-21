@@ -68,6 +68,11 @@ body,
   margin: 0;
 }
 
+/* Keep the page below Kumo portals. Nested menus then paint above their dialogs in portal order. */
+#root {
+  isolation: isolate;
+}
+
 body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,

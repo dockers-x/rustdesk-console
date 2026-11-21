@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Dialog } from "@cloudflare/kumo/components/dialog";
 
 const dialogBaseClass =
-  "admin-dialog-panel z-50 border border-kumo-line p-0 text-kumo-default shadow-lg ring-0";
+  "admin-dialog-panel border border-kumo-line p-0 text-kumo-default shadow-lg ring-0";
 
 export const dialogPanelClass =
   `${dialogBaseClass} admin-dialog-panel--default bg-kumo-elevated`;
