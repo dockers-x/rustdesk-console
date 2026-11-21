@@ -52,99 +52,32 @@ pub async fn info_by_id(
     record_file::Entity::find_by_id(id).one(db).await
 }
 
-pub async fn start_upload(
+pub async fn save_upload(
     db: &DatabaseConnection,
     filename: &str,
-    storage_backend: &str,
-    storage_key: &str,
-) -> Result<(), DbErr> {
-    let peer_id = parse_peer_id(filename);
-    let direction = parse_direction(filename);
-    if let Some(existing) = info_by_filename(db, filename).await? {
-        let mut am: record_file::ActiveModel = existing.into();
-        am.peer_id = Set(peer_id);
-        am.direction = Set(direction);
-        am.size = Set(0);
-        am.status = Set(record_file::STATUS_UPLOADING);
-        am.storage_backend = Set(storage_backend.to_string());
-        am.storage_key = Set(storage_key.to_string());
-        am.updated_at = Set(now());
-        am.update(db).await?;
-        return Ok(());
-    }
-    let am = record_file::ActiveModel {
-        filename: Set(filename.to_string()),
-        peer_id: Set(peer_id),
-        direction: Set(direction),
-        size: Set(0),
-        status: Set(record_file::STATUS_UPLOADING),
-        storage_backend: Set(storage_backend.to_string()),
-        storage_key: Set(storage_key.to_string()),
-        created_at: Set(now()),
-        updated_at: Set(now()),
-        ..Default::default()
-    };
-    am.insert(db).await?;
-    Ok(())
-}
-
-pub async fn bind_storage(
-    db: &DatabaseConnection,
-    filename: &str,
-    storage_backend: &str,
-    storage_key: &str,
-) -> Result<(), DbErr> {
-    if let Some(existing) = info_by_filename(db, filename).await? {
-        let mut am: record_file::ActiveModel = existing.into();
-        am.storage_backend = Set(storage_backend.to_string());
-        am.storage_key = Set(storage_key.to_string());
-        am.updated_at = Set(now());
-        am.update(db).await?;
-    }
-    Ok(())
-}
-
-pub async fn mark_uploading(
-    db: &DatabaseConnection,
-    filename: &str,
-    size: i64,
-) -> Result<(), DbErr> {
-    upsert_size_status(db, filename, size, record_file::STATUS_UPLOADING).await
-}
-
-pub async fn complete_upload(
-    db: &DatabaseConnection,
-    filename: &str,
-    size: i64,
-) -> Result<(), DbErr> {
-    upsert_size_status(db, filename, size, record_file::STATUS_COMPLETE).await
-}
-
-async fn upsert_size_status(
-    db: &DatabaseConnection,
-    filename: &str,
+    location: &super::record_storage::RecordStorageLocation,
+    profile_id: Option<String>,
     size: i64,
     status: i32,
 ) -> Result<(), DbErr> {
-    if let Some(existing) = info_by_filename(db, filename).await? {
-        let mut am: record_file::ActiveModel = existing.into();
-        am.size = Set(size);
-        am.status = Set(status);
-        am.updated_at = Set(now());
-        am.update(db).await?;
-        return Ok(());
-    }
-    let am = record_file::ActiveModel {
-        filename: Set(filename.to_string()),
-        peer_id: Set(parse_peer_id(filename)),
-        direction: Set(parse_direction(filename)),
-        size: Set(size),
-        status: Set(status),
-        created_at: Set(now()),
-        updated_at: Set(now()),
-        ..Default::default()
+    let existing = info_by_filename(db, filename).await?;
+    let mut row: record_file::ActiveModel = match existing {
+        Some(existing) => existing.into(),
+        None => record_file::ActiveModel {
+            filename: Set(filename.to_string()),
+            peer_id: Set(parse_peer_id(filename)),
+            direction: Set(parse_direction(filename)),
+            created_at: Set(now()),
+            ..Default::default()
+        },
     };
-    am.insert(db).await?;
+    row.storage_backend = Set(location.backend.clone());
+    row.storage_key = Set(location.key.clone());
+    row.storage_profile_id = Set(profile_id);
+    row.size = Set(size);
+    row.status = Set(status);
+    row.updated_at = Set(now());
+    row.save(db).await?;
     Ok(())
 }
 

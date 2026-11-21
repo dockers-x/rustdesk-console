@@ -16,6 +16,9 @@ import { NotificationRoutingPage } from "./pages/NotificationRoutingPage";
 import { OAuthActionPage } from "./pages/OAuthActionPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { ServerCommandsPage } from "./pages/ServerCommandsPage";
+import { StorageSettingsPage } from "./pages/StorageSettingsPage";
+import { RecordingStorageSelection } from "./pages/RecordingStorageSelection";
+import { storagePath } from "./lib/storageProfiles";
 import { SystemSettingsPage } from "./pages/SystemSettingsPage";
 import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { SelfSignedClientPage } from "./features/self-signed-client/SelfSignedClientPage";
@@ -120,6 +123,7 @@ export default function AuthenticatedApp() {
           element={<NotificationRoutingPage />}
         />
         <Route path="/settings" element={<SystemSettingsPage />} />
+        <Route path={storagePath} element={<StorageSettingsPage />} />
         <Route path="/self-signed-client" element={<SelfSignedClientPage />} />
         <Route path="/developer/keys" element={<DeveloperPage section="keys" isAdmin={isAdmin} />} />
         <Route path="/developer/sdks" element={<DeveloperPage section="sdks" isAdmin={isAdmin} />} />
@@ -146,7 +150,10 @@ export default function AuthenticatedApp() {
                   : resource.name}
                 cfg={resourceForRole(resource, role)}
                 accessScope={isAdmin ? "admin" : role ?? "member"}
-                beforeTable={isAdmin && resource.name === "console-audit" ? <ConsoleAuditRetention /> : undefined}
+                beforeTable={isAdmin && (
+                  resource.name === "console-audit" ? <ConsoleAuditRetention /> :
+                  resource.name === "record_file" ? <RecordingStorageSelection /> : undefined
+                )}
               />
             }
           />

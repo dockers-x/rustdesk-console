@@ -24,6 +24,7 @@ pub struct Model {
     pub storage_backend: String,
     #[sea_orm(default_value = "")]
     pub storage_key: String,
+    pub storage_profile_id: Option<String>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

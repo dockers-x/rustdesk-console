@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
@@ -33,6 +34,8 @@ import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 import { SelfSignedClientFeatureToggle } from "../features/self-signed-client/FeatureToggle";
 
 import { LdapSettingsPanel } from "./LdapSettingsPanel";
+import { RemoteBackupPanel } from "./RemoteBackupPanel";
+import { usePublicAdminConfig } from "../lib/adminTitle";
 
 interface AdminConfigView {
   title: string;
@@ -86,7 +89,7 @@ interface EmailSettingsForm {
   from_name: string;
   tls: string;
 }
-type SettingsTab = "site" | "security" | "ldap" | "features";
+type SettingsTab = "site" | "security" | "ldap" | "features" | "backups";
 
 const emptyForm: AdminConfigForm = {
   title: "",
@@ -168,7 +171,8 @@ export function SystemSettingsPage() {
   const [securityMessage, setSecurityMessage] = useState("");
   const [securityError, setSecurityError] = useState("");
   const [testEmail, setTestEmail] = useState("");
-  const [activeTab, setActiveTab] = useState<SettingsTab>("site");
+  const [params, setParams] = useSearchParams();
+  const adminConfig = usePublicAdminConfig();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [selectedSmtpId, setSelectedSmtpId] = useState<number | null>(null);
   const [smtpCreating, setSmtpCreating] = useState(false);
@@ -429,7 +433,9 @@ export function SystemSettingsPage() {
     { value: "security", label: t("settingsTabLoginSecurity") },
     { value: "ldap", label: t("ldapSettingsTab") },
     { value: "features", label: t("selfSignedFeatureTab") },
+    { value: "backups", label: t("automaticBackup") },
   ];
+  const activeTab = tabs.find(({ value }) => value === params.get("tab"))?.value ?? "site";
 
   return (
     <div className="space-y-5">
@@ -448,15 +454,18 @@ export function SystemSettingsPage() {
         )}
       </div>
 
-      <Tabs
-        tabs={tabs}
-        value={activeTab}
-        onValueChange={(value) => {
+      <div className="overflow-x-auto">
+        <Tabs tabs={tabs} value={activeTab} labels={{ scrollStart: t("storageEarlierTabs"), scrollEnd: t("storageLaterTabs") }} onValueChange={(value) => {
           const tab = tabs.find((item) => item.value === value);
-          if (tab) setActiveTab(tab.value);
-        }}
-      />
+          if (tab) setParams((previous) => {
+            if (tab.value === "site") previous.delete("tab");
+            else previous.set("tab", tab.value);
+            return previous;
+          });
+        }} />
+      </div>
 
+      {activeTab === "backups" && <RemoteBackupPanel timeZone={adminConfig.data?.timezone?.trim() || undefined} />}
       {activeTab === "ldap" && <LdapSettingsPanel />}
       {activeTab === "features" && <SelfSignedClientFeatureToggle />}
       {activeTab === "site" && error && (

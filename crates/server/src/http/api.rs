@@ -440,6 +440,7 @@ pub async fn login(
     if !form.secret.trim().is_empty() {
         let verified = match services::login_security::verify_login_challenge(
             &state.db,
+            &state.config,
             &form.secret,
             Some(&form.verification_code),
             Some(&form.tfa_code),
@@ -455,7 +456,7 @@ pub async fn login(
             Err(e) => {
                 audit.decision("challenge", "rejected", "challenge_invalid");
                 state.limiter.record_failed_attempt(&ip);
-                return resp::error(e);
+                return resp::error(state.tr(&lang, &e));
             }
         };
         let user = verified.account;
@@ -1941,17 +1942,13 @@ pub async fn record(
 }
 
 async fn record_new(state: &AppState, filename: &str) -> Result<(), String> {
-    let cfg = state.record_storage_config.get().await;
-    let location =
-        services::record_storage::start_upload(&cfg, &state.config.gin.resources_path, filename)
-            .await?;
-    if let Err(e) =
-        services::record_file::start_upload(&state.db, filename, &location.backend, &location.key)
-            .await
-    {
-        tracing::warn!("failed to create record file row: {e}");
-    }
-    Ok(())
+    let (profile_id, cfg, location) = recording_location(state, filename).await?;
+    services::record_storage::start_upload(
+        &cfg, &state.config.gin.resources_path, filename, &location,
+    ).await?;
+    services::record_file::save_upload(
+        &state.db, filename, &location, profile_id, 0, entity::record_file::STATUS_UPLOADING,
+    ).await.map_err(|_| "failed to save recording metadata".to_string())
 }
 
 async fn record_write(
@@ -1968,21 +1965,7 @@ async fn record_write(
             return Err("record length mismatch".to_string());
         }
     }
-    let cfg = state.record_storage_config.get().await;
-    let location = match services::record_file::info_by_filename(&state.db, filename)
-        .await
-        .map_err(|_| "failed to query record file".to_string())?
-    {
-        Some(row) => services::record_storage::RecordStorageLocation {
-            backend: services::record_storage::normalize_backend(&row.storage_backend).to_string(),
-            key: row.storage_key,
-        },
-        None => services::record_storage::location_for(
-            &cfg,
-            &state.config.gin.resources_path,
-            filename,
-        )?,
-    };
+    let (profile_id, cfg, location) = recording_location(state, filename).await?;
     let write = services::record_storage::write_chunk(
         &cfg,
         &state.config.gin.resources_path,
@@ -1993,39 +1976,37 @@ async fn record_write(
         complete,
     )
     .await?;
-    let result = if complete {
-        services::record_file::complete_upload(&state.db, filename, write.size).await
+    let status = if complete {
+        entity::record_file::STATUS_COMPLETE
     } else {
-        services::record_file::mark_uploading(&state.db, filename, write.size).await
+        entity::record_file::STATUS_UPLOADING
     };
-    if let Err(e) = result {
-        tracing::warn!("failed to update record file row: {e}");
+    services::record_file::save_upload(&state.db, filename, &location, profile_id, write.size, status)
+        .await.map_err(|_| "failed to save recording metadata".to_string())
+
+}
+
+async fn recording_location(
+    state: &AppState,
+    filename: &str,
+) -> Result<(Option<String>, crate::config::RecordStorage, services::record_storage::RecordStorageLocation), String> {
+    let row = services::record_file::info_by_filename(&state.db, filename)
+        .await.map_err(|_| "failed to query record file".to_string())?;
+    if let Some(row) = row {
+        let cfg = state.record_storage_config.for_recording(row.storage_profile_id.as_deref()).await?;
+        let location = services::record_storage::RecordStorageLocation {
+            backend: services::record_storage::normalize_backend(&row.storage_backend).to_string(),
+            key: row.storage_key,
+        };
+        return Ok((row.storage_profile_id, cfg, location));
     }
-    if let Err(e) =
-        services::record_file::bind_storage(&state.db, filename, &location.backend, &location.key)
-            .await
-    {
-        tracing::warn!("failed to bind record file storage: {e}");
-    }
-    Ok(())
+    let (profile_id, cfg) = state.record_storage_config.recording_destination().await?;
+    let location = services::record_storage::location_for(&cfg, &state.config.gin.resources_path, filename)?;
+    Ok((profile_id, cfg, location))
 }
 
 async fn record_remove(state: &AppState, filename: &str) -> Result<(), String> {
-    let cfg = state.record_storage_config.get().await;
-    let row = services::record_file::info_by_filename(&state.db, filename)
-        .await
-        .map_err(|_| "failed to query record file".to_string())?;
-    let location = match row {
-        Some(row) => services::record_storage::RecordStorageLocation {
-            backend: services::record_storage::normalize_backend(&row.storage_backend).to_string(),
-            key: row.storage_key,
-        },
-        None => services::record_storage::location_for(
-            &cfg,
-            &state.config.gin.resources_path,
-            filename,
-        )?,
-    };
+    let (_, cfg, location) = recording_location(state, filename).await?;
     services::record_storage::delete_object(
         &cfg,
         &state.config.gin.resources_path,

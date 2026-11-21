@@ -30,8 +30,8 @@ pub async fn start_upload(
     cfg: &RecordStorage,
     resources_path: &str,
     filename: &str,
-) -> Result<RecordStorageLocation, String> {
-    let location = location_for(cfg, resources_path, filename)?;
+    location: &RecordStorageLocation,
+) -> Result<(), String> {
     match location.backend.as_str() {
         RECORD_STORAGE_LOCAL => {
             let path = local_path(resources_path, &cfg.local_dir, filename, &location.key)?;
@@ -49,7 +49,7 @@ pub async fn start_upload(
         }
         _ => return Err("unsupported record storage backend".to_string()),
     }
-    Ok(location)
+    Ok(())
 }
 
 pub async fn write_chunk(

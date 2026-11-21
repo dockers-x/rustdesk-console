@@ -285,3 +285,5 @@ other = "Banned."
 description = "Register success, wait admin confirm."
 one = "Register success, wait admin confirm."
 other = "Register success, wait admin confirm."
+
+TotpCodeInvalidOrUsed = "The authenticator code is incorrect, expired, or already used. Enter a new code."

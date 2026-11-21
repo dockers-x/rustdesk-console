@@ -43,6 +43,7 @@ import {
 import { clearToken, getAuthSessionId } from "../lib/auth";
 import { canAccessConsolePath, type RestrictedConsoleRole } from "../lib/access";
 import { useAppBranding } from "../lib/adminTitle";
+import { storagePath } from "../lib/storageProfiles";
 import { getMode, setMode } from "../lib/theme";
 import { selfSignedEnabled, useFeatures } from "../features/self-signed-client/api";
 import {
@@ -93,6 +94,7 @@ const NAV_ICONS: Record<string, IconType> = {
   serverCommands: Terminal,
   geoRouting: GlobeHemisphereWest,
   systemSettings: GearSix,
+  storageConfiguration: HardDrives,
   diagnostics: Pulse,
   webClientSettings: SlidersHorizontal,
   selfSignedClients: ShieldCheck,
@@ -198,6 +200,7 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
     key: "systemOps",
     items: [
       { to: "/settings", key: "systemSettings" },
+      { to: storagePath, key: "storageConfiguration" },
       { to: "/serverCmd", key: "serverCommands" },
       { to: "/geo-routing", key: "geoRouting" },
       { to: "/webclient-settings", key: "webClientSettings" },

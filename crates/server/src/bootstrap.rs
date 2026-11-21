@@ -11,7 +11,7 @@ use std::time::Duration;
 use std::{fmt, future::Future};
 
 use anyhow::Context;
-use sea_orm::sea_query::{ColumnDef, Table};
+use sea_orm::sea_query::{ColumnDef, Expr, Table};
 use sea_orm::{
     AccessMode, ActiveModelTrait, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
     DatabaseBackend, DatabaseConnection, EntityTrait, IsolationLevel, PaginatorTrait, QueryFilter,
@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 280;
+pub const DATABASE_VERSION: i32 = 282;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 10] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 12] {
     [
         SchemaMigration {
             version: 271,
@@ -109,6 +109,16 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 10] {
             version: 280,
             name: "directed group connection grants",
             apply: migration_280,
+        },
+        SchemaMigration {
+            version: 281,
+            name: "recording storage profile",
+            apply: migration_281,
+        },
+        SchemaMigration {
+            version: 282,
+            name: "TOTP encryption and replay protection",
+            apply: migration_282,
         },
     ]
 }
@@ -524,6 +534,59 @@ async fn create_tables(db: &impl ConnectionTrait) -> anyhow::Result<()> {
 
 fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
+}
+
+fn migration_282<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        use crate::support::totp_vault::TotpVault;
+
+        let backend = db.get_database_backend();
+        let schema = Schema::new(backend);
+        let statement = schema.create_table_from_entity(entity::totp_counter::Entity)
+            .if_not_exists().to_owned();
+        db.execute(backend.build(&statement)).await?;
+
+        let accounts: Vec<(i32, String)> = user::Entity::find().select_only()
+            .column(user::Column::Id).column(user::Column::TfaSecret)
+            .filter(user::Column::TfaSecret.ne(""))
+            .into_tuple().all(db).await?;
+        if accounts.is_empty() {
+            return Ok(());
+        }
+        let vault = TotpVault::load(config, !accounts.iter().any(|(_, seed)| TotpVault::is_sealed(seed)))?;
+        // Verify existing ciphertext before writing during a retry or startup.
+        for (id, seed) in &accounts {
+            if TotpVault::is_sealed(seed) {
+                vault.open(*id, seed)?;
+            }
+        }
+        if backend == DatabaseBackend::Sqlite {
+            db.execute(Statement::from_string(backend, "PRAGMA secure_delete=ON".to_string())).await?;
+        }
+        for (id, seed) in accounts {
+            if !TotpVault::is_sealed(&seed) {
+                user::Entity::update_many()
+                    .filter(user::Column::Id.eq(id))
+                    .filter(user::Column::TfaSecret.eq(&seed))
+                    .col_expr(user::Column::TfaSecret, Expr::value(vault.seal(id, &seed)?))
+                    .exec(db).await?;
+            }
+        }
+        Ok(())
+    })
+}
+
+fn migration_281<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        if !column_exists(db, "record_files", "storage_profile_id").await? {
+            let statement = Table::alter()
+                .table(record_file::Entity)
+                .add_column(ColumnDef::new(record_file::Column::StorageProfileId).string_len(36))
+                .to_owned();
+            db.execute(db.get_database_backend().build(&statement)).await?;
+        }
+        Ok(())
+    })
 }
 
 fn migration_280<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
@@ -1075,20 +1138,28 @@ async fn backfill_record_storage_keys(
     db: &impl ConnectionTrait,
     config: &Config,
 ) -> anyhow::Result<()> {
-    let rows = record_file::Entity::find().all(db).await?;
+    // This legacy step also runs before storage_profile_id exists on upgraded databases.
+    let rows: Vec<(i32, String, String)> = record_file::Entity::find()
+        .select_only()
+        .column(record_file::Column::Id)
+        .column(record_file::Column::Filename)
+        .column(record_file::Column::StorageKey)
+        .into_tuple()
+        .all(db)
+        .await?;
     let root = services::record_file::record_root_for_config(
         &config.gin.resources_path,
         &config.record_storage.local_dir,
     );
-    for row in rows
-        .into_iter()
-        .filter(|row| row.storage_key.trim().is_empty())
-    {
-        let filename = row.filename.clone();
-        let mut am: record_file::ActiveModel = row.into();
-        am.storage_backend = Set(record_file::STORAGE_LOCAL.to_string());
-        am.storage_key = Set(root.join(filename).to_string_lossy().to_string());
-        am.update(db).await?;
+    for (id, filename, key) in rows {
+        if key.trim().is_empty() {
+            record_file::Entity::update_many()
+                .filter(record_file::Column::Id.eq(id))
+                .col_expr(record_file::Column::StorageBackend, Expr::value(record_file::STORAGE_LOCAL))
+                .col_expr(record_file::Column::StorageKey, Expr::value(root.join(filename).to_string_lossy().to_string()))
+                .exec(db)
+                .await?;
+        }
     }
     Ok(())
 }
@@ -1362,7 +1433,10 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
             config_path.clone(),
             WebClientConfig::from(&config.rustdesk),
         )),
-        record_storage_config: Arc::new(RecordStorageConfigStore::new(config_path, record_storage)),
+        record_storage_config: Arc::new(
+            RecordStorageConfigStore::new(config_path, record_storage)
+                .with_profiles_path(config.storage_profiles_path()),
+        ),
         config: Arc::new(config),
         jwt: Arc::new(jwt),
         limiter: Arc::new(limiter),
@@ -1514,6 +1588,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn totp_seed_migration_is_idempotent_and_requires_original_key() {
+        use crate::support::totp_vault::TotpVault;
+
+        let db = memory_db().await;
+        let mut cfg = test_config("");
+        let temp = tempfile::tempdir().unwrap();
+        cfg.security.totp_key_file = temp.path().join("totp.key").display().to_string();
+        create_tables(&db).await.unwrap();
+        let seed = crate::services::login_security::generate_totp_secret();
+        let account = user::ActiveModel {
+            username: Set("existing-totp-user".into()),
+            tfa_enabled: Set(true),
+            tfa_secret: Set(seed.clone()),
+            ..Default::default()
+        }.insert(&db).await.unwrap();
+        record_schema_version(&db, 281).await.unwrap();
+
+        apply_schema(&db, &cfg).await.unwrap();
+        let vault = TotpVault::load(&cfg, false).unwrap();
+        let row = user::Entity::find_by_id(account.id).one(&db).await.unwrap().unwrap();
+        assert!(TotpVault::is_sealed(&row.tfa_secret));
+        assert_ne!(row.tfa_secret, seed);
+        assert_eq!(vault.open(row.id, &row.tfa_secret).unwrap(), seed);
+        assert!(vault.open(row.id + 1, &row.tfa_secret).is_err());
+        apply_schema(&db, &cfg).await.unwrap();
+        let reloaded = user::Entity::find_by_id(account.id).one(&db).await.unwrap().unwrap();
+        assert_eq!(reloaded.tfa_secret, row.tfa_secret);
+
+        std::fs::rename(cfg.security.totp_key_path(), temp.path().join("original-key")).unwrap();
+        assert!(apply_schema(&db, &cfg).await.is_err());
+        assert!(!cfg.security.totp_key_path().exists());
+    }
+
+    #[tokio::test]
+    async fn recording_profile_migration_preserves_legacy_recordings() {
+        let db = memory_db().await;
+        let cfg = test_config("");
+        create_tables(&db).await.unwrap();
+        let backend = db.get_database_backend();
+        db.execute(Statement::from_string(
+            backend,
+            "ALTER TABLE record_files DROP COLUMN storage_profile_id".to_string(),
+        )).await.unwrap();
+        db.execute(Statement::from_string(
+            backend,
+            "INSERT INTO record_files (filename, storage_key) VALUES ('legacy.webm', 'original/legacy.webm')".to_string(),
+        )).await.unwrap();
+        record_schema_version(&db, 280).await.unwrap();
+
+        apply_schema(&db, &cfg).await.unwrap();
+
+        let row = record_file::Entity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(row.storage_key, "original/legacy.webm");
+        assert!(row.storage_profile_id.is_none());
+        assert_eq!(latest_schema_version(&db).await.unwrap(), Some(DATABASE_VERSION));
+    }
+
+    #[tokio::test]
     async fn fresh_install_records_schema_migration_versions() {
         let db = memory_db().await;
         let cfg = test_config("");
@@ -1532,7 +1664,7 @@ mod tests {
 
         assert_eq!(
             versions,
-            vec![271, 272, 273, 274, 275, 276, 277, 278, 279, DATABASE_VERSION]
+            vec![271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, DATABASE_VERSION]
         );
     }
 

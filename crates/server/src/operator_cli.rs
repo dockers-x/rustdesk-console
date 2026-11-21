@@ -410,7 +410,11 @@ async fn upload_backup(config_path: &str, archive: &std::path::Path, output: Out
     let Ok(config) = config::init(config_path) else {
         return config_failed(output);
     };
-    match services::remote_backup::publish_file(&config, archive).await {
+    let result = match services::remote_backup::effective_settings(&config, &config.storage_profiles_path()) {
+        Ok(settings) => services::remote_backup::publish_file(&settings, archive).await,
+        Err(error) => Err(error),
+    };
+    match result {
         Ok(deliveries) => {
             let text = deliveries.iter().map(|delivery| {
                 let outcome = if delivery.uploaded() { "uploaded" } else { "failed" };

@@ -4,7 +4,7 @@ use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
     io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -26,17 +26,18 @@ const DEADLINE: Duration = Duration::from_secs(15 * 60);
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct Settings {
-    interval_hours: u32,
-    targets: Vec<Target>,
+    pub(crate) interval_hours: u32,
+    pub(crate) targets: Vec<Target>,
+    pub(crate) age_recipient: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-struct Target {
-    name: String,
+pub(crate) struct Target {
+    pub(crate) name: String,
     #[serde(default)]
-    allow_http: bool,
-    storage: RecordStorage,
+    pub(crate) allow_http: bool,
+    pub(crate) storage: RecordStorage,
 }
 
 impl std::fmt::Debug for Target {
@@ -48,6 +49,16 @@ impl std::fmt::Debug for Target {
 }
 
 impl Settings {
+    pub(crate) fn recipient(&self) -> anyhow::Result<age::x25519::Recipient> {
+        ensure!(
+            !self.age_recipient.is_empty(),
+            "Configure an age public recipient before running remote backups"
+        );
+        self.age_recipient
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid age public recipient"))
+    }
+
     pub(crate) fn validate(&mut self) -> anyhow::Result<()> {
         ensure!(
             self.interval_hours <= 720,
@@ -57,6 +68,10 @@ impl Settings {
             self.targets.len() <= 16,
             "Configure at most 16 backup targets"
         );
+        self.age_recipient = self.age_recipient.trim().to_string();
+        if !self.age_recipient.is_empty() {
+            self.recipient()?;
+        }
         let mut names = HashSet::new();
         for target in &mut self.targets {
             target.name = target.name.trim().to_string();
@@ -85,7 +100,7 @@ impl Settings {
 }
 
 impl Target {
-    fn validate_endpoint(&self) -> anyhow::Result<()> {
+    pub(crate) fn validate_endpoint(&self) -> anyhow::Result<()> {
         let endpoint = if self.storage.r#type == RECORD_STORAGE_S3 {
             &self.storage.s3.endpoint
         } else {
@@ -144,6 +159,7 @@ struct Run {
 pub(crate) struct View {
     sqlite: bool,
     interval_hours: u32,
+    age_recipient: String,
     running: bool,
     targets: Vec<Delivery>,
     last_run: Option<Run>,
@@ -187,9 +203,8 @@ fn save_run(run: &Run) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn configured_targets(config: &Config) -> Vec<Delivery> {
-    config
-        .backup
+fn configured_targets(settings: &Settings) -> Vec<Delivery> {
+    settings
         .targets
         .iter()
         .map(|target| Delivery {
@@ -201,7 +216,7 @@ fn configured_targets(config: &Config) -> Vec<Delivery> {
         .collect()
 }
 
-pub(crate) fn view(config: &Config) -> anyhow::Result<View> {
+pub(crate) fn view(config: &Config, settings: &Settings) -> anyhow::Result<View> {
     let sqlite = bootstrap::database_type(config) == DB_TYPE_SQLITE;
     let (running, mut last_run) = if sqlite {
         let lock = lock()?;
@@ -230,18 +245,20 @@ pub(crate) fn view(config: &Config) -> anyhow::Result<View> {
     }
     Ok(View {
         sqlite,
-        interval_hours: config.backup.interval_hours,
+        interval_hours: settings.interval_hours,
+        age_recipient: settings.age_recipient.clone(),
         running,
-        targets: configured_targets(config),
+        targets: configured_targets(settings),
         last_run,
     })
 }
 
-pub(crate) fn spawn_scheduler(config: Arc<Config>) {
-    if bootstrap::database_type(&config) != DB_TYPE_SQLITE
-        || config.backup.targets.is_empty()
-        || config.backup.interval_hours == 0
-    {
+pub(crate) fn effective_settings(config: &Config, path: &Path) -> anyhow::Result<Settings> {
+    crate::support::storage_profiles::Profiles::load(path)?.backup_settings(&config.backup)
+}
+
+pub(crate) fn spawn_scheduler(config: Arc<Config>, config_path: PathBuf) {
+    if bootstrap::database_type(&config) != DB_TYPE_SQLITE {
         return;
     }
     tokio::spawn(async move {
@@ -249,22 +266,32 @@ pub(crate) fn spawn_scheduler(config: Arc<Config>) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            if let Err(error) = start(config.clone(), true) {
+            let result = effective_settings(&config, &config_path)
+                .and_then(|settings| start(&config, settings, true));
+            if let Err(error) = result {
                 tracing::warn!(%error, "Could not start a scheduled Console backup");
             }
         }
     });
 }
 
-pub(crate) fn start(config: Arc<Config>, scheduled: bool) -> anyhow::Result<bool> {
+pub(crate) fn start(config: &Config, settings: Settings, scheduled: bool) -> anyhow::Result<bool> {
     ensure!(
-        bootstrap::database_type(&config) == DB_TYPE_SQLITE,
+        bootstrap::database_type(config) == DB_TYPE_SQLITE,
         "Remote backups require SQLite"
     );
+    if scheduled
+        && (settings.interval_hours == 0
+            || settings.targets.is_empty()
+            || settings.age_recipient.is_empty())
+    {
+        return Ok(false);
+    }
     ensure!(
-        !config.backup.targets.is_empty(),
+        !settings.targets.is_empty(),
         "No backup targets are configured"
     );
+    let recipient = settings.recipient()?;
     let lock = lock()?;
     if let Err(error) = fs2::FileExt::try_lock_exclusive(&lock) {
         if error.kind() == io::ErrorKind::WouldBlock
@@ -277,7 +304,7 @@ pub(crate) fn start(config: Arc<Config>, scheduled: bool) -> anyhow::Result<bool
     let now = Utc::now();
     if scheduled
         && read_run()?.is_some_and(|run| {
-            now < run.started_at + chrono::Duration::hours(i64::from(config.backup.interval_hours))
+            now < run.started_at + chrono::Duration::hours(i64::from(settings.interval_hours))
         })
     {
         return Ok(false);
@@ -299,17 +326,17 @@ pub(crate) fn start(config: Arc<Config>, scheduled: bool) -> anyhow::Result<bool
         started_at: now,
         finished_at: None,
         archive: format!(
-            "console-{}-{}.zip",
+            "console-{}-{}.zip.age",
             now.format("%Y%m%dT%H%M%SZ"),
             uuid::Uuid::new_v4()
         ),
         snapshot_failed: false,
         scheduled,
-        targets: configured_targets(&config),
+        targets: configured_targets(&settings),
     };
     save_run(&run)?;
     tokio::spawn(async move {
-        if let Err(error) = deliver(&config.backup, &mut run).await {
+        if let Err(error) = deliver(&settings, recipient, &mut run).await {
             tracing::warn!(%error, "Could not complete Console backup");
         }
         if let Err(error) = tokio::fs::remove_dir_all(WORK).await {
@@ -320,7 +347,11 @@ pub(crate) fn start(config: Arc<Config>, scheduled: bool) -> anyhow::Result<bool
     Ok(true)
 }
 
-async fn deliver(settings: &Settings, run: &mut Run) -> anyhow::Result<()> {
+async fn deliver(
+    settings: &Settings,
+    recipient: age::x25519::Recipient,
+    run: &mut Run,
+) -> anyhow::Result<()> {
     use futures_util::StreamExt as _;
 
     let path = Path::new(WORK).join(&run.archive);
@@ -329,7 +360,11 @@ async fn deliver(settings: &Settings, run: &mut Run) -> anyhow::Result<()> {
         let directory = Path::new(WORK).join("snapshot");
         bootstrap::backup_sqlite(&directory).await?;
         let path = path.clone();
-        tokio::task::spawn_blocking(move || archive(&directory, &path)).await?
+        tokio::task::spawn_blocking(move || {
+            archive(&directory, &path, &recipient)?;
+            checksum(&path)
+        })
+        .await?
     }
     .await;
     match snapshot {
@@ -361,11 +396,14 @@ async fn deliver(settings: &Settings, run: &mut Run) -> anyhow::Result<()> {
     save_run(run).context("could not save Console backup results")
 }
 
-pub(crate) async fn publish_file(config: &Config, path: &Path) -> anyhow::Result<Vec<Delivery>> {
+pub(crate) async fn publish_file(
+    settings: &Settings,
+    path: &Path,
+) -> anyhow::Result<Vec<Delivery>> {
     use futures_util::StreamExt as _;
 
     ensure!(
-        !config.backup.targets.is_empty(),
+        !settings.targets.is_empty(),
         "No backup targets are configured"
     );
     ensure!(
@@ -383,11 +421,25 @@ pub(crate) async fn publish_file(config: &Config, path: &Path) -> anyhow::Result
                 .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)),
         "Backup filename must use ASCII letters, digits, periods, underscores or hyphens"
     );
+    let recipient = settings.recipient()?;
+    ensure!(
+        name.len() <= 251 && !name.ends_with(".age"),
+        "Provide the plaintext archive to encrypt"
+    );
+    let name = format!("{name}.age");
+    let temporary =
+        tempfile::tempdir().context("Could not create a private backup staging directory")?;
+    let output = temporary.path().join(&name);
     let source = path.to_path_buf();
-    let (bytes, hash) = tokio::task::spawn_blocking(move || checksum(&source)).await??;
+    let destination = output.clone();
+    let (bytes, hash) = tokio::task::spawn_blocking(move || {
+        encrypt_archive(&recipient, &source, &destination)?;
+        checksum(&destination)
+    })
+    .await??;
     let client = client()?;
-    let mut deliveries = configured_targets(config);
-    let mut uploads = upload_all(&config.backup, &client, name, path, &hash, bytes);
+    let mut deliveries = configured_targets(settings);
+    let mut uploads = upload_all(settings, &client, &name, &output, &hash, bytes);
     while let Some((index, result)) = uploads.next().await {
         deliveries[index].outcome = if result.is_ok() {
             Outcome::Uploaded
@@ -442,10 +494,17 @@ fn upload_all<'a>(
         .collect::<futures_util::stream::FuturesUnordered<_>>()
 }
 
-fn archive(directory: &Path, path: &Path) -> anyhow::Result<(u64, String)> {
+fn archive(
+    directory: &Path,
+    path: &Path,
+    recipient: &age::x25519::Recipient,
+) -> anyhow::Result<()> {
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
-    let mut writer = ZipWriter::new(File::create(path)?);
+    let encryptor =
+        age::Encryptor::with_recipients(std::iter::once(recipient as &dyn age::Recipient))?;
+    let ciphertext = encryptor.wrap_output(File::create(path)?)?;
+    let mut writer = ZipWriter::new_stream(ciphertext);
     for name in ["manifest.json", "rustdeskapi.db"] {
         writer.start_file(
             name,
@@ -456,9 +515,23 @@ fn archive(directory: &Path, path: &Path) -> anyhow::Result<(u64, String)> {
         )?;
         io::copy(&mut File::open(directory.join(name))?, &mut writer)?;
     }
-    writer.finish()?.sync_all()?;
+    writer.finish()?.into_inner().finish()?.sync_all()?;
     fs::remove_dir_all(directory)?;
-    checksum(path)
+    Ok(())
+}
+
+fn encrypt_archive(
+    recipient: &age::x25519::Recipient,
+    source: &Path,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let encryptor =
+        age::Encryptor::with_recipients(std::iter::once(recipient as &dyn age::Recipient))?;
+    let mut input = File::open(source)?;
+    let mut output = encryptor.wrap_output(File::create(path)?)?;
+    io::copy(&mut input, &mut output)?;
+    output.finish()?.sync_all()?;
+    Ok(())
 }
 
 fn checksum(path: &Path) -> anyhow::Result<(u64, String)> {
@@ -467,4 +540,43 @@ fn checksum(path: &Path) -> anyhow::Result<(u64, String)> {
     let mut hash = Sha256::new();
     let bytes = io::copy(&mut File::open(path)?, &mut hash)?;
     Ok((bytes, format!("{:x}", hash.finalize())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_archive_requires_public_key_and_can_be_decrypted_with_matching_identity() {
+        let mut settings = Settings::default();
+        assert!(settings.recipient().is_err());
+        let identity = age::x25519::Identity::generate();
+        settings.age_recipient = identity.to_public().to_string();
+        let recipient = settings.recipient().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("snapshot.zip");
+        let output = directory.path().join("snapshot.zip.age");
+        let plaintext = b"private database archive fixture".repeat(5_000);
+        fs::write(&input, &plaintext).unwrap();
+
+        encrypt_archive(&recipient, &input, &output).unwrap();
+
+        let ciphertext = fs::read(&output).unwrap();
+        assert!(ciphertext.starts_with(b"age-encryption.org/v1\n"));
+        assert!(!ciphertext
+            .windows(32)
+            .any(|bytes| bytes == b"private database archive fixture"));
+        let wrong = age::x25519::Identity::generate();
+        let decryptor = age::Decryptor::new(File::open(&output).unwrap()).unwrap();
+        assert!(decryptor
+            .decrypt(std::iter::once(&wrong as &dyn age::Identity))
+            .is_err());
+        let decryptor = age::Decryptor::new(File::open(&output).unwrap()).unwrap();
+        let mut stream = decryptor
+            .decrypt(std::iter::once(&identity as &dyn age::Identity))
+            .unwrap();
+        let mut restored = Vec::new();
+        io::copy(&mut stream, &mut restored).unwrap();
+        assert_eq!(restored, plaintext);
+    }
 }

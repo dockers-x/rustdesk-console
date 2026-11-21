@@ -287,3 +287,5 @@ other = "已被封禁。"
 description = "Register success, wait for admin confirm."
 one = "注册成功，请等待管理员审核。"
 other = "注册成功，请等待管理员审核。"
+
+TotpCodeInvalidOrUsed = "验证码错误、已过期或已使用，请输入新的验证器验证码。"

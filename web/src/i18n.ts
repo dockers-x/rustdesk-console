@@ -10,6 +10,7 @@ import { connectionAuditMessages } from "./locales/connectionAudit";
 import { delegationMessages } from "./locales/delegation";
 import { passwordResetMessages } from "./locales/passwordReset";
 import { backupAndGrants } from "./locales/backupAndGrants";
+import { storageProfileMessages } from "./locales/storageProfiles";
 import { ru } from "./locales/ru";
 
 const en: Record<string, string> = {
@@ -931,7 +932,7 @@ const en: Record<string, string> = {
   totpQrCodeHint: "Scan this QR code with an authenticator app, or copy the secret/URI manually.",
   copyTotpUri: "Copy URI",
   totpEnrollmentRequired: "Set up two-factor authentication",
-  totpEnabledLoginAgain: "Two-factor authentication is ready. Sign in again with your authenticator code.",
+  totpEnabledLoginAgain: "Two-factor authentication is ready. Sign in again when your authenticator shows a new code.",
   totpSetupHint: "Set up an authenticator app with the secret or URI, then enter the current code.",
   totpEnabledHint: "This account has an authenticator secret configured.",
   totpEnforcedSelfHint: "An administrator requires 2FA for this account, so you cannot disable it yourself.",
@@ -1959,7 +1960,7 @@ const zhCN: Record<string, string> = {
   totpQrCodeHint: "使用二次认证应用扫描二维码，也可以手动复制密钥或 URI。",
   copyTotpUri: "复制 URI",
   totpEnrollmentRequired: "设置二次验证",
-  totpEnabledLoginAgain: "二次验证已启用，请使用验证器验证码重新登录。",
+  totpEnabledLoginAgain: "二次验证已启用，请等待验证器生成下一组验证码后重新登录。",
   totpSetupHint: "使用密钥或 URI 添加到验证器应用，然后输入当前验证码。",
   totpEnabledHint: "当前账号已配置验证器密钥。",
   totpEnforcedSelfHint: "管理员要求当前账号使用 2FA，因此你不能自行停用。",
@@ -2097,9 +2098,9 @@ i18n.on("languageChanged", (language) => {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en, ...fileAuditMessages.en, ...connectionAuditMessages.en, ...delegationMessages.en, ...passwordResetMessages.en, ...backupAndGrants.en } },
-    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru, ...fileAuditMessages.ru, ...connectionAuditMessages.ru, ...delegationMessages.ru, ...passwordResetMessages.ru, ...backupAndGrants.ru } },
-    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"], ...fileAuditMessages["zh-CN"], ...connectionAuditMessages["zh-CN"], ...delegationMessages["zh-CN"], ...passwordResetMessages["zh-CN"], ...backupAndGrants["zh-CN"] } },
+    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en, ...fileAuditMessages.en, ...connectionAuditMessages.en, ...delegationMessages.en, ...passwordResetMessages.en, ...backupAndGrants.en, ...storageProfileMessages.en } },
+    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru, ...fileAuditMessages.ru, ...connectionAuditMessages.ru, ...delegationMessages.ru, ...passwordResetMessages.ru, ...backupAndGrants.ru, ...storageProfileMessages.ru } },
+    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"], ...fileAuditMessages["zh-CN"], ...connectionAuditMessages["zh-CN"], ...delegationMessages["zh-CN"], ...passwordResetMessages["zh-CN"], ...backupAndGrants["zh-CN"], ...storageProfileMessages["zh-CN"] } },
   },
   lng: detectLang(),
   fallbackLng: "en",

@@ -93,15 +93,46 @@ pub struct RecordStorageWebDavView {
 #[derive(Debug)]
 pub struct RecordStorageConfigStore {
     config_path: PathBuf,
+    profiles_path: PathBuf,
     current: RwLock<RecordStorage>,
 }
 
 impl RecordStorageConfigStore {
     pub fn new(config_path: PathBuf, current: RecordStorage) -> Self {
         Self {
+            profiles_path: config_path.with_extension("storage-profiles.json"),
             config_path,
             current: RwLock::new(current.normalize()),
         }
+    }
+
+    pub(crate) fn with_profiles_path(mut self, path: PathBuf) -> Self {
+        self.profiles_path = path;
+        self
+    }
+
+    pub(crate) fn profiles_path(&self) -> &Path {
+        &self.profiles_path
+    }
+
+    pub(crate) async fn for_recording(&self, id: Option<&str>) -> Result<RecordStorage, String> {
+        if let Some(id) = id {
+            return super::storage_profiles::Profiles::load(&self.profiles_path)
+                .and_then(|profiles| profiles.recording_config(id))
+                .map_err(|error| error.to_string());
+        }
+        Ok(self.get().await)
+    }
+
+    pub(crate) async fn recording_destination(&self) -> Result<(Option<String>, RecordStorage), String> {
+        let profiles = super::storage_profiles::Profiles::load(&self.profiles_path)
+            .map_err(|error| error.to_string())?;
+        let id = profiles.recording_id();
+        let config = match id.as_deref() {
+            Some(id) => profiles.recording_config(id).map_err(|error| error.to_string())?,
+            None => self.get().await,
+        };
+        Ok((id, config))
     }
 
     pub async fn get(&self) -> RecordStorage {
@@ -125,7 +156,7 @@ impl RecordStorageConfigStore {
     }
 }
 
-fn view_from_config(cfg: &RecordStorage) -> RecordStorageConfigView {
+pub(crate) fn view_from_config(cfg: &RecordStorage) -> RecordStorageConfigView {
     RecordStorageConfigView {
         storage_type: cfg.normalized_type().to_string(),
         local_dir: cfg.local_dir.clone(),
@@ -151,7 +182,7 @@ fn view_from_config(cfg: &RecordStorage) -> RecordStorageConfigView {
     }
 }
 
-fn merge_form(mut current: RecordStorage, form: RecordStorageConfigForm) -> RecordStorage {
+pub(crate) fn merge_form(mut current: RecordStorage, form: RecordStorageConfigForm) -> RecordStorage {
     current.r#type = form.storage_type.trim().to_string();
     current.local_dir = form.local_dir.trim().to_string();
     current.temp_dir = form.temp_dir.trim().to_string();

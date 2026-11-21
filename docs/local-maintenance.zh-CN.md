@@ -69,8 +69,17 @@ rustdesk-console reset-totp 42
 
 ## SQLite 远程备份
 
-在配置文件中添加命名目标，重启 Console。进入 **诊断 → SQLite 远程备份**，
-点 **立即备份** 可在后台创建并上传快照。页面显示每个目标最近一次的结果。
+在 **系统运维 → 存储配置** 添加配置项，然后在 **系统设置 → 自动备份**
+选择一个或多个 S3 或 WebDAV 目标，设置间隔和 age 加密公钥。一分钟内加载新配置，点击
+**立即备份** 可立即执行。录像页可单选本地、S3 或 WebDAV 配置项。切换
+影响新录像，已有录像仍按上传时的配置读取。更换存储位置时请新建配置项，
+已有配置可更新名称和凭据。
+
+存储配置默认保存在 `data/storage-profiles.json`，可通过
+`storage-profiles-file` 指定路径。文件包含密钥，请单独保存在受限位置。
+SQLite 快照和 S6 离线包均不包含此文件。
+
+原有部署也可继续使用下方的 YAML 设置。
 如需上传 S6 离线归档，用 `backup-config-file` 指向单独挂载的 YAML
 密钥文件，避免把各目标的凭据放进包含主配置的 S6 归档。密钥文件从
 `interval-hours` 开始写，无需外层 `backup`。该文件优先于内联目标，
@@ -78,6 +87,7 @@ rustdesk-console reset-totp 42
 
 ```yaml
 backup:
+  age-recipient: age1...
   interval-hours: 24
   targets:
     - name: 异地 S3
@@ -102,17 +112,29 @@ backup:
 
 将 `interval-hours` 设为 0 可关闭定时备份。开启后首次自动运行随即执行，
 之后按距离上一次尝试的时间计算。手动和定时任务共用同一把锁。
-每次运行生成一份 ZIP，独立上传到各目标。请为保存敏感数据的存储桶或
-WebDAV 目录设置访问控制，由目标端管理保留期和静态加密。建议使用 HTTPS。
+每次运行生成一份 ZIP，在应用内通过 age 加密后，分别上传同一份密文到各个目标。
+请限制存储桶或 WebDAV 目录的访问权限，并在目标端管理保留期。建议使用 HTTPS。
 私有 HTTP 服务可在该目标上显式设置 `allow-http: true`。
 需要路径式访问的 S3 兼容服务可在 `s3` 下设置 `force-path-style: true`。
 
-从成功的任一目标下载 ZIP，解压到私有目录，按前文使用
-`manifest.json` 和 `rustdeskapi.db` 恢复。最近一次任务的状态保存在
-`data/remote-backup-status.json`。
+用 `age-keygen -o identity.txt` 生成密钥。在 Console 或 YAML 的
+`age-recipient` 中只填以 `age1` 开头的公钥。私钥请单独保管。
+配置有效公钥后才能执行远程上传。从任一成功目标下载归档后解密：
+
+```sh
+age --decrypt --identity identity.txt --output console.zip console.zip.age
+```
+
+将解密后的 ZIP 解压到私有目录，按前文使用 `manifest.json` 和
+`rustdeskapi.db` 恢复。最近一次任务的状态保存在 `data/remote-backup-status.json`。
+
+Console 使用 `data/totp.key` 加密 TOTP 种子，也可用
+`security.totp-key-file` 指定路径。首次需要时以受限权限创建密钥。
+请单独保存该密钥的副本。恢复含加密种子的数据库时，先将原密钥放回
+原路径再启动 Console。迁移前的数据库和备份可能含明文种子。
 
 整套 S6 完成离线归档后，可以用相同配置执行
 `rustdesk-console -c ./conf/config.yaml database upload-backup /backups/s6-2026-11-21.tar --json`。
-可在宿主机停写备份完成后定时执行这一步。命令等待所有目标处理结束，
+可在宿主机停写备份完成后定时执行这一步。命令将归档加密为 `.tar.age` 后上传，等待所有目标处理结束，
 任一目标失败时返回退出码 4。Console 的定时任务仅备份自己的 SQLite，
 日常运行无需停止 S6。

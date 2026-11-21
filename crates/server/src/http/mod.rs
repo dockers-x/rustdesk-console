@@ -3,6 +3,7 @@ pub mod api;
 mod console_audit;
 mod connection_grant;
 mod remote_backup;
+mod storage_profiles;
 mod delegated_admin;
 pub mod developer;
 mod developer_openapi;

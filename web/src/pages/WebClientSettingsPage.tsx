@@ -4,11 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as QRCode from "qrcode";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
-import { Switch } from "@cloudflare/kumo/components/switch";
 import { Tabs } from "@cloudflare/kumo/components/tabs";
 import { cn } from "@cloudflare/kumo/utils";
 import {
-  CloudArrowUp,
   CopySimple,
   Eye,
   EyeSlash,
@@ -17,15 +15,15 @@ import {
   QrCode,
   TerminalWindow,
 } from "@phosphor-icons/react";
+import { ConfigField } from "../components/ConfigField";
 import { InlineMessage } from "../components/InlineMessage";
 import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 import { copyToClipboard } from "../lib/clipboard";
 
 type SaveTarget = "local" | "server";
 type WsMode = "auto" | "proxy" | "custom";
-type SettingsTab = "webclient" | "rustdesk" | "record-storage";
+type SettingsTab = "webclient" | "rustdesk";
 type DeploymentPlatform = keyof DeploymentCommandSet;
-type RecordStorageType = "local" | "s3" | "webdav";
 type ApproveMode = "" | "password" | "click" | "password-click";
 type VerificationMethod =
   | ""
@@ -64,33 +62,6 @@ interface DeploymentConfig {
 
 type WebSocketRoutes = DeploymentConfig["webclient_ws_routes"];
 
-interface RecordStorageConfig {
-  type: RecordStorageType;
-  local_dir: string;
-  temp_dir: string;
-  s3: {
-    endpoint: string;
-    region: string;
-    bucket: string;
-    prefix: string;
-    access_key_id: string;
-    secret_access_key: string;
-    access_key_id_configured: boolean;
-    secret_access_key_configured: boolean;
-    force_path_style: boolean;
-    clear_access_key_id?: boolean;
-    clear_secret_access_key?: boolean;
-  };
-  webdav: {
-    url: string;
-    username: string;
-    password: string;
-    password_configured: boolean;
-    prefix: string;
-    clear_password?: boolean;
-  };
-}
-
 const LOCAL_OVERRIDE_KEY = "rustdesk-console.webclient.local-override";
 
 const STORAGE_KEYS: Record<keyof WebClientConfig, string> = {
@@ -113,33 +84,6 @@ const emptyConfig: WebClientConfig = {
   key: "",
 };
 
-const emptyRecordStorageConfig: RecordStorageConfig = {
-  type: "local",
-  local_dir: "",
-  temp_dir: "",
-  s3: {
-    endpoint: "",
-    region: "auto",
-    bucket: "",
-    prefix: "record/",
-    access_key_id: "",
-    secret_access_key: "",
-    access_key_id_configured: false,
-    secret_access_key_configured: false,
-    force_path_style: false,
-    clear_access_key_id: false,
-    clear_secret_access_key: false,
-  },
-  webdav: {
-    url: "",
-    username: "",
-    password: "",
-    password_configured: false,
-    prefix: "record/",
-    clear_password: false,
-  },
-};
-
 function toConfigString(value: unknown) {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") {
@@ -159,37 +103,6 @@ function normalizeConfig(
     ws_id_host: toConfigString(config.ws_id_host),
     ws_relay_host: toConfigString(config.ws_relay_host),
     key: toConfigString(config.key),
-  };
-}
-
-function normalizeRecordStorageConfig(config: Partial<RecordStorageConfig>): RecordStorageConfig {
-  const type =
-    config.type === "s3" || config.type === "webdav" ? config.type : "local";
-  return {
-    type,
-    local_dir: toConfigString(config.local_dir),
-    temp_dir: toConfigString(config.temp_dir),
-    s3: {
-      endpoint: toConfigString(config.s3?.endpoint),
-      region: toConfigString(config.s3?.region) || "auto",
-      bucket: toConfigString(config.s3?.bucket),
-      prefix: toConfigString(config.s3?.prefix) || "record/",
-      access_key_id: toConfigString(config.s3?.access_key_id),
-      secret_access_key: toConfigString(config.s3?.secret_access_key),
-      access_key_id_configured: Boolean(config.s3?.access_key_id_configured),
-      secret_access_key_configured: Boolean(config.s3?.secret_access_key_configured),
-      force_path_style: Boolean(config.s3?.force_path_style),
-      clear_access_key_id: Boolean(config.s3?.clear_access_key_id),
-      clear_secret_access_key: Boolean(config.s3?.clear_secret_access_key),
-    },
-    webdav: {
-      url: toConfigString(config.webdav?.url),
-      username: toConfigString(config.webdav?.username),
-      password: toConfigString(config.webdav?.password),
-      password_configured: Boolean(config.webdav?.password_configured),
-      prefix: toConfigString(config.webdav?.prefix) || "record/",
-      clear_password: Boolean(config.webdav?.clear_password),
-    },
   };
 }
 
@@ -308,9 +221,6 @@ export function WebClientSettingsPage() {
   const qc = useQueryClient();
   const [saveTarget, setSaveTarget] = useState<SaveTarget>("local");
   const [form, setForm] = useState<WebClientConfig>(emptyConfig);
-  const [recordStorageForm, setRecordStorageForm] = useState<RecordStorageConfig>(
-    emptyRecordStorageConfig,
-  );
   const [formReady, setFormReady] = useState(false);
   const [wsMode, setWsMode] = useState<WsMode>("auto");
   const [localActive, setLocalActive] = useState(false);
@@ -333,14 +243,6 @@ export function WebClientSettingsPage() {
     refetchOnMount: "always",
   });
 
-  const recordStorageConfig = useQuery({
-    queryKey: ["record-storage-config"],
-    queryFn: () =>
-      apiGet<RecordStorageConfig>("/api/admin/config/record-storage"),
-    staleTime: 0,
-    refetchOnMount: "always",
-  });
-
   const deploymentPreview = useQuery({
     queryKey: [
       "webclient-deployment-preview",
@@ -357,11 +259,6 @@ export function WebClientSettingsPage() {
     enabled: formReady,
     gcTime: 0,
   });
-
-  useEffect(() => {
-    if (!recordStorageConfig.data) return;
-    setRecordStorageForm(normalizeRecordStorageConfig(recordStorageConfig.data));
-  }, [recordStorageConfig.data]);
 
   useEffect(() => {
     if (!serverConfig.data) return;
@@ -393,29 +290,8 @@ export function WebClientSettingsPage() {
     },
   });
 
-  const saveRecordStorage = useMutation({
-    mutationFn: (payload: RecordStorageConfig) =>
-      apiPatch<RecordStorageConfig>("/api/admin/config/record-storage", payload),
-    onSuccess: (saved) => {
-      setRecordStorageForm(normalizeRecordStorageConfig(saved));
-      setMessage(t("recordStorageSaved"));
-      setLocalError("");
-      void qc.invalidateQueries({ queryKey: ["record-storage-config"] });
-    },
-    onError: (err) => {
-      const ae = err as ApiError;
-      setLocalError(ae.message || t("operationFailed"));
-    },
-  });
-
   const updateField = (field: keyof WebClientConfig, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
-    setMessage("");
-    setLocalError("");
-  };
-
-  const updateRecordStorage = (next: RecordStorageConfig) => {
-    setRecordStorageForm(next);
     setMessage("");
     setLocalError("");
   };
@@ -487,12 +363,6 @@ export function WebClientSettingsPage() {
     setDeploymentPasswordRevision((current) => current + 1);
   };
 
-  const saveRecordStorageConfig = () => {
-    setMessage("");
-    setLocalError("");
-    saveRecordStorage.mutate(recordStorageForm);
-  };
-
   const resetLocalOverride = () => {
     if (!serverConfig.data) return;
     const normalized = normalizeConfig(serverConfig.data);
@@ -532,12 +402,10 @@ export function WebClientSettingsPage() {
           variant="secondary"
           loading={
             serverConfig.isFetching ||
-            deploymentPreview.isFetching ||
-            recordStorageConfig.isFetching
+            deploymentPreview.isFetching
           }
           onClick={() => {
             void qc.invalidateQueries({ queryKey: ["webclient-server-config"] });
-            void qc.invalidateQueries({ queryKey: ["record-storage-config"] });
             void qc.invalidateQueries({
               queryKey: ["webclient-deployment-preview"],
             });
@@ -621,12 +489,6 @@ export function WebClientSettingsPage() {
           >
             {t("rustDeskDeployment")}
           </TabButton>
-          <TabButton
-            active={activeTab === "record-storage"}
-            onClick={() => setActiveTab("record-storage")}
-          >
-            {t("recordStorage")}
-          </TabButton>
         </div>
 
         {activeTab === "webclient" && (
@@ -681,25 +543,12 @@ export function WebClientSettingsPage() {
           />
         )}
 
-        {activeTab === "record-storage" && (
-          <RecordStoragePanel
-            config={recordStorageForm}
-            loading={recordStorageConfig.isLoading}
-            error={recordStorageConfig.error as Error | null}
-            onChange={updateRecordStorage}
-            saving={saveRecordStorage.isPending}
-            saveDisabled={saveRecordStorage.isPending || recordStorageConfig.isLoading}
-            onSave={saveRecordStorageConfig}
-          />
-        )}
-
-        {(message || localError || serverConfig.error || recordStorageConfig.error) && (
+        {(message || localError || serverConfig.error) && (
           <div className="grid gap-2">
             {message && <InlineMessage tone="success">{message}</InlineMessage>}
-            {(localError || serverConfig.error || recordStorageConfig.error) && (
+            {(localError || serverConfig.error) && (
               <InlineMessage tone="error">
                 {localError ||
-                  (recordStorageConfig.error as Error | undefined)?.message ||
                   (serverConfig.error as Error | undefined)?.message ||
                   t("operationFailed")}
               </InlineMessage>
@@ -866,45 +715,6 @@ function FormSection({
       </div>
       {children}
     </section>
-  );
-}
-
-function ConfigField({
-  label,
-  storageKey,
-  value,
-  onChange,
-  placeholder,
-  helper,
-  compact = false,
-}: {
-  label: string;
-  storageKey: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  helper?: string;
-  compact?: boolean;
-}) {
-  return (
-    <label className="block min-w-0">
-      <span className="mb-1 block text-sm font-medium">{label}</span>
-      <Input
-        aria-label={label}
-        size={compact ? "sm" : "base"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        spellCheck={false}
-        className="w-full min-w-0"
-      />
-      {!compact && (
-        <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
-          {storageKey}
-          {helper ? `. ${helper}` : ""}
-        </span>
-      )}
-    </label>
   );
 }
 
@@ -1521,288 +1331,6 @@ function DeploymentAccessOptions({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function RecordStoragePanel({
-  config,
-  loading,
-  error,
-  onChange,
-  saving,
-  saveDisabled,
-  onSave,
-}: {
-  config: RecordStorageConfig;
-  loading: boolean;
-  error?: Error | null;
-  onChange: (next: RecordStorageConfig) => void;
-  saving: boolean;
-  saveDisabled: boolean;
-  onSave: () => void;
-}) {
-  const { t } = useTranslation();
-  const setType = (type: RecordStorageType) => onChange({ ...config, type });
-  const setRoot = (
-    field: "local_dir" | "temp_dir",
-    value: string,
-  ) => onChange({ ...config, [field]: value });
-  const setS3 = <K extends keyof RecordStorageConfig["s3"]>(
-    field: K,
-    value: RecordStorageConfig["s3"][K],
-  ) => onChange({ ...config, s3: { ...config.s3, [field]: value } });
-  const setWebDav = <K extends keyof RecordStorageConfig["webdav"]>(
-    field: K,
-    value: RecordStorageConfig["webdav"][K],
-  ) => onChange({ ...config, webdav: { ...config.webdav, [field]: value } });
-  const remote = config.type === "s3" || config.type === "webdav";
-  const storageHint =
-    config.type === "local"
-      ? t("recordStorageLocalHint")
-      : config.type === "s3"
-        ? t("recordStorageS3Hint")
-        : t("recordStorageWebDavHint");
-
-  return (
-    <section className="rounded-lg border border-kumo-line bg-kumo-elevated">
-      <div className="flex items-start gap-3 p-5">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-brand">
-          <CloudArrowUp size={18} />
-        </div>
-        <div>
-          <h2 className="text-base font-semibold">{t("recordStorage")}</h2>
-          <p className="mt-1 text-sm leading-6 text-kumo-subtle">
-            {t("recordStorageHint")}
-          </p>
-        </div>
-      </div>
-
-      {loading && (
-        <p
-          role="status"
-          className="mx-5 rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm text-kumo-subtle"
-        >
-          {t("loading")}
-        </p>
-      )}
-      {error && (
-        <InlineMessage tone="error" className="mx-5">
-          {error.message || t("operationFailed")}
-        </InlineMessage>
-      )}
-
-      <div className="grid gap-5 px-5 pb-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm font-medium">{t("recordStorageBackend")}</span>
-          <CompactButtonGroup<RecordStorageType>
-            ariaLabel={t("recordStorageBackend")}
-            value={config.type}
-            onChange={setType}
-            options={[
-              { value: "local", label: t("recordStorageLocal") },
-              { value: "s3", label: t("recordStorageS3") },
-              { value: "webdav", label: t("recordStorageWebDav") },
-            ]}
-          />
-          <span className="min-w-0 text-sm leading-6 text-kumo-subtle">
-            {storageHint}
-          </span>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          {config.type === "local" && (
-            <ConfigField
-              label={t("recordStorageLocalDir")}
-              storageKey="RUSTDESK_API_RECORD_STORAGE_LOCAL_DIR"
-              value={config.local_dir}
-              onChange={(value) => setRoot("local_dir", value)}
-              placeholder="resources/record"
-              helper={t("recordStorageLocalDirHint")}
-            />
-          )}
-          {remote && (
-            <ConfigField
-              label={t("recordStorageTempDir")}
-              storageKey="RUSTDESK_API_RECORD_STORAGE_TEMP_DIR"
-              value={config.temp_dir}
-              onChange={(value) => setRoot("temp_dir", value)}
-              placeholder="resources/record/tmp"
-              helper={t("recordStorageTempDirHint")}
-            />
-          )}
-        </div>
-
-        {config.type === "s3" && (
-          <div className="grid gap-4">
-            <div className="grid gap-4 lg:grid-cols-2">
-              <ConfigField
-                label={t("s3Endpoint")}
-                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_ENDPOINT"
-                value={config.s3.endpoint}
-                onChange={(value) => setS3("endpoint", value)}
-                placeholder="https://s3.example.com"
-              />
-              <ConfigField
-                label={t("s3Region")}
-                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_REGION"
-                value={config.s3.region}
-                onChange={(value) => setS3("region", value)}
-                placeholder="auto"
-              />
-              <ConfigField
-                label={t("s3Bucket")}
-                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_BUCKET"
-                value={config.s3.bucket}
-                onChange={(value) => setS3("bucket", value)}
-                placeholder="rustdesk-recordings"
-              />
-              <ConfigField
-                label={t("storagePrefix")}
-                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_PREFIX"
-                value={config.s3.prefix}
-                onChange={(value) => setS3("prefix", value)}
-                placeholder="record/"
-              />
-              <SecretConfigField
-                label={t("s3AccessKeyId")}
-                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_ACCESS_KEY_ID"
-                value={config.s3.access_key_id}
-                configured={config.s3.access_key_id_configured}
-                clear={Boolean(config.s3.clear_access_key_id)}
-                onChange={(value) => setS3("access_key_id", value)}
-                onClearChange={(value) => setS3("clear_access_key_id", value)}
-              />
-              <SecretConfigField
-                label={t("s3SecretAccessKey")}
-                storageKey="RUSTDESK_API_RECORD_STORAGE_S3_SECRET_ACCESS_KEY"
-                value={config.s3.secret_access_key}
-                configured={config.s3.secret_access_key_configured}
-                clear={Boolean(config.s3.clear_secret_access_key)}
-                onChange={(value) => setS3("secret_access_key", value)}
-                onClearChange={(value) =>
-                  setS3("clear_secret_access_key", value)
-                }
-              />
-            </div>
-            <div className="rounded-lg border border-kumo-line bg-kumo-base px-3 py-2">
-              <Switch
-                label={t("s3ForcePathStyle")}
-                labelTooltip={t("s3ForcePathStyleHint")}
-                controlFirst={false}
-                checked={config.s3.force_path_style}
-                onCheckedChange={(checked: boolean) =>
-                  setS3("force_path_style", checked)
-                }
-              />
-            </div>
-          </div>
-        )}
-
-        {config.type === "webdav" && (
-          <div className="grid gap-4 lg:grid-cols-2">
-            <ConfigField
-              label={t("webDavUrl")}
-              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_URL"
-              value={config.webdav.url}
-              onChange={(value) => setWebDav("url", value)}
-              placeholder="https://dav.example.com/remote.php/dav/files/user"
-            />
-            <ConfigField
-              label={t("storagePrefix")}
-              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_PREFIX"
-              value={config.webdav.prefix}
-              onChange={(value) => setWebDav("prefix", value)}
-              placeholder="record/"
-            />
-            <ConfigField
-              label={t("webDavUsername")}
-              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_USERNAME"
-              value={config.webdav.username}
-              onChange={(value) => setWebDav("username", value)}
-              placeholder="rustdesk"
-            />
-            <SecretConfigField
-              label={t("webDavPassword")}
-              storageKey="RUSTDESK_API_RECORD_STORAGE_WEBDAV_PASSWORD"
-              value={config.webdav.password}
-              configured={config.webdav.password_configured}
-              clear={Boolean(config.webdav.clear_password)}
-              onChange={(value) => setWebDav("password", value)}
-              onClearChange={(value) => setWebDav("clear_password", value)}
-            />
-          </div>
-        )}
-
-        <p className="rounded-md border border-kumo-line bg-kumo-base px-3 py-2 text-sm leading-6 text-kumo-subtle">
-          {t("recordStorageApplyHint")}
-        </p>
-      </div>
-      <div className="flex justify-end border-t border-kumo-line bg-kumo-recessed px-5 py-4">
-        <Button
-          type="button"
-          size="sm"
-          onClick={onSave}
-          disabled={saveDisabled}
-          loading={saving}
-        >
-          {t("writeRecordStorageConfig")}
-        </Button>
-      </div>
-    </section>
-  );
-}
-
-function SecretConfigField({
-  label,
-  storageKey,
-  value,
-  configured,
-  clear,
-  onChange,
-  onClearChange,
-}: {
-  label: string;
-  storageKey: string;
-  value: string;
-  configured: boolean;
-  clear: boolean;
-  onChange: (value: string) => void;
-  onClearChange: (value: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="grid gap-2">
-      <label className="block min-w-0">
-        <span className="mb-1 block text-sm font-medium">{label}</span>
-        <Input
-          aria-label={label}
-          type="password"
-          value={value}
-          disabled={clear}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={
-            configured
-              ? t("secretConfiguredPlaceholder")
-              : t("secretEmptyPlaceholder")
-          }
-          spellCheck={false}
-          className="w-full min-w-0"
-        />
-        <span className="mt-1 block text-xs leading-5 text-kumo-subtle">
-          {storageKey}
-        </span>
-      </label>
-      {configured && (
-        <div className="rounded-lg border border-kumo-line bg-kumo-base px-3 py-2">
-          <Switch
-            label={t("clearConfiguredSecret")}
-            controlFirst={false}
-            checked={clear}
-            onCheckedChange={(checked: boolean) => onClearChange(checked)}
-          />
-        </div>
-      )}
     </div>
   );
 }

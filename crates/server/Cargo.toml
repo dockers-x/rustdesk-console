@@ -60,6 +60,8 @@ url = { workspace = true }
 lettre = { workspace = true }
 png = "0.17.16"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+age = { version = "0.11.2", default-features = false }
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

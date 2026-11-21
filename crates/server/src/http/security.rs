@@ -187,6 +187,7 @@ mod tests {
             schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(entity::login_log::Entity),
             schema.create_table_from_entity(entity::login_verification::Entity),
+            schema.create_table_from_entity(entity::totp_counter::Entity),
             schema.create_table_from_entity(entity::control_role::Entity),
             schema.create_table_from_entity(entity::device_admission::Entity),
             schema.create_table_from_entity(entity::routing_settings::Entity),
@@ -1140,7 +1141,9 @@ mod tests {
 
     #[tokio::test]
     async fn administrator_enrollment_and_totp_are_enforced_across_session_entry_points() {
-        let state = fixture().await;
+        let mut state = fixture().await;
+        let temp = tempfile::tempdir().unwrap();
+        Arc::make_mut(&mut state.config).security.totp_key_file = temp.path().join("totp.key").display().to_string();
         user::ActiveModel {
             id: Set(3),
             password: Set(crate::support::password::md5_hex(
@@ -1201,7 +1204,7 @@ mod tests {
         .await;
         assert!(setup["data"]["uri"].as_str().unwrap().contains("issuer=Example%20IT"));
         let secret = setup["data"]["secret"].as_str().unwrap();
-        let code = services::login_security::test_totp_code(secret);
+        let code = services::login_security::test_totp_code(secret, -1);
         let (_, enrolled) = json_request(
             &state,
             "POST",
@@ -1224,7 +1227,7 @@ mod tests {
         assert!(challenge["data"]["token"].is_null());
         let completion = json!({
             "secret": challenge["data"]["secret"],
-            "tfaCode": services::login_security::test_totp_code(secret),
+            "tfaCode": services::login_security::test_totp_code(secret, 0),
         });
         let (_, login) =
             json_request(&state, "POST", "/api/admin/login", completion.clone(), None).await;

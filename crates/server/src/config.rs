@@ -39,11 +39,22 @@ pub struct Config {
     pub(crate) backup: crate::services::remote_backup::Settings,
     #[serde(rename = "backup-config-file")]
     pub(crate) backup_config_file: String,
+    #[serde(rename = "storage-profiles-file")]
+    pub(crate) storage_profiles_file: String,
     pub jwt: Jwt,
     pub rustdesk: Rustdesk,
     pub proxy: Proxy,
     pub ldap: Ldap,
     pub security: Security,
+}
+
+impl Config {
+    pub(crate) fn storage_profiles_path(&self) -> std::path::PathBuf {
+        if self.storage_profiles_file.trim().is_empty() {
+            return std::path::PathBuf::from("data/storage-profiles.json");
+        }
+        std::path::PathBuf::from(self.storage_profiles_file.trim())
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -54,6 +65,15 @@ pub struct Security {
     pub allow_legacy_device_reports: bool,
     #[serde(rename = "hbbs-admission-token")]
     pub hbbs_admission_token: String,
+    #[serde(rename = "totp-key-file")]
+    pub(crate) totp_key_file: String,
+}
+
+impl Security {
+    pub(crate) fn totp_key_path(&self) -> &std::path::Path {
+        let value = self.totp_key_file.trim();
+        std::path::Path::new(if value.is_empty() { "data/totp.key" } else { value })
+    }
 }
 
 impl std::fmt::Debug for Security {
@@ -69,6 +89,7 @@ impl Default for Security {
         Self {
             allow_legacy_device_reports: true,
             hbbs_admission_token: String::new(),
+            totp_key_file: String::new(),
         }
     }
 }

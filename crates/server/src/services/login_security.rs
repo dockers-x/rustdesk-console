@@ -782,6 +782,7 @@ pub struct VerifiedChallenge {
 
 pub async fn verify_login_challenge(
     db: &DatabaseConnection,
+    config: &crate::config::Config,
     secret: &str,
     email_code: Option<&str>,
     totp_code: Option<&str>,
@@ -831,9 +832,7 @@ pub async fn verify_login_challenge(
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| "The verification code is incorrect or has expired".to_string())?;
-            if !verify_totp(&u.tfa_secret, code) {
-                return Err("The verification code is incorrect or has expired".to_string());
-            }
+            consume_totp(db, config, &u, code).await?;
             VerificationKind::Totp
         }
         login_verification::KIND_EMAIL => {
@@ -884,43 +883,97 @@ pub fn totp_uri(username: &str, secret: &str, issuer: &str) -> String {
     format!("otpauth://totp/{label}?secret={secret}&issuer={issuer}&digits=6&period=30")
 }
 
-pub fn verify_totp(secret: &str, code: &str) -> bool {
+const INVALID_TOTP: &str = "TotpCodeInvalidOrUsed";
+
+fn totp_step(secret: &str, code: &str) -> Option<i64> {
     let code = code.trim();
-    if code.len() != TOTP_DIGITS as usize || !code.chars().all(|ch| ch.is_ascii_digit()) {
-        return false;
+    if code.len() != TOTP_DIGITS as usize || !code.bytes().all(|ch| ch.is_ascii_digit()) {
+        return None;
     }
-    let Ok(secret_bytes) = base32_decode(secret) else {
-        return false;
-    };
-    let counter = Utc::now().timestamp() / TOTP_PERIOD;
-    (-1..=1).any(|offset| totp_at(&secret_bytes, counter + offset) == code)
+    let secret_bytes = base32_decode(secret).ok()?;
+    let current = Utc::now().timestamp() / TOTP_PERIOD;
+    [current, current - 1, current + 1]
+        .into_iter()
+        .find(|step| *step >= 0 && totp_at(&secret_bytes, *step) == code)
 }
 
 #[cfg(test)]
-pub(crate) fn test_totp_code(secret: &str) -> String {
+pub(crate) fn test_totp_code(secret: &str, offset: i64) -> String {
     totp_at(
         &base32_decode(secret).unwrap(),
-        Utc::now().timestamp() / TOTP_PERIOD,
+        Utc::now().timestamp() / TOTP_PERIOD + offset,
     )
+}
+
+async fn consume_totp(
+    db: &DatabaseConnection,
+    config: &crate::config::Config,
+    account: &user::Model,
+    code: &str,
+) -> Result<(), String> {
+    let transaction = db.begin().await.map_err(|error| error.to_string())?;
+    let current = super::user::lock_account(&transaction, account.id).await
+        .map_err(|error| error.to_string())?
+        .filter(|current| current.is_enabled() && current.tfa_enabled
+            && current.tfa_secret == account.tfa_secret && current.updated_at == account.updated_at)
+        .ok_or(INVALID_TOTP)?;
+    consume_totp_in_transaction(&transaction, config, &current, code).await?;
+    transaction.commit().await.map_err(|error| error.to_string())
+}
+
+/// Call while holding the account write lock. All consumers share one counter.
+async fn consume_totp_in_transaction(
+    transaction: &sea_orm::DatabaseTransaction,
+    config: &crate::config::Config,
+    account: &user::Model,
+    code: &str,
+) -> Result<(), String> {
+    use ::entity::totp_counter;
+    let seed = crate::support::totp_vault::TotpVault::load(config, false)
+        .and_then(|vault| vault.open(account.id, &account.tfa_secret))
+        .map_err(|error| {
+            tracing::warn!(%error, user_id = account.id, "Could not read TOTP seed");
+            INVALID_TOTP
+        })?;
+    let step = totp_step(&seed, code).ok_or(INVALID_TOTP)?;
+    let row = totp_counter::Entity::find_by_id(account.id).one(transaction).await
+        .map_err(|error| error.to_string())?;
+    if row.is_some_and(|row| row.last_step >= step) {
+        return Err(INVALID_TOTP.to_string());
+    }
+    set_totp_step(transaction, account.id, step).await.map_err(|error| error.to_string())
+}
+
+async fn set_totp_step(db: &impl sea_orm::ConnectionTrait, user_id: i32, step: i64) -> Result<(), sea_orm::DbErr> {
+    use ::entity::totp_counter;
+    use sea_orm::sea_query::OnConflict;
+
+    totp_counter::Entity::insert(totp_counter::ActiveModel { user_id: Set(user_id), last_step: Set(step) })
+        .on_conflict(OnConflict::column(totp_counter::Column::UserId)
+            .update_column(totp_counter::Column::LastStep).to_owned())
+        .exec_without_returning(db).await?;
+    Ok(())
 }
 
 pub async fn enable_user_totp(
     db: &DatabaseConnection,
+    config: &crate::config::Config,
     u: &user::Model,
     secret: &str,
     code: &str,
 ) -> Result<(), String> {
-    if !base32_decode(secret).is_ok_and(|decoded| decoded.len() == 20) || !verify_totp(secret, code)
-    {
-        return Err("The verification code is incorrect or has expired".to_string());
-    }
+    let step = totp_step(secret, code).filter(|_| base32_decode(secret).is_ok_and(|decoded| decoded.len() == 20))
+        .ok_or(INVALID_TOTP)?;
+    let encrypted = crate::support::totp_vault::TotpVault::load(config, true)
+        .and_then(|vault| vault.seal(u.id, secret.trim())).map_err(|error| error.to_string())?;
     let transaction = db.begin().await.map_err(|e| e.to_string())?;
     let updated = user::Entity::update_many()
-        .col_expr(user::Column::TfaSecret, Expr::value(secret.trim()))
+        .col_expr(user::Column::TfaSecret, Expr::value(encrypted))
         .col_expr(user::Column::TfaEnabled, Expr::value(true))
         .col_expr(user::Column::UpdatedAt, Expr::value(now()))
         .filter(user::Column::Id.eq(u.id))
         .filter(user::Column::TfaEnabled.eq(false))
+        .filter(user::Column::Status.eq(user::STATUS_ENABLE))
         .filter(user::Column::Password.eq(&u.password))
         .exec(&transaction)
         .await
@@ -928,6 +981,7 @@ pub async fn enable_user_totp(
     if updated.rows_affected != 1 {
         return Err("TOTP is already configured or the account has changed".to_string());
     }
+    set_totp_step(&transaction, u.id, step).await.map_err(|e| e.to_string())?;
     super::user::revoke_credentials(&transaction, u.id)
         .await
         .map_err(|e| e.to_string())?;
@@ -936,30 +990,45 @@ pub async fn enable_user_totp(
 
 pub async fn disable_user_totp(
     db: &DatabaseConnection,
+    config: &crate::config::Config,
     u: &user::Model,
     code: Option<&str>,
 ) -> Result<(), String> {
-    let settings = login_settings(db).await.map_err(|e| e.to_string())?;
-    if u.is_admin() || u.tfa_enforced || settings.require_totp {
+    let transaction = db.begin().await.map_err(|error| error.to_string())?;
+    let current = super::user::lock_account(&transaction, u.id).await
+        .map_err(|error| error.to_string())?
+        .filter(|current| current.is_enabled() && current.tfa_secret == u.tfa_secret && current.updated_at == u.updated_at)
+        .ok_or(INVALID_TOTP)?;
+    let settings = login_settings(&transaction).await.map_err(|e| e.to_string())?;
+    if current.is_admin() || current.tfa_enforced || settings.require_totp {
         return Err("Two-factor authentication is enforced for this user".to_string());
     }
-    if u.tfa_enabled && !verify_totp(&u.tfa_secret, code.unwrap_or_default()) {
-        return Err("The verification code is incorrect or has expired".to_string());
+    if current.tfa_enabled {
+        consume_totp_in_transaction(&transaction, config, &current, code.unwrap_or_default()).await?;
     }
-    reset_user_totp(db, u).await
+    clear_totp(&transaction, current).await?;
+    transaction.commit().await.map_err(|e| e.to_string())
 }
 
 pub async fn reset_user_totp(db: &DatabaseConnection, u: &user::Model) -> Result<(), String> {
     let transaction = db.begin().await.map_err(|e| e.to_string())?;
-    let mut am: user::ActiveModel = u.clone().into();
-    am.tfa_secret = Set(String::new());
-    am.tfa_enabled = Set(false);
-    am.updated_at = Set(now());
-    am.update(&transaction).await.map_err(|e| e.to_string())?;
-    super::user::revoke_credentials(&transaction, u.id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let current = super::user::lock_account(&transaction, u.id).await
+        .map_err(|error| error.to_string())?.ok_or("UserNotFound")?;
+    clear_totp(&transaction, current).await?;
     transaction.commit().await.map_err(|e| e.to_string())
+}
+
+async fn clear_totp(transaction: &sea_orm::DatabaseTransaction, account: user::Model) -> Result<(), String> {
+    let user_id = account.id;
+    let mut row: user::ActiveModel = account.into();
+    row.tfa_secret = Set(String::new());
+    row.tfa_enabled = Set(false);
+    row.updated_at = Set(now());
+    row.update(transaction).await.map_err(|error| error.to_string())?;
+    ::entity::totp_counter::Entity::delete_by_id(user_id).exec(transaction).await
+        .map_err(|error| error.to_string())?;
+    super::user::revoke_credentials(transaction, user_id).await
+        .map_err(|error| error.to_string())
 }
 
 pub async fn update_user_login_security(
@@ -1277,6 +1346,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn account_counter_accepts_only_one_use_of_each_totp_step() {
+        let db = smtp_test_db().await;
+        let backend = db.get_database_backend();
+        let schema = Schema::new(backend);
+        for table in [
+            schema.create_table_from_entity(user::Entity),
+            schema.create_table_from_entity(::entity::totp_counter::Entity),
+        ] {
+            db.execute(backend.build(&table)).await.unwrap();
+        }
+        let temporary = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.security.totp_key_file = temporary.path().join("totp.key").display().to_string();
+        let seed = generate_totp_secret();
+        let vault = crate::support::totp_vault::TotpVault::load(&config, true).unwrap();
+        let encrypted = vault.seal(42, &seed).unwrap();
+        let account = user::ActiveModel {
+            id: Set(42),
+            status: Set(user::STATUS_ENABLE),
+            tfa_enabled: Set(true),
+            tfa_secret: Set(encrypted),
+            ..Default::default()
+        }.insert(&db).await.unwrap();
+
+        let step = Utc::now().timestamp() / TOTP_PERIOD;
+        let bytes = base32_decode(&seed).unwrap();
+        let previous = totp_at(&bytes, step - 1);
+        let current = totp_at(&bytes, step);
+        let (a, b) = tokio::join!(
+            consume_totp(&db, &config, &account, &previous),
+            consume_totp(&db, &config, &account, &previous),
+        );
+        assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+        consume_totp(&db, &config, &account, &current).await.unwrap();
+        assert!(consume_totp(&db, &config, &account, &previous).await.is_err());
+        assert!(consume_totp(&db, &config, &account, &current).await.is_err());
+        let last = ::entity::totp_counter::Entity::find_by_id(42).one(&db).await.unwrap().unwrap();
+        assert_eq!(last.last_step, step);
+    }
+
+    #[tokio::test]
     async fn login_challenges_are_single_attempt_even_when_code_is_wrong() {
         let db = smtp_test_db().await;
         let schema = Schema::new(db.get_database_backend());
@@ -1309,6 +1419,7 @@ mod tests {
         .unwrap();
         assert!(verify_login_challenge(
             &db,
+            &crate::config::Config::default(),
             "challenge",
             Some("wrong"),
             None,
@@ -1318,6 +1429,7 @@ mod tests {
         .is_err());
         assert!(verify_login_challenge(
             &db,
+            &crate::config::Config::default(),
             "challenge",
             Some("123456"),
             None,
@@ -1364,6 +1476,7 @@ mod tests {
                     .unwrap();
             assert!(verify_login_challenge(
                 &db,
+                &crate::config::Config::default(),
                 &challenge.secret,
                 None,
                 Some("invalid"),

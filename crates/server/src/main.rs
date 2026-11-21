@@ -62,7 +62,10 @@ async fn serve(cfg: config::Config, config_path: PathBuf) -> anyhow::Result<()> 
     let addr: SocketAddr = addr_str.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     services::console_audit::spawn_retention_worker(state.db.clone());
-    services::remote_backup::spawn_scheduler(state.config.clone());
+    services::remote_backup::spawn_scheduler(
+        state.config.clone(),
+        state.record_storage_config.profiles_path().to_path_buf(),
+    );
     let app = http::router::build(state);
     tracing::info!("listening on http://{addr}");
     tracing::info!(

@@ -83,6 +83,7 @@ pub async fn login(
     if !f.secret.trim().is_empty() {
         let verified = match services::login_security::verify_login_challenge(
             &state.db,
+            &state.config,
             &f.secret,
             Some(&f.verification_code),
             Some(&f.tfa_code),
@@ -98,7 +99,7 @@ pub async fn login(
             Err(e) => {
                 audit.decision("challenge", "rejected", "challenge_invalid");
                 state.limiter.record_failed_attempt(&ip);
-                return resp::fail(101, e);
+                return resp::fail(101, state.tr(&lang, &e));
             }
         };
         let user = verified.account;
@@ -1428,6 +1429,7 @@ pub async fn my_tfa_enable(
     }
     match services::login_security::enable_user_totp(
         &state.db,
+        &state.config,
         &user.user,
         f.secret.trim(),
         f.code.trim(),
@@ -1435,20 +1437,21 @@ pub async fn my_tfa_enable(
     .await
     {
         Ok(_) => resp::success(Value::Null),
-        Err(e) => resp::fail(101, e),
+        Err(e) => resp::fail(101, state.tr(&lang, &e)),
     }
 }
 
 pub async fn my_tfa_disable(
     State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
     user: BackendUser,
     audit: AuditContext,
     Json(f): Json<TfaCodeForm>,
 ) -> Response {
     audit.subject(user.user.id);
-    match services::login_security::disable_user_totp(&state.db, &user.user, Some(&f.code)).await {
+    match services::login_security::disable_user_totp(&state.db, &state.config, &user.user, Some(&f.code)).await {
         Ok(_) => resp::success(Value::Null),
-        Err(e) => resp::fail(101, e),
+        Err(e) => resp::fail(101, state.tr(&lang, &e)),
     }
 }
 
@@ -3241,7 +3244,10 @@ pub async fn record_file_delete(
     let Some(row) = row else {
         return resp::fail(101, state.tr(&lang, "ItemNotFound"));
     };
-    let storage_cfg = state.record_storage_config.get().await;
+    let storage_cfg = match state.record_storage_config.for_recording(row.storage_profile_id.as_deref()).await {
+        Ok(config) => config,
+        Err(error) => return resp::fail(101, error),
+    };
     if let Err(e) = services::record_storage::delete_object(
         &storage_cfg,
         &state.config.gin.resources_path,
@@ -3282,7 +3288,10 @@ pub async fn record_file_download(
     let Some(row) = row else {
         return resp::fail(101, state.tr(&lang, "ItemNotFound"));
     };
-    let storage_cfg = state.record_storage_config.get().await;
+    let storage_cfg = match state.record_storage_config.for_recording(row.storage_profile_id.as_deref()).await {
+        Ok(config) => config,
+        Err(error) => return resp::fail(101, error),
+    };
     match services::record_storage::read_object(
         &storage_cfg,
         &state.config.gin.resources_path,
