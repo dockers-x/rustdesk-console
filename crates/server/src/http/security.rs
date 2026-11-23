@@ -1247,5 +1247,129 @@ mod tests {
         assert_ne!(replay["code"], 0);
     }
 
+    #[tokio::test]
+    async fn trusted_browser_requires_opt_in_and_a_valid_password() {
+        use axum::http::header::{COOKIE, SET_COOKIE};
+
+        let mut state = fixture().await;
+        let temp = tempfile::tempdir().unwrap();
+        Arc::make_mut(&mut state.config).security.totp_key_file =
+            temp.path().join("totp.key").display().to_string();
+        let secret = services::login_security::generate_totp_secret();
+        let sealed = crate::support::totp_vault::TotpVault::load(&state.config, true)
+            .unwrap()
+            .seal(3, &secret)
+            .unwrap();
+        user::ActiveModel {
+            id: Set(3),
+            password: Set(crate::support::password::md5_hex(
+                "local-passwordrustdesk-api",
+            )),
+            tfa_secret: Set(sealed),
+            ..Default::default()
+        }
+        .update(&state.db)
+        .await
+        .unwrap();
+
+        async fn login(
+            state: &AppState,
+            payload: serde_json::Value,
+            cookie: Option<&str>,
+        ) -> (Option<String>, serde_json::Value) {
+            let mut request =
+                Request::post("/api/admin/login").header("content-type", "application/json");
+            if let Some(cookie) = cookie {
+                request = request.header(COOKIE, cookie);
+            }
+            let response = super::super::router::build(state.clone())
+                .oneshot(request.body(Body::from(payload.to_string())).unwrap())
+                .await
+                .unwrap();
+            let cookie = response
+                .headers()
+                .get(SET_COOKIE)
+                .map(|value| value.to_str().unwrap().to_owned());
+            let body = to_bytes(response.into_body(), 4096).await.unwrap();
+            (cookie, serde_json::from_slice(&body).unwrap())
+        }
+
+        let credentials = json!({"username": "user-3", "password": "local-password"});
+        let (cookie, challenge) = login(&state, credentials.clone(), None).await;
+        assert!(cookie.is_none());
+        assert_eq!(challenge["data"]["trust_browser"], true);
+        let (cookie, login_result) = login(
+            &state,
+            json!({
+                "secret": challenge["data"]["secret"],
+                "tfaCode": services::login_security::test_totp_code(&secret, -1),
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(login_result["code"], 0);
+        assert!(cookie.is_none());
+
+        let (_, challenge) = login(&state, credentials.clone(), None).await;
+        let (cookie, login_result) = login(
+            &state,
+            json!({
+                "secret": challenge["data"]["secret"],
+                "tfaCode": services::login_security::test_totp_code(&secret, 0),
+                "trustBrowser": true,
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(login_result["code"], 0);
+        let cookie = cookie.unwrap();
+        assert!(cookie.ends_with(
+            "Max-Age=2592000; Path=/api/admin/login; Secure; HttpOnly; SameSite=Strict"
+        ));
+        let cookie = cookie.split(';').next().unwrap();
+
+        let (renewed, result) = login(&state, credentials.clone(), Some(cookie)).await;
+        assert!(renewed.is_none());
+        let token = result["data"]["token"].as_str().unwrap();
+        let (_, response) = json_request(
+            &state,
+            "GET",
+            "/api/admin/user_token/list",
+            json!(null),
+            Some(token),
+        )
+        .await;
+        assert_eq!(response["code"], 0);
+        let (status, _) =
+            json_request(&state, "GET", "/api/user/info", json!(null), Some(token)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (_, wrong_password) = login(
+            &state,
+            json!({"username": "user-3", "password": "incorrect-password"}),
+            Some(cookie),
+        )
+        .await;
+        assert_ne!(wrong_password["code"], 0);
+
+        let (_, new_browser) = login(&state, credentials.clone(), None).await;
+        assert_eq!(new_browser["data"]["tfa_type"], "tfa_check");
+        let corrupted = format!("{cookie}x");
+        let (_, invalid) = login(&state, credentials.clone(), Some(&corrupted)).await;
+        assert_eq!(invalid["data"]["tfa_type"], "tfa_check");
+
+        services::login_security::save_login_settings(
+            &state.db,
+            services::login_security::LoginSecuritySettings {
+                allow_trusted_login_devices: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let (_, blocked) = login(&state, credentials, Some(cookie)).await;
+        assert_eq!(blocked["data"]["trust_browser"], false);
+        assert_eq!(blocked["data"]["tfa_type"], "tfa_check");
+    }
+
     use std::sync::Arc;
 }

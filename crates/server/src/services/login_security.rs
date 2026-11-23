@@ -428,17 +428,24 @@ pub async fn required_verification(
     _device: &DeviceLoginInfo,
 ) -> Result<Option<VerificationKind>, DbErr> {
     let settings = login_settings(db).await?;
-    if u.tfa_enabled && totp_required(u, &settings) {
-        return Ok(Some(VerificationKind::Totp));
+    Ok(verification_for(u, &settings))
+}
+
+pub(crate) fn verification_for(
+    u: &user::Model,
+    settings: &LoginSecuritySettings,
+) -> Option<VerificationKind> {
+    if u.tfa_enabled && totp_required(u, settings) {
+        return Some(VerificationKind::Totp);
     }
     if settings.require_email_verification || u.email_verification_enabled {
-        return Ok(Some(VerificationKind::Email));
+        return Some(VerificationKind::Email);
     }
     if settings.require_device_verification || u.login_device_verification_enabled {
         // Reported IDs/UUIDs are public identifiers, not proof of device possession.
-        return Ok(Some(VerificationKind::Email));
+        return Some(VerificationKind::Email);
     }
-    Ok(None)
+    None
 }
 
 pub async fn create_login_challenge(

@@ -287,7 +287,10 @@ impl FromRequestParts<AppState> for BackendUser {
             .ok_or_else(|| {
                 response::fail(response::CODE_NEED_LOGIN, state.tr(&lang, "NeedLogin"))
             })?;
-        use crate::services::user::{self, SessionLifetime, AUTH_CONSOLE_ADMIN, AUTH_ENROLLMENT, AUTH_TOTP};
+        use crate::services::user::{
+            self, SessionLifetime, AUTH_CONSOLE_ADMIN, AUTH_ENROLLMENT, AUTH_TOTP,
+            AUTH_TRUSTED_BROWSER,
+        };
 
         let need_login = || response::fail(response::CODE_NEED_LOGIN, state.tr(&lang, "NeedLogin"));
         let (user, ut) = user::session_by_token(&state.db, &token)
@@ -324,7 +327,7 @@ impl FromRequestParts<AppState> for BackendUser {
             }
         } else {
             let permitted = match ut.auth_level {
-                AUTH_TOTP => true,
+                AUTH_TOTP | AUTH_TRUSTED_BROWSER => true,
                 AUTH_CONSOLE_ADMIN => !user::console_requires_totp(&state.db, &user)
                     .await
                     .unwrap_or(true),
@@ -485,12 +488,8 @@ fn no_access(parts: &Parts, state: &AppState) -> Response {
 }
 
 fn console_access(parts: &mut Parts, backend: &BackendUser) -> Option<ConsoleAccess> {
-    use crate::services::user::{AUTH_CONSOLE_ADMIN, AUTH_TOTP};
     if backend.user.is_admin() {
-        if !matches!(
-            backend.user_token.auth_level,
-            AUTH_TOTP | AUTH_CONSOLE_ADMIN
-        ) {
+        if !crate::services::user::is_console_admin_auth(backend.user_token.auth_level) {
             return None;
         }
         if let Some(audit) = parts
@@ -543,9 +542,8 @@ impl FromRequestParts<AppState> for AdminUser {
     ) -> Result<Self, Self::Rejection> {
         let lang = header(parts, "Accept-Language").unwrap_or_default();
         let backend = BackendUser::from_request_parts(parts, state).await?;
-        use crate::services::user::{AUTH_CONSOLE_ADMIN, AUTH_TOTP};
         if !backend.user.is_admin()
-            || !matches!(backend.user_token.auth_level, AUTH_TOTP | AUTH_CONSOLE_ADMIN)
+            || !crate::services::user::is_console_admin_auth(backend.user_token.auth_level)
         {
             return Err(response::fail(
                 response::CODE_NO_ACCESS,

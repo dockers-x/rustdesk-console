@@ -3948,6 +3948,7 @@ pub(crate) mod deployment_tests {
                 AcceptLang("en".into()),
                 ClientIp("test-ip".into()),
                 crate::http::security_audit::AuditContext::default(),
+                HeaderMap::new(),
                 Json(crate::http::admin::LoginForm {
                     secret: secret.into(),
                     ..Default::default()

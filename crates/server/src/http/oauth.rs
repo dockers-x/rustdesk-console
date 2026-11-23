@@ -442,7 +442,7 @@ pub async fn admin_oidc_auth_query(
             super::admin::console_session_response(&audit, method, &u, ut)
         }
         Ok(OidcLogin::Challenge(u, challenge)) => {
-            super::admin::console_challenge_response(&u, challenge)
+            super::admin::console_challenge_response(&u, challenge, false)
         }
         Err(error) => error.response(&state, &lang),
     }

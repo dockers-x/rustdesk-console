@@ -687,6 +687,14 @@ export function SystemSettingsPage() {
                     }
                   />
                   <SecuritySwitch
+                    title={t("allowTrustedLoginDevices")}
+                    description={t("allowTrustedLoginDevicesHint")}
+                    checked={loginForm.allow_trusted_login_devices}
+                    onCheckedChange={(value) =>
+                      updateLoginSecurity("allow_trusted_login_devices", value)
+                    }
+                  />
+                  <SecuritySwitch
                     title={t("allowRegistration")}
                     description={t("allowRegistrationHint")}
                     checked={loginForm.allow_registration}

@@ -110,6 +110,12 @@ pub async fn console_requires_totp(
 pub const AUTH_TOTP: i32 = 1;
 pub const AUTH_ENROLLMENT: i32 = 2;
 pub const AUTH_CONSOLE_ADMIN: i32 = 3;
+pub const AUTH_TRUSTED_BROWSER: i32 = 4;
+
+pub fn is_console_admin_auth(level: i32) -> bool {
+    matches!(level, AUTH_TOTP | AUTH_CONSOLE_ADMIN | AUTH_TRUSTED_BROWSER)
+}
+
 const ADMIN_SESSION_SECONDS: i64 = 12 * 60 * 60;
 const ENROLLMENT_SECONDS: i64 = 10 * 60;
 
@@ -133,7 +139,7 @@ pub async fn session_by_token(
     };
     if !u.is_enabled()
         || (ut.auth_level == AUTH_CONSOLE_ADMIN && (!u.is_admin() || u.tfa_enabled))
-        || (ut.auth_level == AUTH_TOTP && !u.tfa_enabled)
+        || (matches!(ut.auth_level, AUTH_TOTP | AUTH_TRUSTED_BROWSER) && !u.tfa_enabled)
         || (ut.auth_level == AUTH_ENROLLMENT && u.tfa_enabled)
         || (u.is_admin()
             && ut.created_at.is_none_or(|created| {
@@ -164,6 +170,7 @@ pub enum LoginProof {
     SingleFactor,
     ConsoleAdministrator,
     Totp,
+    TrustedBrowser { expires_at: i64 },
     Enrollment,
     WebSso { session_id: i32 },
 }
@@ -269,8 +276,17 @@ pub async fn login(
                 && current.updated_at == u.updated_at
         })
         .ok_or_else(|| DbErr::Custom("account changed during authentication".into()))?;
+    let now_ts = Utc::now().timestamp();
     let (auth_level, source_expiry) = match event.proof {
         LoginProof::Totp if current.tfa_enabled => (AUTH_TOTP, None),
+        LoginProof::TrustedBrowser { expires_at }
+            if current.tfa_enabled
+                && !current.must_change_password
+                && event.client == login_log::CLIENT_WEB_ADMIN
+                && expires_at > now_ts =>
+        {
+            (AUTH_TRUSTED_BROWSER, Some(expires_at))
+        }
         LoginProof::Enrollment if !current.tfa_enabled => (AUTH_ENROLLMENT, None),
         LoginProof::SingleFactor if !requires_totp(&transaction, &current).await? => (0, None),
         LoginProof::ConsoleAdministrator
@@ -287,7 +303,6 @@ pub async fn login(
         }
         _ => return Err(DbErr::Custom("TOTP is required".into())),
     };
-    let now_ts = Utc::now().timestamp();
     let mut expires = token_expire_timestamp(config);
     if auth_level == AUTH_ENROLLMENT {
         expires = expires.min(now_ts + ENROLLMENT_SECONDS);
@@ -297,7 +312,7 @@ pub async fn login(
     if let Some(source_expiry) = source_expiry {
         expires = expires.min(source_expiry);
     }
-    let token = if auth_level == AUTH_CONSOLE_ADMIN {
+    let token = if matches!(auth_level, AUTH_CONSOLE_ADMIN | AUTH_TRUSTED_BROWSER) {
         // Only the Console accepts this token. Do not emit a native JWT.
         uuid::Uuid::new_v4().to_string()
     } else {

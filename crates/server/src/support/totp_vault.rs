@@ -41,15 +41,19 @@ impl TotpVault {
     }
 
     pub(crate) fn seal(&self, user_id: i32, secret: &str) -> anyhow::Result<String> {
+        self.seal_bound(&user_id.to_be_bytes(), secret)
+    }
+
+    pub(crate) fn seal_bound(&self, binding: &[u8], value: &str) -> anyhow::Result<String> {
         let mut nonce = [0; NONCE_LEN];
         SystemRandom::new()
             .fill(&mut nonce)
             .map_err(|_| anyhow!("Could not generate a TOTP encryption nonce"))?;
-        let mut data = secret.as_bytes().to_vec();
+        let mut data = value.as_bytes().to_vec();
         self.0
             .seal_in_place_append_tag(
                 Nonce::assume_unique_for_key(nonce),
-                Aad::from(user_id.to_be_bytes()),
+                Aad::from(binding),
                 &mut data,
             )
             .map_err(|_| anyhow!("Could not encrypt the TOTP secret"))?;
@@ -59,6 +63,10 @@ impl TotpVault {
     }
 
     pub(crate) fn open(&self, user_id: i32, value: &str) -> anyhow::Result<String> {
+        self.open_bound(&user_id.to_be_bytes(), value)
+    }
+
+    pub(crate) fn open_bound(&self, binding: &[u8], value: &str) -> anyhow::Result<String> {
         let payload = value
             .strip_prefix(FORMAT)
             .context("Invalid encrypted TOTP secret")?;
@@ -71,7 +79,7 @@ impl TotpVault {
             .map_err(|_| anyhow!("Invalid TOTP encryption nonce"))?;
         let secret = self
             .0
-            .open_in_place(nonce, Aad::from(user_id.to_be_bytes()), data)
+            .open_in_place(nonce, Aad::from(binding), data)
             .map_err(|_| anyhow!("Could not decrypt the TOTP secret with the configured key"))?;
         Ok(std::str::from_utf8(secret)
             .context("Invalid TOTP secret")?

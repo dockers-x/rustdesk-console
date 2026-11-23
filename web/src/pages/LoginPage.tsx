@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@cloudflare/kumo/components/button";
+import { Checkbox } from "@cloudflare/kumo/components/checkbox";
 import { Input } from "@cloudflare/kumo/components/input";
 import { InlineMessage } from "../components/InlineMessage";
 import { LanguageSelect } from "../components/LanguageSelect";
@@ -23,6 +24,7 @@ interface LoginResult {
   must_change_password?: boolean;
   type?: string;
   tfa_type?: string;
+  trust_browser?: boolean;
   secret?: string;
   route_names?: string[];
   user?: {
@@ -49,6 +51,7 @@ interface SetupStatus {
 interface LoginChallenge {
   secret: string;
   tfaType: string;
+  canTrustBrowser: boolean;
   username?: string;
   email?: string;
 }
@@ -109,6 +112,7 @@ export function LoginPage() {
   const [setupConfirmPassword, setSetupConfirmPassword] = useState("");
   const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const [verificationCode, setVerificationCode] = useState("");
+  const [trustBrowser, setTrustBrowser] = useState(false);
   const [resetStep, setResetStep] = useState<PasswordResetStep>("idle");
   const [resetAccount, setResetAccount] = useState("");
   const [resetSecret, setResetSecret] = useState("");
@@ -152,10 +156,12 @@ export function LoginPage() {
     setChallenge({
       secret: res.secret,
       tfaType: res.tfa_type || "email_check",
+      canTrustBrowser: res.trust_browser === true && window.isSecureContext,
       username: res.user?.username || username,
       email: res.user?.email,
     });
     setVerificationCode("");
+    setTrustBrowser(false);
     setMessage(t(res.tfa_type === "tfa_check" ? "totpChallengeHint" : "emailChallengeHint"));
     return true;
   };
@@ -296,6 +302,7 @@ export function LoginPage() {
         secret: challenge.secret,
         verificationCode: isTotp ? "" : code,
         tfaCode: isTotp ? code : "",
+        trustBrowser: isTotp && challenge.canTrustBrowser && trustBrowser,
         platform: platformName(),
       });
       finishLogin(res, "/overview");
@@ -310,6 +317,7 @@ export function LoginPage() {
   const resetChallenge = () => {
     setChallenge(null);
     setVerificationCode("");
+    setTrustBrowser(false);
     setMessage("");
     setError("");
   };
@@ -634,6 +642,20 @@ export function LoginPage() {
                       }}
                     />
                   </label>
+                  {challenge.canTrustBrowser && (
+                    <div className="space-y-1">
+                      <Checkbox
+                        label={t("trustThisBrowser")}
+                        aria-describedby="trust-browser-hint"
+                        checked={trustBrowser}
+                        onCheckedChange={setTrustBrowser}
+                        disabled={loading}
+                      />
+                      <p id="trust-browser-hint" className="pl-6 text-sm text-kumo-subtle">
+                        {t("trustThisBrowserHint")}
+                      </p>
+                    </div>
+                  )}
                   {message && (
                     <InlineMessage tone="success">{message}</InlineMessage>
                   )}

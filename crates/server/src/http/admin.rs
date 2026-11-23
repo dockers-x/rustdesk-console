@@ -4,7 +4,7 @@
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::{Extension, Json};
 use sea_orm::Set;
@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use entity::{group, peer, user};
 
+use crate::http::browser_trust;
 use crate::http::middleware::{AcceptLang, AdminUser, AuditReader, BackendUser, ClientIp, DeviceAccess};
 use crate::http::payloads::AdminLoginPayload;
 use crate::http::response as resp;
@@ -60,6 +61,8 @@ pub struct LoginForm {
     pub verification_code: String,
     #[serde(default, rename = "tfaCode")]
     pub tfa_code: String,
+    #[serde(default, rename = "trustBrowser")]
+    pub trust_browser: bool,
     #[serde(default)]
     pub secret: String,
 }
@@ -69,6 +72,7 @@ pub async fn login(
     AcceptLang(lang): AcceptLang,
     ClientIp(ip): ClientIp,
     audit: AuditContext,
+    headers: HeaderMap,
     Json(f): Json<LoginForm>,
 ) -> Response {
     if state.config.app.disable_pwd_login && f.secret.trim().is_empty() {
@@ -110,6 +114,10 @@ pub async fn login(
             audit.decision(method, "rejected", "account_disabled");
             return resp::fail(101, state.tr(&lang, "UserDisabled"));
         }
+        let trust_browser = f.trust_browser
+            && !verified.federated
+            && verified.kind == VerificationKind::Totp
+            && device.client_type == entity::login_log::CLIENT_WEB_ADMIN;
         let proof = if verified.kind == VerificationKind::Email {
             match console_login_proof(&state, &user).await {
                 Ok(proof) => proof,
@@ -150,7 +158,22 @@ pub async fn login(
             }
         };
         state.limiter.remove_attempts(&ip);
-        return console_session_response(&audit, method, &user, ut);
+        let mut response = console_session_response(&audit, method, &user, ut);
+        if trust_browser
+            && services::login_security::login_settings(&state.db)
+                .await
+                .is_ok_and(|settings| browser_trust::allowed(&user, &settings))
+        {
+            match browser_trust::issue(&state.config, &user) {
+                Ok(cookie) => {
+                    response.headers_mut().append(header::SET_COOKIE, cookie);
+                }
+                Err(error) => {
+                    tracing::warn!(user_id = user.id, %error, "could not remember browser")
+                }
+            }
+        }
+        return response;
     }
     if !(2..=256).contains(&f.username.len()) || f.password.len() < 4 {
         audit.decision("password", "rejected", "invalid_input");
@@ -206,8 +229,21 @@ pub async fn login(
         ip: ip.clone(),
         auto_login: true,
     };
-    match services::login_security::required_verification(&state.db, &user, &device).await {
-        Ok(Some(kind)) => {
+    let settings = match services::login_security::login_settings(&state.db).await {
+        Ok(settings) => settings,
+        Err(_) => {
+            audit.decision("password", "error", "policy_unavailable");
+            return resp::fail(101, state.tr(&lang, "OperationFailed"));
+        }
+    };
+    let trust_allowed = browser_trust::allowed(&user, &settings);
+    let trusted_until = trust_allowed
+        .then(|| browser_trust::expires_at(&headers, &state.config, &user))
+        .flatten();
+    let proof = if let Some(expires_at) = trusted_until {
+        LoginProof::TrustedBrowser { expires_at }
+    } else {
+        if let Some(kind) = services::login_security::verification_for(&user, &settings) {
             let challenge = match services::login_security::create_login_challenge(
                 &state.db, &user, &device, kind, &lang,
             )
@@ -220,20 +256,20 @@ pub async fn login(
                 }
             };
             audit.decision("password", "pending", "challenge_issued");
-            return console_challenge_response(&user, challenge);
+            return console_challenge_response(&user, challenge, trust_allowed);
         }
-        Ok(None) => {}
-        Err(_) => {
-            audit.decision("password", "error", "policy_unavailable");
-            return resp::fail(101, state.tr(&lang, "OperationFailed"));
+        match console_login_proof(&state, &user).await {
+            Ok(proof) => proof,
+            Err(message) => {
+                audit.decision("password", "error", "policy_unavailable");
+                return resp::fail(101, message);
+            }
         }
-    }
-    let proof = match console_login_proof(&state, &user).await {
-        Ok(proof) => proof,
-        Err(message) => {
-            audit.decision("password", "error", "policy_unavailable");
-            return resp::fail(101, message);
-        }
+    };
+    let method = if trusted_until.is_some() {
+        "password_trusted_browser"
+    } else {
+        "password"
     };
     let ut = match services::user::login(
         &state.db,
@@ -254,12 +290,12 @@ pub async fn login(
     {
         Ok(ut) => ut,
         Err(_) => {
-            audit.decision("password", "error", "session_issue_failed");
+            audit.decision(method, "error", "session_issue_failed");
             return resp::fail(101, state.tr(&lang, "OperationFailed"));
         }
     };
     state.limiter.remove_attempts(&ip);
-    console_session_response(&audit, "password", &user, ut)
+    console_session_response(&audit, method, &user, ut)
 }
 
 pub(super) fn challenge_method(federated: bool, kind: VerificationKind) -> &'static str {
@@ -287,11 +323,13 @@ pub(super) async fn console_login_proof(
 pub(super) fn console_challenge_response(
     user: &user::Model,
     challenge: services::login_security::LoginChallenge,
+    trust_browser: bool,
 ) -> Response {
     resp::no_store(resp::success(json!({
         "type": "email_check",
         "tfa_type": challenge.kind.response_tfa_type(),
         "secret": challenge.secret,
+        "trust_browser": trust_browser,
         "user": { "username": user.username, "email": user.email },
     })))
 }

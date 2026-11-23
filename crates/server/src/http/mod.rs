@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod api;
+mod browser_trust;
 mod console_audit;
 mod connection_grant;
 mod remote_backup;
