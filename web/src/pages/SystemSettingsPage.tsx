@@ -54,11 +54,13 @@ interface AdminConfigForm {
 }
 interface LoginSecuritySettings {
   require_totp: boolean;
+  require_admin_totp: boolean;
   new_user_require_totp: boolean;
   totp_issuer: string;
   require_email_verification: boolean;
   require_device_verification: boolean;
   allow_trusted_login_devices: boolean;
+  browser_trust_days: 7 | 30;
   allow_registration: boolean;
 }
 interface EmailSettingsView {
@@ -99,11 +101,13 @@ const emptyForm: AdminConfigForm = {
 };
 const emptyLoginSecurity: LoginSecuritySettings = {
   require_totp: false,
+  require_admin_totp: true,
   new_user_require_totp: false,
   totp_issuer: "",
   require_email_verification: false,
   require_device_verification: false,
   allow_trusted_login_devices: true,
+  browser_trust_days: 30,
   allow_registration: false,
 };
 const emptyEmailForm: EmailSettingsForm = {
@@ -671,6 +675,12 @@ export function SystemSettingsPage() {
                     onCheckedChange={(value) => updateLoginSecurity("new_user_require_totp", value)}
                   />
                   <SecuritySwitch
+                    title={t("requireAdminTotp")}
+                    description={t("requireAdminTotpHint")}
+                    checked={loginForm.require_admin_totp}
+                    onCheckedChange={(value) => updateLoginSecurity("require_admin_totp", value)}
+                  />
+                  <SecuritySwitch
                     title={t("requireEmailVerification")}
                     description={t("requireEmailVerificationHint")}
                     checked={loginForm.require_email_verification}
@@ -678,6 +688,19 @@ export function SystemSettingsPage() {
                       updateLoginSecurity("require_email_verification", value)
                     }
                   />
+                  <label className="grid gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 py-3 text-sm">
+                    <span className="font-medium">{t("browserTrustDuration")}</span>
+                    <select
+                      className="w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 text-kumo-default sm:max-w-40"
+                      value={loginForm.browser_trust_days}
+                      disabled={!loginForm.allow_trusted_login_devices}
+                      onChange={(event) => updateLoginSecurity("browser_trust_days", event.target.value === "7" ? 7 : 30)}
+                    >
+                      <option value="7">{t("browserTrustDays", { days: 7 })}</option>
+                      <option value="30">{t("browserTrustDays", { days: 30 })}</option>
+                    </select>
+                    <span className="text-kumo-subtle">{t("browserTrustDurationHint")}</span>
+                  </label>
                   <SecuritySwitch
                     title={t("requireDeviceVerification")}
                     description={t("requireDeviceVerificationHint")}

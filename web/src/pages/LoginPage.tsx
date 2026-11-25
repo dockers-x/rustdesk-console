@@ -25,6 +25,7 @@ interface LoginResult {
   type?: string;
   tfa_type?: string;
   trust_browser?: boolean;
+  trust_browser_days?: number | null;
   secret?: string;
   route_names?: string[];
   user?: {
@@ -52,6 +53,7 @@ interface LoginChallenge {
   secret: string;
   tfaType: string;
   canTrustBrowser: boolean;
+  trustDays: number;
   username?: string;
   email?: string;
 }
@@ -113,6 +115,7 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const [verificationCode, setVerificationCode] = useState("");
   const [trustBrowser, setTrustBrowser] = useState(false);
+  const [useVerificationCode, setUseVerificationCode] = useState(false);
   const [resetStep, setResetStep] = useState<PasswordResetStep>("idle");
   const [resetAccount, setResetAccount] = useState("");
   const [resetSecret, setResetSecret] = useState("");
@@ -157,6 +160,7 @@ export function LoginPage() {
       secret: res.secret,
       tfaType: res.tfa_type || "email_check",
       canTrustBrowser: res.trust_browser === true && window.isSecureContext,
+      trustDays: res.trust_browser_days ?? 30,
       username: res.user?.username || username,
       email: res.user?.email,
     });
@@ -269,6 +273,7 @@ export function LoginPage() {
         password,
         captcha,
         captchaId: captchaInfo?.id ?? "",
+        useVerificationCode,
         platform: platformName(),
       });
       if (beginVerification(res)) return;
@@ -645,7 +650,7 @@ export function LoginPage() {
                   {challenge.canTrustBrowser && (
                     <div className="space-y-1">
                       <Checkbox
-                        label={t("trustThisBrowser")}
+                        label={t("trustThisBrowser", { days: challenge.trustDays })}
                         aria-describedby="trust-browser-hint"
                         checked={trustBrowser}
                         onCheckedChange={setTrustBrowser}
@@ -870,6 +875,10 @@ export function LoginPage() {
                     </button>
                   </div>
                 </label>
+              )}
+              {setupChecked && !setupMode && resetStep === "idle" && !challenge && !options.disable_pwd && window.isSecureContext && (
+                <Checkbox label={t("useVerificationCode")} checked={useVerificationCode}
+                  onCheckedChange={setUseVerificationCode} disabled={loading} />
               )}
               {setupChecked && !setupMode && resetStep === "idle" && !challenge && (
                 <>

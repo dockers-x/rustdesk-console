@@ -91,9 +91,6 @@ pub async fn info_by_access_token(
 }
 
 pub async fn requires_totp(db: &impl ConnectionTrait, user: &user::Model) -> Result<bool, DbErr> {
-    if user.is_admin() {
-        return Ok(true);
-    }
     console_requires_totp(db, user).await
 }
 
@@ -104,7 +101,8 @@ pub async fn console_requires_totp(
     if user.tfa_enabled || user.tfa_enforced {
         return Ok(true);
     }
-    Ok(login_security::login_settings(db).await?.require_totp)
+    let settings = login_security::login_settings(db).await?;
+    Ok(login_security::totp_enforced(user, &settings))
 }
 
 pub const AUTH_TOTP: i32 = 1;
@@ -165,12 +163,12 @@ pub fn generate_token(jwt: &Jwt, u: &user::Model) -> String {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoginProof {
     SingleFactor,
     ConsoleAdministrator,
     Totp,
-    TrustedBrowser { expires_at: i64 },
+    TrustedBrowser { id: String },
     Enrollment,
     WebSso { session_id: i32 },
 }
@@ -277,15 +275,20 @@ pub async fn login(
         })
         .ok_or_else(|| DbErr::Custom("account changed during authentication".into()))?;
     let now_ts = Utc::now().timestamp();
+    let mut trusted_browser_id = None;
     let (auth_level, source_expiry) = match event.proof {
         LoginProof::Totp if current.tfa_enabled => (AUTH_TOTP, None),
-        LoginProof::TrustedBrowser { expires_at }
-            if current.tfa_enabled
-                && !current.must_change_password
-                && event.client == login_log::CLIENT_WEB_ADMIN
-                && expires_at > now_ts =>
-        {
-            (AUTH_TRUSTED_BROWSER, Some(expires_at))
+        LoginProof::TrustedBrowser { id } if event.client == login_log::CLIENT_WEB_ADMIN => {
+            let settings = login_security::login_settings(&transaction).await?;
+            if !super::browser_trust::allowed(&current, &settings) {
+                return Err(DbErr::Custom("Browser trust is disabled".into()));
+            }
+            let grant = super::browser_trust::find(&transaction, &current, &id)
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound("Trusted browser".into()))?;
+            super::browser_trust::mark_used(&transaction, &id, now_ts).await?;
+            trusted_browser_id = Some(id);
+            (AUTH_TRUSTED_BROWSER, Some(grant.expires_at))
         }
         LoginProof::Enrollment if !current.tfa_enabled => (AUTH_ENROLLMENT, None),
         LoginProof::SingleFactor if !requires_totp(&transaction, &current).await? => (0, None),
@@ -326,6 +329,7 @@ pub async fn login(
         expired_at: Set(expires),
         auth_level: Set(auth_level),
         renewable: Set(source_expiry.is_none()),
+        trusted_browser_id: Set(trusted_browser_id),
         created_at: Set(now()),
         updated_at: Set(now()),
         ..Default::default()
@@ -338,7 +342,11 @@ pub async fn login(
         device_id: Set(event.device_id),
         uuid: Set(event.uuid),
         ip: Set(event.ip),
-        r#type: Set(event.login_type),
+        r#type: Set(if auth_level == AUTH_TRUSTED_BROWSER {
+            login_log::TYPE_TRUSTED_BROWSER.to_owned()
+        } else {
+            event.login_type
+        }),
         platform: Set(event.platform),
         user_token_id: Set(ut.id),
         is_deleted: Set(0),
@@ -698,6 +706,10 @@ pub async fn update_password(
 
 /// Invalidate sessions and outstanding challenges in the credential update transaction.
 pub async fn revoke_credentials(db: &DatabaseTransaction, user_id: i32) -> Result<(), DbErr> {
+    ::entity::trusted_browser::Entity::delete_many()
+        .filter(::entity::trusted_browser::Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
     user_token::Entity::delete_many()
         .filter(user_token::Column::UserId.eq(user_id))
         .exec(db)
@@ -829,6 +841,7 @@ mod tests {
         for statement in [
             schema.create_table_from_entity(user::Entity),
             schema.create_table_from_entity(user_token::Entity),
+            schema.create_table_from_entity(::entity::trusted_browser::Entity),
             schema.create_table_from_entity(login_log::Entity),
             schema.create_table_from_entity(::entity::system_setting::Entity),
         ] {

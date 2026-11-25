@@ -32,7 +32,7 @@ async fn session(db: &DatabaseConnection, id: i32) {
         user_id: Set(id),
         token: Set(format!("token{id}")),
         auth_level: Set(if id == 1 {
-            crate::services::user::AUTH_CONSOLE_ADMIN
+            crate::services::user::AUTH_TOTP
         } else {
             0
         }),
@@ -66,6 +66,7 @@ async fn setup() -> (DatabaseConnection, Router) {
     for table in [
         schema.create_table_from_entity(user::Entity),
         schema.create_table_from_entity(user_token::Entity),
+        schema.create_table_from_entity(::entity::trusted_browser::Entity),
         schema.create_table_from_entity(group::Entity),
         schema.create_table_from_entity(collection::Entity),
         schema.create_table_from_entity(rule::Entity),
@@ -87,6 +88,7 @@ async fn setup() -> (DatabaseConnection, Router) {
             username: Set(format!("user{id}")),
             group_id: Set(if id == 4 { 20 } else { 10 }),
             is_admin: Set(Some(id == 1)),
+            tfa_enabled: Set(id == 1),
             status: Set(user::STATUS_ENABLE),
             password: Set("never returned".into()),
             ..Default::default()

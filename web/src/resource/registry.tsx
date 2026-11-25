@@ -299,6 +299,7 @@ const STRATEGY_TARGET_OPTIONS = [
 ];
 const LOGIN_TYPE_OPTIONS = [
   { label: "loginTypeAccount", value: "account" },
+  { label: "loginTypeTrustedBrowser", value: "trusted_browser" },
   { label: "loginTypeOauth", value: "oauth" },
 ];
 const LOGIN_CLIENT_OPTIONS = [
@@ -313,6 +314,8 @@ const loginTypeCol = {
     switch (String(r.type ?? "")) {
       case "account":
         return t("loginTypeAccount");
+      case "trusted_browser":
+        return t("loginTypeTrustedBrowser");
       case "oauth":
         return t("loginTypeOauth");
       default:
@@ -1060,7 +1063,19 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
     ],
     columns: [
       { key: "created_at", label: "createdAt" },
-      { key: "action", label: "action" },
+      {
+        key: "action",
+        label: "action",
+        render: (row, t) => {
+          const action = String(row.action ?? "");
+          const labels: Record<string, string> = {
+            "login_security.trust_browser": "auditTrustBrowser",
+            "login_security.revoke_browser": "auditRevokeBrowser",
+            "login_security.revoke_all_browsers": "auditRevokeAllBrowsers",
+          };
+          return labels[action] ? t(labels[action]) : action;
+        },
+      },
       { key: "result", label: "result", render: (row, t) => t({
         success: "auditSuccess", denied: "auditDenied", failed: "auditFailed",
       }[String(row.result)] ?? String(row.result)) },
@@ -1168,6 +1183,7 @@ export const MY_RESOURCES: ResourceConfig[] = [
     name: "my_peer",
     path: "/my/peer",
     titleKey: "myPeers",
+    descriptionKey: "remoteDeviceTrustHint",
     api: "/api/admin/my/peer",
     idField: "row_id",
     canCreate: false,

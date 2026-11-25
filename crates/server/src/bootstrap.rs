@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 283;
+pub const DATABASE_VERSION: i32 = 284;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 13] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 14] {
     [
         SchemaMigration {
             version: 271,
@@ -124,6 +124,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 13] {
             version: 283,
             name: "device lookup and active connection indexes",
             apply: migration_283,
+        },
+        SchemaMigration {
+            version: 284,
+            name: "revocable Console browser trust",
+            apply: migration_284,
         },
     ]
 }
@@ -539,6 +544,41 @@ async fn create_tables(db: &impl ConnectionTrait) -> anyhow::Result<()> {
 
 fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
+}
+
+fn migration_284<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let statement = Schema::new(backend)
+            .create_table_from_entity(entity::trusted_browser::Entity)
+            .if_not_exists()
+            .to_owned();
+        db.execute(backend.build(&statement)).await?;
+        if !column_exists(db, "user_tokens", "trusted_browser_id").await? {
+            let statement = Table::alter()
+                .table(entity::user_token::Entity)
+                .add_column(
+                    ColumnDef::new(entity::user_token::Column::TrustedBrowserId).string_len(36),
+                )
+                .to_owned();
+            db.execute(backend.build(&statement)).await?;
+        }
+        create_index(
+            db,
+            "trusted_browsers",
+            "idx_trusted_browsers_user",
+            &["user_id"],
+        )
+        .await?;
+        create_index(
+            db,
+            "user_tokens",
+            "idx_user_tokens_trusted_browser",
+            &["user_id", "trusted_browser_id"],
+        )
+        .await?;
+        Ok(())
+    })
 }
 
 fn migration_283<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
@@ -1720,6 +1760,7 @@ mod tests {
                 280,
                 281,
                 282,
+                283,
                 DATABASE_VERSION
             ]
         );

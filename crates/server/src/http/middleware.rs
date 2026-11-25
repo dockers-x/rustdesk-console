@@ -9,8 +9,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use async_trait::async_trait;
 use axum::extract::{ConnectInfo, FromRequestParts, MatchedPath};
-use axum::http::{request::Parts, Method};
-use axum::response::Response;
+use axum::http::{request::Parts, Method, StatusCode};
+use axum::response::{IntoResponse, Response};
 
 use entity::{deployment_token, user, user_token};
 
@@ -238,7 +238,16 @@ impl FromRequestParts<AppState> for RustClientUser {
                 }
                 Ok(RustClientUser { user, token })
             }
-            _ => Err(response::unauthorized()),
+            Ok(None) => Err(response::unauthorized()),
+            Err(error) => {
+                // The native client discards its saved token on 400/401.
+                tracing::warn!(%error, "Could not look up native session");
+                Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(serde_json::json!({"error": "Session temporarily unavailable"})),
+                )
+                    .into_response())
+            }
         }
     }
 }
@@ -363,9 +372,12 @@ fn restricted_console_access(role: &ConsoleRole, method: &Method, path: &str) ->
     }
     match (*method == Method::GET, path) {
         (true, "/api/admin/user/current" | "/api/admin/user/mySecurity") => return true,
+        (true, "/api/admin/login/trusted-browsers") => return true,
         (
             false,
             "/api/admin/logout"
+            | "/api/admin/login/trusted-browsers/revoke-all"
+            | "/api/admin/login/trusted-browsers/:id/revoke"
             | "/api/admin/user/changeCurPwd"
             | "/api/admin/user/myTfaSetup"
             | "/api/admin/user/myTfaEnable",

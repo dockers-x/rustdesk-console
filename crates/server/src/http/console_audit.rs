@@ -160,6 +160,7 @@ mod tests {
             id: Set(id),
             username: Set(format!("user{id}")),
             is_admin: Set(Some(admin)),
+            tfa_enabled: Set(admin),
             status: Set(user::STATUS_ENABLE),
             ..Default::default()
         }
@@ -174,7 +175,7 @@ mod tests {
             user_id: Set(id),
             token: Set(format!("token{id}")),
             auth_level: Set(if admin {
-                crate::services::user::AUTH_CONSOLE_ADMIN
+                crate::services::user::AUTH_TOTP
             } else {
                 0
             }),

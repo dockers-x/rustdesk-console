@@ -45,6 +45,7 @@ pub mod strategy_assignment;
 pub mod strategy_delivery;
 pub mod system_setting;
 pub mod tag;
+pub mod trusted_browser;
 pub mod trusted_login_device;
 pub mod user;
 pub mod user_third;

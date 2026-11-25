@@ -24,6 +24,8 @@ const PASSWORD_RESET_TTL_SECS: i64 = 15 * 60;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoginSecuritySettings {
     pub require_totp: bool,
+    #[serde(default = "default_require_admin_totp")]
+    pub require_admin_totp: bool,
     #[serde(default)]
     pub new_user_require_totp: bool,
     #[serde(default)]
@@ -31,6 +33,8 @@ pub struct LoginSecuritySettings {
     pub require_email_verification: bool,
     pub require_device_verification: bool,
     pub allow_trusted_login_devices: bool,
+    #[serde(default = "default_browser_trust_days")]
+    pub browser_trust_days: u32,
     #[serde(default)]
     pub allow_registration: Option<bool>,
 }
@@ -39,14 +43,24 @@ impl Default for LoginSecuritySettings {
     fn default() -> Self {
         Self {
             require_totp: false,
+            require_admin_totp: default_require_admin_totp(),
             new_user_require_totp: false,
             totp_issuer: String::new(),
             require_email_verification: false,
             require_device_verification: false,
             allow_trusted_login_devices: true,
+            browser_trust_days: default_browser_trust_days(),
             allow_registration: None,
         }
     }
+}
+
+fn default_browser_trust_days() -> u32 {
+    30
+}
+
+fn default_require_admin_totp() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -230,6 +244,11 @@ pub async fn save_login_settings(
     db: &DatabaseConnection,
     mut settings: LoginSecuritySettings,
 ) -> Result<(), DbErr> {
+    if !matches!(settings.browser_trust_days, 7 | 30) {
+        return Err(DbErr::Custom(
+            "Choose 7 or 30 days for browser trust".into(),
+        ));
+    }
     let issuer = settings.totp_issuer.trim();
     if issuer.chars().count() > 80 || issuer.contains(':') || issuer.chars().any(char::is_control) {
         return Err(DbErr::Custom(
@@ -419,7 +438,11 @@ pub async fn send_test_email(
 }
 
 pub fn totp_required(u: &user::Model, settings: &LoginSecuritySettings) -> bool {
-    u.is_admin() || u.tfa_enabled || u.tfa_enforced || settings.require_totp
+    u.tfa_enabled || totp_enforced(u, settings)
+}
+
+pub fn totp_enforced(u: &user::Model, settings: &LoginSecuritySettings) -> bool {
+    (u.is_admin() && settings.require_admin_totp) || u.tfa_enforced || settings.require_totp
 }
 
 pub async fn required_verification(
@@ -1007,7 +1030,7 @@ pub async fn disable_user_totp(
         .filter(|current| current.is_enabled() && current.tfa_secret == u.tfa_secret && current.updated_at == u.updated_at)
         .ok_or(INVALID_TOTP)?;
     let settings = login_settings(&transaction).await.map_err(|e| e.to_string())?;
-    if current.is_admin() || current.tfa_enforced || settings.require_totp {
+    if totp_enforced(&current, &settings) {
         return Err("Two-factor authentication is enforced for this user".to_string());
     }
     if current.tfa_enabled {

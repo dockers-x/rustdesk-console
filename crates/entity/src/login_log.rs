@@ -13,6 +13,7 @@ pub fn is_native_client(client: &str) -> bool {
 
 pub const TYPE_ACCOUNT: &str = "account";
 pub const TYPE_OAUTH: &str = "oauth";
+pub const TYPE_TRUSTED_BROWSER: &str = "trusted_browser";
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "login_logs")]

@@ -195,6 +195,7 @@ mod tests {
             schema.create_table_from_entity(entity::address_book_trash::Entity),
             schema.create_table_from_entity(entity::strategy_assignment::Entity),
             schema.create_table_from_entity(entity::trusted_login_device::Entity),
+            schema.create_table_from_entity(entity::trusted_browser::Entity),
             schema.create_table_from_entity(entity::audit_conn::Entity),
             schema.create_table_from_entity(entity::share_record::Entity),
             schema.create_table_from_entity(entity::tag::Entity),
@@ -1101,6 +1102,16 @@ mod tests {
         .await;
         assert_ne!(legacy["code"], 0, "{legacy}");
 
+        services::login_security::save_login_settings(
+            &state.db,
+            services::login_security::LoginSecuritySettings {
+                require_admin_totp: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
         let (_, login) = json_request(
             &state, "POST", "/api/admin/login",
             json!({"username":"user-3", "password":"local-password"}), None,
@@ -1295,9 +1306,19 @@ mod tests {
         }
 
         let credentials = json!({"username": "user-3", "password": "local-password"});
+        services::login_security::save_login_settings(
+            &state.db,
+            services::login_security::LoginSecuritySettings {
+                browser_trust_days: 7,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let (cookie, challenge) = login(&state, credentials.clone(), None).await;
         assert!(cookie.is_none());
         assert_eq!(challenge["data"]["trust_browser"], true);
+        assert_eq!(challenge["data"]["trust_browser_days"], 7);
         let (cookie, login_result) = login(
             &state,
             json!({
@@ -1323,9 +1344,8 @@ mod tests {
         .await;
         assert_eq!(login_result["code"], 0);
         let cookie = cookie.unwrap();
-        assert!(cookie.ends_with(
-            "Max-Age=2592000; Path=/api/admin/login; Secure; HttpOnly; SameSite=Strict"
-        ));
+        assert!(cookie
+            .ends_with("Max-Age=604800; Path=/api/admin/login; Secure; HttpOnly; SameSite=Strict"));
         let cookie = cookie.split(';').next().unwrap();
 
         let (renewed, result) = login(&state, credentials.clone(), Some(cookie)).await;
@@ -1340,6 +1360,12 @@ mod tests {
         )
         .await;
         assert_eq!(response["code"], 0);
+        let rows = entity::login_log::Entity::find()
+            .filter(entity::login_log::Column::Type.eq(entity::login_log::TYPE_TRUSTED_BROWSER))
+            .all(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
         let (status, _) =
             json_request(&state, "GET", "/api/user/info", json!(null), Some(token)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -1351,11 +1377,34 @@ mod tests {
         .await;
         assert_ne!(wrong_password["code"], 0);
 
-        let (_, new_browser) = login(&state, credentials.clone(), None).await;
-        assert_eq!(new_browser["data"]["tfa_type"], "tfa_check");
+        let mut verify_again = credentials.clone();
+        verify_again["useVerificationCode"] = json!(true);
+        let (_, fresh) = login(&state, verify_again, Some(cookie)).await;
+        assert_eq!(fresh["data"]["tfa_type"], "tfa_check");
         let corrupted = format!("{cookie}x");
         let (_, invalid) = login(&state, credentials.clone(), Some(&corrupted)).await;
         assert_eq!(invalid["data"]["tfa_type"], "tfa_check");
+
+        let list = super::super::router::build(state.clone())
+            .oneshot(
+                Request::get("/api/admin/login/trusted-browsers")
+                    .header("api-token", token)
+                    .header(COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list: serde_json::Value =
+            serde_json::from_slice(&to_bytes(list.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(list["data"][0]["current"], true);
+        let id = list["data"][0]["id"].as_str().unwrap();
+        assert_eq!(
+            list["data"][0]["expires_at"].as_i64().unwrap()
+                - list["data"][0]["created_at"].as_i64().unwrap(),
+            7 * 86400
+        );
+        assert!(list["data"][0]["account_binding"].is_null());
 
         services::login_security::save_login_settings(
             &state.db,
@@ -1369,6 +1418,132 @@ mod tests {
         let (_, blocked) = login(&state, credentials, Some(cookie)).await;
         assert_eq!(blocked["data"]["trust_browser"], false);
         assert_eq!(blocked["data"]["tfa_type"], "tfa_check");
+
+        let (_, other) = json_request(
+            &state,
+            "POST",
+            &format!("/api/admin/login/trusted-browsers/{id}/revoke"),
+            json!({"end_sessions": true}),
+            Some("token-1"),
+        )
+        .await;
+        assert_eq!(other["code"], 0);
+        assert!(services::user::session_by_token(&state.db, token)
+            .await
+            .unwrap()
+            .is_some());
+        let (_, revoked) = json_request(
+            &state,
+            "POST",
+            &format!("/api/admin/login/trusted-browsers/{id}/revoke"),
+            json!({"end_sessions": true}),
+            Some(token),
+        )
+        .await;
+        assert_eq!(revoked["code"], 0);
+        assert!(services::user::session_by_token(&state.db, token)
+            .await
+            .unwrap()
+            .is_none());
+        let enrolled = login_result["data"]["token"].as_str().unwrap();
+        assert!(services::user::session_by_token(&state.db, enrolled)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(entity::trusted_browser::Entity::find_by_id(id)
+            .one(&state.db)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn administrator_can_disable_totp_only_when_no_policy_requires_it() {
+        let mut state = fixture().await;
+        let temp = tempfile::tempdir().unwrap();
+        Arc::make_mut(&mut state.config).security.totp_key_file =
+            temp.path().join("totp.key").display().to_string();
+        let secret = services::login_security::generate_totp_secret();
+        let sealed = crate::support::totp_vault::TotpVault::load(&state.config, true)
+            .unwrap()
+            .seal(3, &secret)
+            .unwrap();
+        user::ActiveModel {
+            id: Set(3),
+            tfa_secret: Set(sealed),
+            ..Default::default()
+        }
+        .update(&state.db)
+        .await
+        .unwrap();
+        let set_policy = |require_admin_totp, require_totp| {
+            services::login_security::save_login_settings(
+                &state.db,
+                services::login_security::LoginSecuritySettings {
+                    require_admin_totp,
+                    require_totp,
+                    ..Default::default()
+                },
+            )
+        };
+        assert!(
+            services::login_security::login_settings(&state.db)
+                .await
+                .unwrap()
+                .require_admin_totp
+        );
+        let code = json!({"code": services::login_security::test_totp_code(&secret, 0)});
+        let disable = || {
+            json_request(
+                &state,
+                "POST",
+                "/api/admin/user/myTfaDisable",
+                code.clone(),
+                Some("token-3"),
+            )
+        };
+        assert_ne!(disable().await.1["code"], 0);
+        set_policy(false, true).await.unwrap();
+        assert_ne!(disable().await.1["code"], 0);
+        set_policy(false, false).await.unwrap();
+        assert_eq!(disable().await.1["code"], 0);
+        let account = user::Entity::find_by_id(3)
+            .one(&state.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!account.tfa_enabled && account.tfa_secret.is_empty());
+        assert!(!services::user::requires_totp(&state.db, &account)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn native_session_lookup_error_is_not_an_invalid_session() {
+        let state = fixture().await;
+        let (status, _) = json_request(
+            &state,
+            "POST",
+            "/api/currentUser",
+            json!({}),
+            Some("missing"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        state
+            .db
+            .execute_unprepared("DROP TABLE user_tokens")
+            .await
+            .unwrap();
+        let (status, _) = json_request(
+            &state,
+            "POST",
+            "/api/currentUser",
+            json!({}),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     use std::sync::Arc;

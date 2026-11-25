@@ -63,6 +63,8 @@ pub struct LoginForm {
     pub tfa_code: String,
     #[serde(default, rename = "trustBrowser")]
     pub trust_browser: bool,
+    #[serde(default, rename = "useVerificationCode")]
+    pub use_verification_code: bool,
     #[serde(default)]
     pub secret: String,
 }
@@ -158,15 +160,14 @@ pub async fn login(
             }
         };
         state.limiter.remove_attempts(&ip);
+        let session_id = ut.id;
         let mut response = console_session_response(&audit, method, &user, ut);
-        if trust_browser
-            && services::login_security::login_settings(&state.db)
-                .await
-                .is_ok_and(|settings| browser_trust::allowed(&user, &settings))
-        {
-            match browser_trust::issue(&state.config, &user) {
+        if trust_browser {
+            match remember_browser(&state, &headers, &user, session_id).await {
                 Ok(cookie) => {
                     response.headers_mut().append(header::SET_COOKIE, cookie);
+                    audit.subject(user.id);
+                    audit.management("login_security.trust_browser");
                 }
                 Err(error) => {
                     tracing::warn!(user_id = user.id, %error, "could not remember browser")
@@ -236,12 +237,23 @@ pub async fn login(
             return resp::fail(101, state.tr(&lang, "OperationFailed"));
         }
     };
-    let trust_allowed = browser_trust::allowed(&user, &settings);
-    let trusted_until = trust_allowed
-        .then(|| browser_trust::expires_at(&headers, &state.config, &user))
-        .flatten();
-    let proof = if let Some(expires_at) = trusted_until {
-        LoginProof::TrustedBrowser { expires_at }
+    let trust_allowed = services::browser_trust::allowed(&user, &settings);
+    let mut trusted_id = None;
+    if trust_allowed && !f.use_verification_code {
+        if let Some(id) = browser_trust::browser_id(&headers, &state.config, &user) {
+            if services::browser_trust::find(&state.db, &user, &id)
+                .await
+                .is_ok_and(|row| row.is_some())
+            {
+                trusted_id = Some(id);
+            }
+        }
+    }
+    let (proof, method) = if let Some(id) = trusted_id {
+        (
+            LoginProof::TrustedBrowser { id },
+            "password_trusted_browser",
+        )
     } else {
         if let Some(kind) = services::login_security::verification_for(&user, &settings) {
             let challenge = match services::login_security::create_login_challenge(
@@ -256,20 +268,19 @@ pub async fn login(
                 }
             };
             audit.decision("password", "pending", "challenge_issued");
-            return console_challenge_response(&user, challenge, trust_allowed);
+            return console_challenge_response(
+                &user,
+                challenge,
+                trust_allowed.then_some(settings.browser_trust_days),
+            );
         }
         match console_login_proof(&state, &user).await {
-            Ok(proof) => proof,
+            Ok(proof) => (proof, "password"),
             Err(message) => {
                 audit.decision("password", "error", "policy_unavailable");
                 return resp::fail(101, message);
             }
         }
-    };
-    let method = if trusted_until.is_some() {
-        "password_trusted_browser"
-    } else {
-        "password"
     };
     let ut = match services::user::login(
         &state.db,
@@ -298,6 +309,36 @@ pub async fn login(
     console_session_response(&audit, method, &user, ut)
 }
 
+async fn remember_browser(
+    state: &AppState,
+    headers: &HeaderMap,
+    account: &user::Model,
+    session_id: i32,
+) -> anyhow::Result<HeaderValue> {
+    use services::browser_trust::{Enrollment, DAY_SECONDS};
+
+    let settings = services::login_security::login_settings(&state.db).await?;
+    let seconds = i64::from(settings.browser_trust_days) * DAY_SECONDS;
+    let id = uuid::Uuid::new_v4();
+    let cookie = browser_trust::issue(&state.config, account, id, seconds)?;
+    let previous = browser_trust::browser_id(headers, &state.config, account);
+    let (browser, platform) = browser_trust::browser_info(headers);
+    services::browser_trust::enroll(
+        &state.db,
+        account,
+        session_id,
+        Enrollment {
+            id: id.to_string(),
+            previous: previous.as_deref(),
+            browser,
+            platform,
+            seconds,
+        },
+    )
+    .await?;
+    Ok(cookie)
+}
+
 pub(super) fn challenge_method(federated: bool, kind: VerificationKind) -> &'static str {
     match (federated, kind) {
         (false, VerificationKind::Totp) => "password_totp",
@@ -323,13 +364,14 @@ pub(super) async fn console_login_proof(
 pub(super) fn console_challenge_response(
     user: &user::Model,
     challenge: services::login_security::LoginChallenge,
-    trust_browser: bool,
+    trust_days: Option<u32>,
 ) -> Response {
     resp::no_store(resp::success(json!({
         "type": "email_check",
         "tfa_type": challenge.kind.response_tfa_type(),
         "secret": challenge.secret,
-        "trust_browser": trust_browser,
+        "trust_browser": trust_days.is_some(),
+        "trust_browser_days": trust_days,
         "user": { "username": user.username, "email": user.email },
     })))
 }
@@ -1165,7 +1207,10 @@ pub async fn user_list(
                 );
                 value.insert(
                     "system_require_totp".to_string(),
-                    Value::from(login_settings.require_totp),
+                    Value::from(
+                        login_settings.require_totp
+                            || (row.is_admin() && login_settings.require_admin_totp),
+                    ),
                 );
                 value.insert(
                     "system_require_email_verification".to_string(),
@@ -1420,7 +1465,7 @@ pub async fn my_security(
     resp::success(json!({
         "tfa_enabled": user.user.tfa_enabled,
         "tfa_enforced": user.user.tfa_enforced,
-        "tfa_enforced_for_account": user.user.is_admin() || user.user.tfa_enforced || settings.require_totp,
+        "tfa_enforced_for_account": services::login_security::totp_enforced(&user.user, &settings),
         "email_verification_enabled": user.user.email_verification_enabled,
         "login_device_verification_enabled": user.user.login_device_verification_enabled,
         "system_require_totp": settings.require_totp,
@@ -4743,6 +4788,7 @@ mod tests {
         for statement in [
             schema.create_table_from_entity(entity::user::Entity),
             schema.create_table_from_entity(entity::user_token::Entity),
+            schema.create_table_from_entity(entity::trusted_browser::Entity),
             schema.create_table_from_entity(entity::peer::Entity),
             schema.create_table_from_entity(entity::address_book::Entity),
         ] {

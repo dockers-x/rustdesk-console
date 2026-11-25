@@ -442,7 +442,7 @@ pub async fn admin_oidc_auth_query(
             super::admin::console_session_response(&audit, method, &u, ut)
         }
         Ok(OidcLogin::Challenge(u, challenge)) => {
-            super::admin::console_challenge_response(&u, challenge, false)
+            super::admin::console_challenge_response(&u, challenge, None)
         }
         Err(error) => error.response(&state, &lang),
     }
@@ -624,6 +624,7 @@ mod tests {
             schema.create_table_from_entity(entity::user::Entity),
             schema.create_table_from_entity(entity::system_setting::Entity),
             schema.create_table_from_entity(entity::user_token::Entity),
+            schema.create_table_from_entity(entity::trusted_browser::Entity),
             schema.create_table_from_entity(entity::user_third::Entity),
             schema.create_table_from_entity(entity::oauth::Entity),
         ] {

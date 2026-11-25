@@ -83,6 +83,7 @@ export interface ResourceConfig<T = Record<string, unknown>> {
   path?: string;
   /** i18n key for the page title + sidebar label. */
   titleKey: string;
+  descriptionKey?: string;
   /** API base, e.g. `/api/admin/user`. */
   api: string;
   csvFilename?: string;

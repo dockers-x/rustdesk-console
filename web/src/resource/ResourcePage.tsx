@@ -288,7 +288,10 @@ export function ResourcePage({
   return (
     <div>
       <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">{t(cfg.titleKey)}</h1>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold">{t(cfg.titleKey)}</h1>
+          {cfg.descriptionKey && <p className="mt-1 max-w-3xl text-sm leading-6 text-kumo-subtle">{t(cfg.descriptionKey)}</p>}
+        </div>
         {cfg.canCreate !== false && (
           <Button variant="primary" icon={<Plus aria-hidden />} onClick={openCreate}>{t("create")}</Button>
         )}

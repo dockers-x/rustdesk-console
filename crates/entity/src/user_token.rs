@@ -21,6 +21,9 @@ pub struct Model {
     pub auth_level: i32,
     #[sea_orm(default_value = true)]
     pub renewable: bool,
+    #[sea_orm(column_type = "String(StringLen::N(36))", nullable)]
+    #[serde(skip_serializing, default)]
+    pub trusted_browser_id: Option<String>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

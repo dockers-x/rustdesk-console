@@ -33,6 +33,7 @@ import { apiGet, apiPost, http, ApiError } from "../lib/api";
 import { clearToken, currentUserQueryKey } from "../lib/auth";
 import { copyToClipboard } from "../lib/clipboard";
 import { formatUnixSeconds } from "../lib/dateFormat";
+import { TrustedBrowsersPanel } from "./TrustedBrowsersPanel";
 
 interface CurrentUser {
   username: string;
@@ -738,6 +739,7 @@ export function MyProfilePage() {
                   )}
                 </div>
 
+                <TrustedBrowsersPanel />
                 <div className="rounded-lg border border-kumo-line bg-kumo-base p-4">
                   <div className="mb-3">
                     <h3 className="text-sm font-semibold">

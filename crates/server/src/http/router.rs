@@ -245,6 +245,18 @@ fn admin_routes() -> Router<AppState> {
     Router::new()
         // auth (public)
         .route("/api/admin/login", post(admin::login))
+        .route(
+            "/api/admin/login/trusted-browsers",
+            get(super::browser_trust::list),
+        )
+        .route(
+            "/api/admin/login/trusted-browsers/revoke-all",
+            post(super::browser_trust::revoke_all),
+        )
+        .route(
+            "/api/admin/login/trusted-browsers/:id/revoke",
+            post(super::browser_trust::revoke_one),
+        )
         .route("/api/admin/captcha", get(admin::captcha))
         .route("/api/admin/logout", post(admin::logout))
         .route("/api/admin/login-options", get(admin::login_options))

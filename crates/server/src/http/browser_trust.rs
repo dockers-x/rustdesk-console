@@ -1,59 +1,38 @@
-use axum::http::{header, HeaderMap, HeaderValue};
-use chrono::Utc;
+use axum::{
+    extract::{Path, State},
+    http::{header, HeaderMap, HeaderValue},
+    response::Response,
+    Json,
+};
 use entity::user;
-use sha2::{Digest, Sha256};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::config::Config;
-use crate::services::login_security::LoginSecuritySettings;
-use crate::support::totp_vault::TotpVault;
+use super::{middleware::BackendUser, response as resp, security_audit::AuditContext};
+use crate::{
+    config::Config, services::browser_trust, state::AppState, support::totp_vault::TotpVault,
+};
 
 const COOKIE: &str = "__Secure-rustdesk-console-trust";
-const TRUST_SECONDS: i64 = 30 * 24 * 60 * 60;
 
-pub(super) fn allowed(account: &user::Model, settings: &LoginSecuritySettings) -> bool {
-    account.tfa_enabled
-        && !account.must_change_password
-        && settings.allow_trusted_login_devices
-        && !settings.require_email_verification
-        && !settings.require_device_verification
-        && !account.email_verification_enabled
-        && !account.login_device_verification_enabled
-}
-
-fn binding(account: &user::Model) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(b"rustdesk-console-browser-trust-v1");
-    hash.update(account.id.to_be_bytes());
-    hash.update([u8::from(account.is_admin())]);
-    for value in [
-        &account.username,
-        &account.password,
-        &account.tfa_secret,
-        &account
-            .created_at
-            .map(|time| time.to_string())
-            .unwrap_or_default(),
-    ] {
-        hash.update((value.len() as u64).to_be_bytes());
-        hash.update(value.as_bytes());
-    }
-    hash.finalize().into()
-}
-
-pub(super) fn issue(config: &Config, account: &user::Model) -> anyhow::Result<HeaderValue> {
-    let expires = Utc::now().timestamp() + TRUST_SECONDS;
-    let sealed =
-        TotpVault::load(config, false)?.seal_bound(&binding(account), &expires.to_string())?;
+pub(super) fn issue(
+    config: &Config,
+    account: &user::Model,
+    id: Uuid,
+    seconds: i64,
+) -> anyhow::Result<HeaderValue> {
+    let sealed = TotpVault::load(config, false)?
+        .seal_bound(browser_trust::binding(account).as_bytes(), &id.to_string())?;
     Ok(HeaderValue::from_str(&format!(
-        "{COOKIE}={sealed}; Max-Age={TRUST_SECONDS}; Path=/api/admin/login; Secure; HttpOnly; SameSite=Strict"
+        "{COOKIE}={sealed}; Max-Age={seconds}; Path=/api/admin/login; Secure; HttpOnly; SameSite=Strict"
     ))?)
 }
 
-pub(super) fn expires_at(
+pub(super) fn browser_id(
     headers: &HeaderMap,
     config: &Config,
     account: &user::Model,
-) -> Option<i64> {
+) -> Option<String> {
     let mut values = headers
         .get_all(header::COOKIE)
         .iter()
@@ -66,74 +45,144 @@ pub(super) fn expires_at(
         return None;
     }
     let vault = TotpVault::load(config, false).ok()?;
-    let expiry = vault
-        .open_bound(&binding(account), value)
-        .ok()?
-        .parse()
+    let id = vault
+        .open_bound(browser_trust::binding(account).as_bytes(), value)
         .ok()?;
-    (expiry > Utc::now().timestamp()).then_some(expiry)
+    Some(Uuid::parse_str(&id).ok()?.to_string())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub(super) fn browser_info(headers: &HeaderMap) -> (&'static str, &'static str) {
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let browser = [
+        ("Edg", "Edge"),
+        ("OPR/", "Opera"),
+        ("Firefox/", "Firefox"),
+        ("FxiOS/", "Firefox"),
+        ("SamsungBrowser/", "Samsung Internet"),
+        ("Chrome/", "Chrome"),
+        ("CriOS/", "Chrome"),
+        ("Safari/", "Safari"),
+    ]
+    .into_iter()
+    .find_map(|(marker, label)| ua.contains(marker).then_some(label))
+    .unwrap_or("");
+    let platform = [
+        ("iPhone", "iOS"),
+        ("iPad", "iPadOS"),
+        ("Android", "Android"),
+        ("Windows", "Windows"),
+        ("Macintosh", "macOS"),
+        ("CrOS", "ChromeOS"),
+        ("Linux", "Linux"),
+    ]
+    .into_iter()
+    .find_map(|(marker, label)| ua.contains(marker).then_some(label))
+    .unwrap_or("");
+    (browser, platform)
+}
 
-    #[tokio::test]
-    async fn cookie_is_bound_to_the_account_and_expires() {
-        use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, Set};
+#[derive(Serialize)]
+struct BrowserView {
+    id: String,
+    browser: String,
+    platform: String,
+    created_at: i64,
+    last_used_at: i64,
+    expires_at: i64,
+    current: bool,
+}
 
-        let temp = tempfile::tempdir().unwrap();
-        let mut config = Config::default();
-        config.security.totp_key_file = temp.path().join("totp.key").display().to_string();
-        let vault = TotpVault::load(&config, true).unwrap();
-        let db = Database::connect("sqlite::memory:").await.unwrap();
-        let backend = db.get_database_backend();
-        db.execute(
-            backend.build(&sea_orm::Schema::new(backend).create_table_from_entity(user::Entity)),
-        )
-        .await
-        .unwrap();
-        let mut account = user::ActiveModel {
-            username: Set("fixture".into()),
-            password: Set("old-hash".into()),
-            tfa_secret: Set("enrolled-secret".into()),
-            ..Default::default()
+pub(super) async fn list(
+    State(state): State<AppState>,
+    backend: BackendUser,
+    headers: HeaderMap,
+) -> Response {
+    let current = browser_id(&headers, &state.config, &backend.user);
+    match browser_trust::list(&state.db, &backend.user).await {
+        Ok(rows) => resp::no_store(resp::success(
+            rows.into_iter()
+                .map(|row| BrowserView {
+                    current: current.as_deref() == Some(row.id.as_str()),
+                    id: row.id,
+                    browser: row.browser,
+                    platform: row.platform,
+                    created_at: row.created_at,
+                    last_used_at: row.last_used_at,
+                    expires_at: row.expires_at,
+                })
+                .collect::<Vec<_>>(),
+        )),
+        Err(error) => {
+            tracing::warn!(user_id = backend.user.id, %error, "Could not list trusted browsers");
+            resp::fail(101, "Could not load trusted browsers")
         }
-        .insert(&db)
-        .await
-        .unwrap();
-        let account_id = account.id;
-        let as_headers = |cookie: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
-            headers
-        };
-        let expired = vault
-            .seal_bound(
-                &binding(&account),
-                &(Utc::now().timestamp() - 1).to_string(),
-            )
-            .unwrap();
-        assert_eq!(
-            expires_at(
-                &as_headers(&format!("{COOKIE}={expired}")),
-                &config,
-                &account
-            ),
-            None
-        );
+    }
+}
 
-        let cookie = issue(&config, &account).unwrap();
-        let cookie = cookie.to_str().unwrap().split(';').next().unwrap();
-        let headers = as_headers(cookie);
-        assert!(expires_at(&headers, &config, &account).is_some());
-        account.id += 1;
-        assert_eq!(expires_at(&headers, &config, &account), None);
-        account.id = account_id;
-        account.password = "new-hash".into();
-        assert_eq!(expires_at(&headers, &config, &account), None);
-        account.password = "old-hash".into();
-        account.tfa_secret = "re-enrolled".into();
-        assert_eq!(expires_at(&headers, &config, &account), None);
+#[derive(Deserialize)]
+pub(super) struct RevokeOptions {
+    #[serde(default)]
+    end_sessions: bool,
+}
+
+pub(super) async fn revoke_one(
+    State(state): State<AppState>,
+    backend: BackendUser,
+    audit: AuditContext,
+    Path(id): Path<Uuid>,
+    Json(options): Json<RevokeOptions>,
+) -> Response {
+    revoke(
+        &state,
+        backend.user.id,
+        Some(&id.to_string()),
+        options,
+        &audit,
+    )
+    .await
+}
+
+pub(super) async fn revoke_all(
+    State(state): State<AppState>,
+    backend: BackendUser,
+    audit: AuditContext,
+    Json(options): Json<RevokeOptions>,
+) -> Response {
+    revoke(&state, backend.user.id, None, options, &audit).await
+}
+
+async fn revoke(
+    state: &AppState,
+    user_id: i32,
+    id: Option<&str>,
+    options: RevokeOptions,
+    audit: &AuditContext,
+) -> Response {
+    audit.subject(user_id);
+    audit.management(if id.is_some() {
+        "login_security.revoke_browser"
+    } else {
+        "login_security.revoke_all_browsers"
+    });
+    match browser_trust::revoke(&state.db, user_id, id, options.end_sessions).await {
+        Ok(()) => {
+            audit.decision(
+                "browser_trust",
+                "accepted",
+                if options.end_sessions {
+                    "trust_and_sessions_revoked"
+                } else {
+                    "trust_revoked"
+                },
+            );
+            resp::success(serde_json::Value::Null)
+        }
+        Err(error) => {
+            tracing::warn!(user_id, %error, "Could not revoke trusted browsers");
+            resp::fail(101, "Could not revoke browser trust")
+        }
     }
 }
