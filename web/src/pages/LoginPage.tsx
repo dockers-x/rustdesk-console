@@ -215,12 +215,12 @@ export function LoginPage() {
     }
   };
 
-  const loadOptions = async () => {
+  const loadOptions = async (allowAutoOidc: boolean) => {
     try {
       const res = await apiGet<LoginOptions>("/api/admin/login-options");
       setOptions(res);
       if (res.need_captcha) await loadCaptcha();
-      if (res.auto_oidc && res.ops.length === 1) {
+      if (allowAutoOidc && res.auto_oidc && res.ops.length === 1) {
         await startOidc(res.ops[0]);
       }
     } catch {
@@ -231,7 +231,8 @@ export function LoginPage() {
   useEffect(() => {
     let mounted = true;
     const boot = async () => {
-      const code = getOidcCode();
+      const returnedFromOidc = new URLSearchParams(location.search).get("oidc") === "return";
+      const code = returnedFromOidc ? getOidcCode() : "";
       try {
         const setup = await apiGet<SetupStatus>("/api/admin/setup/status");
         if (!mounted) return;
@@ -244,10 +245,13 @@ export function LoginPage() {
         /* older servers do not expose setup status */
       }
 
+      if (!mounted) return;
+      await loadOptions(!returnedFromOidc);
+      if (!mounted) return;
       if (code) {
         await queryOidc(code);
-      } else {
-        await loadOptions();
+      } else if (returnedFromOidc) {
+        setError(t("oidcAttemptExpired"));
       }
       if (mounted) setSetupChecked(true);
     };

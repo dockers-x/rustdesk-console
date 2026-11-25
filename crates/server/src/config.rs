@@ -45,6 +45,7 @@ pub struct Config {
     pub rustdesk: Rustdesk,
     pub proxy: Proxy,
     pub ldap: Ldap,
+    pub oidc: Oidc,
     pub security: Security,
 }
 
@@ -399,6 +400,27 @@ impl Rustdesk {
 pub struct Proxy {
     pub enable: bool,
     pub host: String,
+}
+
+/// Optional OIDC provider managed through deployment configuration.
+#[derive(Clone, Deserialize, Serialize, Default)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Oidc {
+    pub name: String,
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_url: String,
+    pub scopes: String,
+}
+
+impl std::fmt::Debug for Oidc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Oidc")
+            .field("name", &self.name)
+            .field("issuer", &self.issuer)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, Default)]

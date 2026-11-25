@@ -70,8 +70,8 @@ other = "OAuth 失敗。"
 
 [OauthHasBindOtherUser]
 description = "Oauth has bind other user."
-one = "OAuth 已綁定其他使用者。"
-other = "OAuth 已綁定其他使用者。"
+one = "此第三方帳號已被綁定。"
+other = "此第三方帳號已被綁定。"
 
 [ParamIsEmpty]
 description = "Param is empty."
@@ -80,8 +80,8 @@ other = "{{.P0}} 為空。"
 
 [BindFail]
 description = "Bind fail."
-one = "綁定失敗。"
-other = "綁定失敗。"
+one = "綁定失敗，請回到「登入方式」重新發起。"
+other = "綁定失敗，請回到「登入方式」重新發起。"
 
 [BindSuccess]
 description = "Bind success."
@@ -172,3 +172,24 @@ other = "已被禁用。"
 description = "Register success, wait admin confirm."
 one = "註冊成功，等待管理員確認。"
 other = "註冊成功，等待管理員確認。"
+
+[OauthBindingRequired]
+other = "此帳號尚未綁定。請先透過既有方式登入 Console，再到「個人中心 → 登入方式」綁定。"
+
+[OauthAuthorizationCancelled]
+other = "授權已在提供者端取消，可以重新發起。"
+
+[OauthVerifySession]
+other = "請重新登入並完成所需驗證，再變更帳號綁定。"
+
+[OauthLastLoginMethod]
+other = "請先設定另一種登入方式，再解除這項綁定。"
+
+[OauthProviderHasBindings]
+other = "此提供者仍有已綁定帳號。請先解除綁定，再刪除提供者或變更其身分設定。"
+
+[OauthProviderNameReserved]
+other = "此名稱保留給 Web SSO。"
+
+[OauthVerifyInConsole]
+other = "請在 Console 完成驗證。"

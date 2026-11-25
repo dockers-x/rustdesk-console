@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 284;
+pub const DATABASE_VERSION: i32 = 285;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 14] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 15] {
     [
         SchemaMigration {
             version: 271,
@@ -129,6 +129,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 14] {
             version: 284,
             name: "revocable Console browser trust",
             apply: migration_284,
+        },
+        SchemaMigration {
+            version: 285,
+            name: "deployment OIDC identity and verification bindings",
+            apply: migration_285,
         },
     ]
 }
@@ -546,6 +551,35 @@ fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> Migrat
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
 }
 
+fn migration_285<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        if !column_exists(db, "user_thirds", "oidc_key").await? {
+            let statement = Table::alter()
+                .table(user_third::Entity)
+                .add_column(ColumnDef::new(user_third::Column::OidcKey).string_len(64))
+                .to_owned();
+            db.execute(backend.build(&statement)).await?;
+        }
+        ensure_index(
+            db,
+            "user_thirds",
+            "idx_user_thirds_oidc_key",
+            &["oidc_key"],
+            true,
+        )
+        .await?;
+        if !column_exists(db, "login_verifications", "oauth_binding_id").await? {
+            let statement = Table::alter()
+                .table(login_verification::Entity)
+                .add_column(ColumnDef::new(login_verification::Column::OauthBindingId).integer())
+                .to_owned();
+            db.execute(backend.build(&statement)).await?;
+        }
+        Ok(())
+    })
+}
+
 fn migration_284<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move {
         let backend = db.get_database_backend();
@@ -939,6 +973,16 @@ async fn create_index(
     name: &str,
     columns: &[&str],
 ) -> anyhow::Result<()> {
+    ensure_index(db, table, name, columns, false).await
+}
+
+async fn ensure_index(
+    db: &impl ConnectionTrait,
+    table: &str,
+    name: &str,
+    columns: &[&str],
+    unique: bool,
+) -> anyhow::Result<()> {
     use sea_orm::sea_query::{Alias, Index};
 
     let backend = db.get_database_backend();
@@ -957,6 +1001,9 @@ async fn create_index(
         index.if_not_exists();
     }
     index.name(name).table(Alias::new(table));
+    if unique {
+        index.unique();
+    }
     for column in columns {
         index.col(Alias::new(*column));
     }
@@ -1761,6 +1808,7 @@ mod tests {
                 281,
                 282,
                 283,
+                284,
                 DATABASE_VERSION
             ]
         );

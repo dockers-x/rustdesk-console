@@ -134,10 +134,10 @@ export default function AuthenticatedApp() {
           path="/webclient-settings"
           element={<WebClientSettingsPage />}
         />
-        <Route path="/oauth/:code" element={<OAuthActionPage mode="confirm" />} />
+        <Route path="/oauth/:code" element={<OAuthActionPage />} />
         <Route
           path="/oauth/bind/:code"
-          element={<OAuthActionPage mode="bind" />}
+          element={<Navigate to="/my#login-methods" replace />}
         />
         {ALL_RESOURCES.filter((resource) => resource.name !== "my_address_book").map((resource) => (
           <Route

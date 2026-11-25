@@ -215,6 +215,30 @@ pub(super) async fn lock_full_session(
     account: &user::Model,
     session_id: i32,
 ) -> Result<(i32, i64), DbErr> {
+    lock_credential_session(transaction, account, session_id, &[0, AUTH_TOTP]).await
+}
+
+pub(super) async fn lock_account_management_session(
+    transaction: &DatabaseTransaction,
+    account: &user::Model,
+    session_id: i32,
+) -> Result<(), DbErr> {
+    lock_credential_session(
+        transaction,
+        account,
+        session_id,
+        &[0, AUTH_TOTP, AUTH_CONSOLE_ADMIN],
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn lock_credential_session(
+    transaction: &DatabaseTransaction,
+    account: &user::Model,
+    session_id: i32,
+    accepted_levels: &[i32],
+) -> Result<(i32, i64), DbErr> {
     // Serialize authorization with concurrent logout and session revocation.
     user_token::Entity::update_many()
         .col_expr(
@@ -230,7 +254,7 @@ pub(super) async fn lock_full_session(
         .await?
         .filter(|session| {
             session.user_id == account.id
-                && matches!(session.auth_level, 0 | AUTH_TOTP)
+                && accepted_levels.contains(&session.auth_level)
                 && session.expired_at > Utc::now().timestamp()
         })
         .ok_or_else(|| DbErr::Custom("authorizing session expired".into()))?;
@@ -263,6 +287,17 @@ pub async fn login(
     u: &user::Model,
     event: LoginEvent,
 ) -> Result<user_token::Model, DbErr> {
+    login_with_binding(db, jwt, config, u, event, None).await
+}
+
+pub(crate) async fn login_with_binding(
+    db: &DatabaseConnection,
+    jwt: &Jwt,
+    config: &Config,
+    u: &user::Model,
+    event: LoginEvent,
+    binding_id: Option<i32>,
+) -> Result<user_token::Model, DbErr> {
     let transaction = db.begin().await?;
     let current = lock_account(&transaction, u.id)
         .await?
@@ -274,6 +309,11 @@ pub async fn login(
                 && current.updated_at == u.updated_at
         })
         .ok_or_else(|| DbErr::Custom("account changed during authentication".into()))?;
+    if let Some(binding_id) = binding_id {
+        if !super::oauth::binding_active(&transaction, config, current.id, binding_id).await? {
+            return Err(DbErr::Custom("OAuth binding expired or was removed".into()));
+        }
+    }
     let now_ts = Utc::now().timestamp();
     let mut trusted_browser_id = None;
     let (auth_level, source_expiry) = match event.proof {

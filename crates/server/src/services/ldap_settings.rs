@@ -53,7 +53,7 @@ pub enum SettingsError {
     Validation(&'static str),
 }
 
-async fn load(db: &DatabaseConnection) -> Result<Option<ldap_setting::Model>, DbErr> {
+async fn load(db: &impl ConnectionTrait) -> Result<Option<ldap_setting::Model>, DbErr> {
     ldap_setting::Entity::find_by_id(SETTINGS_ID).one(db).await
 }
 
@@ -191,7 +191,7 @@ impl From<&Ldap> for View {
     }
 }
 
-pub async fn read(db: &DatabaseConnection, base: &Ldap) -> Result<Ldap, SettingsError> {
+pub async fn read(db: &impl ConnectionTrait, base: &Ldap) -> Result<Ldap, SettingsError> {
     effective(base, &decode(load(db).await?.as_ref())?)
 }
 

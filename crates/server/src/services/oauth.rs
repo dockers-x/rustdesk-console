@@ -1,6 +1,4 @@
-//! OAuth service — ports the management side of `service/oauth.go`:
-//! provider CRUD, third-party bindings, and provider listing. The external
-//! login/token-exchange flow lives in a later sub-phase.
+//! OAuth provider configuration, verified identities, and account bindings.
 
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
@@ -13,7 +11,10 @@ pub async fn info_by_id(db: &DatabaseConnection, id: i32) -> Result<Option<oauth
     oauth::Entity::find_by_id(id).one(db).await
 }
 
-pub async fn info_by_op(db: &DatabaseConnection, op: &str) -> Result<Option<oauth::Model>, DbErr> {
+pub async fn info_by_op(
+    db: &impl ConnectionTrait,
+    op: &str,
+) -> Result<Option<oauth::Model>, DbErr> {
     oauth::Entity::find()
         .filter(oauth::Column::Op.eq(op))
         .one(db)
@@ -48,13 +49,49 @@ pub async fn list(
     })
 }
 
-pub async fn get_oauth_providers(db: &DatabaseConnection) -> Result<Vec<String>, DbErr> {
-    Ok(oauth::Entity::find()
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|o| o.op)
-        .collect())
+fn deployment_provider(cfg: &Config) -> Option<oauth::Model> {
+    let oidc = &cfg.oidc;
+    let name = oidc.name.trim();
+    let op = if name.is_empty() { "OIDC" } else { name };
+    if op.eq_ignore_ascii_case(oauth::TYPE_WEBAUTH)
+        || op.len() > 64
+        || !op
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return None;
+    }
+    let info = oauth::Model {
+        id: 0,
+        op: op.into(),
+        oauth_type: oauth::TYPE_OIDC.into(),
+        client_id: oidc.client_id.trim().into(),
+        client_secret: oidc.client_secret.clone(),
+        issuer: oidc.issuer.trim().into(),
+        auto_register: Some(false),
+        scopes: oidc.scopes.clone(),
+        pkce_enable: Some(true),
+        pkce_method: oauth::PKCE_METHOD_S256.into(),
+        created_at: None,
+        updated_at: None,
+    };
+    is_login_provider_configured(&info).then_some(info)
+}
+
+pub async fn login_provider(
+    db: &impl ConnectionTrait,
+    cfg: &Config,
+    op: &str,
+) -> Result<Option<oauth::Model>, DbErr> {
+    let registered = info_by_op(db, op).await?;
+    let info = registered.or_else(|| deployment_provider(cfg).filter(|info| info.op == op));
+    Ok(info.filter(|info| info.op == op && is_external_provider(info)))
+}
+
+fn is_external_provider(info: &oauth::Model) -> bool {
+    !info.op.eq_ignore_ascii_case(oauth::TYPE_WEBAUTH)
+        && info.oauth_type != oauth::TYPE_WEBAUTH
+        && is_login_provider_configured(info)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,18 +101,26 @@ pub struct LoginProvider {
 }
 
 pub async fn get_login_provider_configs(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
+    cfg: &Config,
 ) -> Result<Vec<oauth::Model>, DbErr> {
-    Ok(oauth::Entity::find()
-        .all(db)
-        .await?
-        .into_iter()
-        .filter(is_login_provider_configured)
-        .collect())
+    let mut providers = oauth::Entity::find().all(db).await?;
+    if let Some(info) = deployment_provider(cfg).filter(|info| {
+        !providers
+            .iter()
+            .any(|row| row.op.eq_ignore_ascii_case(&info.op))
+    }) {
+        providers.push(info);
+    }
+    providers.retain(is_external_provider);
+    Ok(providers)
 }
 
-pub async fn get_login_providers(db: &DatabaseConnection) -> Result<Vec<LoginProvider>, DbErr> {
-    Ok(get_login_provider_configs(db)
+pub async fn get_login_providers(
+    db: &DatabaseConnection,
+    cfg: &Config,
+) -> Result<Vec<LoginProvider>, DbErr> {
+    Ok(get_login_provider_configs(db, cfg)
         .await?
         .into_iter()
         .map(|o| LoginProvider {
@@ -124,8 +169,12 @@ pub fn format_oauth_info(m: &mut oauth::Model) -> Result<(), String> {
         oauth::TYPE_LINUXDO => m.op = oauth::TYPE_LINUXDO.into(),
         _ => {}
     }
-    if m.op.trim().is_empty() && oauth_type == oauth::TYPE_OIDC {
+    m.op = m.op.trim().to_owned();
+    if m.op.is_empty() && oauth_type == oauth::TYPE_OIDC {
         m.op = oauth::TYPE_OIDC.into();
+    }
+    if m.op.eq_ignore_ascii_case(oauth::TYPE_WEBAUTH) && oauth_type != oauth::TYPE_WEBAUTH {
+        return Err("OauthProviderNameReserved".into());
     }
     if oauth_type == oauth::TYPE_GOOGLE && m.issuer.trim().is_empty() {
         m.issuer = oauth::ISSUER_GOOGLE.into();
@@ -160,6 +209,25 @@ pub async fn create(db: &DatabaseConnection, mut m: oauth::Model) -> Result<oaut
 
 pub async fn update(db: &DatabaseConnection, mut m: oauth::Model) -> Result<(), String> {
     format_oauth_info(&mut m)?;
+    let tx = db.begin().await.map_err(|error| error.to_string())?;
+    let current = lock_stored_provider(&tx, m.id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if current.op != m.op
+        && info_by_op(&tx, &m.op)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_some()
+    {
+        return Err("ItemExists".into());
+    }
+    if provider_identity(&current) != provider_identity(&m)
+        && has_stored_bindings(&tx, &current.op)
+            .await
+            .map_err(|error| error.to_string())?
+    {
+        return Err("OauthProviderHasBindings".into());
+    }
     let am = oauth::ActiveModel {
         id: Set(m.id),
         op: Set(m.op),
@@ -174,57 +242,184 @@ pub async fn update(db: &DatabaseConnection, mut m: oauth::Model) -> Result<(), 
         updated_at: Set(now()),
         ..Default::default()
     };
-    am.update(db).await.map(|_| ()).map_err(|e| e.to_string())
+    am.update(&tx).await.map_err(|error| error.to_string())?;
+    tx.commit().await.map_err(|error| error.to_string())
 }
 
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
-    oauth::Entity::delete_by_id(id).exec(db).await?;
-    Ok(())
+    let tx = db.begin().await?;
+    let provider = lock_stored_provider(&tx, id).await?;
+    if has_stored_bindings(&tx, &provider.op).await? {
+        return Err(DbErr::Custom("OauthProviderHasBindings".into()));
+    }
+    oauth::Entity::delete_by_id(id).exec(&tx).await?;
+    tx.commit().await
+}
+
+async fn has_stored_bindings(db: &impl ConnectionTrait, op: &str) -> Result<bool, DbErr> {
+    Ok(user_third::Entity::find()
+        .filter(user_third::Column::Op.eq(op))
+        .one(db)
+        .await?
+        .is_some())
+}
+
+async fn lock_stored_provider(db: &DatabaseTransaction, id: i32) -> Result<oauth::Model, DbErr> {
+    oauth::Entity::update_many()
+        .col_expr(
+            oauth::Column::Id,
+            sea_orm::sea_query::Expr::col(oauth::Column::Id).into(),
+        )
+        .filter(oauth::Column::Id.eq(id))
+        .exec(db)
+        .await?;
+    let query = oauth::Entity::find_by_id(id);
+    let query = if db.get_database_backend() == DatabaseBackend::Sqlite {
+        query
+    } else {
+        query.lock_exclusive()
+    };
+    query
+        .one(db)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("OAuth provider not found".into()))
+}
+
+pub fn provider_identity(info: &oauth::Model) -> String {
+    let identity = (
+        &info.id,
+        &info.op,
+        &info.oauth_type,
+        &info.issuer,
+        &info.client_id,
+    );
+    let encoded = serde_json::to_vec(&identity).expect("OAuth provider identity is serializable");
+    format!("{:x}", Sha256::digest(encoded))
+}
+
+fn binding_key(info: &oauth::Model, sub: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{}:{sub}", provider_identity(info)))
+    )
 }
 
 // ---- third-party bindings ----
 
-pub async fn user_third_info(
-    db: &DatabaseConnection,
-    op: &str,
-    open_id: &str,
-) -> Result<Option<user_third::Model>, DbErr> {
-    user_third::Entity::find()
-        .filter(user_third::Column::OpenId.eq(open_id))
-        .filter(user_third::Column::Op.eq(op))
-        .one(db)
-        .await
+pub fn binding_matches(binding: &user_third::Model, provider: &oauth::Model) -> bool {
+    if binding.op != provider.op {
+        return false;
+    }
+    match &binding.oidc_key {
+        Some(key) => key == &binding_key(provider, &binding.open_id),
+        None => provider.id != 0,
+    }
 }
 
-pub async fn user_third_by_user_and_op(
-    db: &DatabaseConnection,
-    user_id: i32,
-    op: &str,
+async fn linked_identity(
+    db: &impl ConnectionTrait,
+    provider: &oauth::Model,
+    subject: &str,
 ) -> Result<Option<user_third::Model>, DbErr> {
-    user_third::Entity::find()
-        .filter(user_third::Column::UserId.eq(user_id))
-        .filter(user_third::Column::Op.eq(op))
-        .one(db)
-        .await
+    let mut predicate =
+        Condition::any().add(user_third::Column::OidcKey.eq(binding_key(provider, subject)));
+    if provider.id != 0 {
+        predicate = predicate.add(
+            Condition::all()
+                .add(user_third::Column::OidcKey.is_null())
+                .add(user_third::Column::Op.eq(&provider.op))
+                .add(user_third::Column::OpenId.eq(subject)),
+        );
+    }
+    let candidates = user_third::Entity::find().filter(predicate);
+    let mut matches = candidates
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|binding| binding.open_id == subject && binding_matches(binding, provider));
+    let found = matches.next();
+    if matches.next().is_some() {
+        return Err(DbErr::Custom("Ambiguous OAuth identity".into()));
+    }
+    Ok(found)
 }
 
 pub async fn user_thirds_by_user_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: i32,
 ) -> Result<Vec<user_third::Model>, DbErr> {
     user_third::Entity::find()
         .filter(user_third::Column::UserId.eq(user_id))
+        .order_by_asc(user_third::Column::Id)
         .all(db)
         .await
 }
 
-pub async fn unbind(db: &DatabaseConnection, user_id: i32, op: &str) -> Result<(), DbErr> {
+pub async fn binding_active(
+    db: &impl ConnectionTrait,
+    cfg: &Config,
+    user_id: i32,
+    binding_id: i32,
+) -> Result<bool, DbErr> {
+    let Some(binding) = user_third::Entity::find_by_id(binding_id)
+        .one(db)
+        .await?
+        .filter(|binding| binding.user_id == user_id)
+    else {
+        return Ok(false);
+    };
+    Ok(login_provider(db, cfg, &binding.op)
+        .await?
+        .is_some_and(|provider| binding_matches(&binding, &provider)))
+}
+
+pub async fn unbind(
+    db: &DatabaseConnection,
+    cfg: &Config,
+    user_id: i32,
+    session_id: i32,
+    op: &str,
+) -> Result<(), DbErr> {
+    let tx = db.begin().await?;
+    let account = super::user::lock_account(&tx, user_id)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("user not found".into()))?;
+    super::user::lock_account_management_session(&tx, &account, session_id).await?;
+    let bindings = user_thirds_by_user_id(&tx, user_id).await?;
+    let ids: Vec<_> = bindings
+        .iter()
+        .filter(|binding| binding.op == op)
+        .map(|binding| binding.id)
+        .collect();
+    if ids.is_empty() {
+        return Err(DbErr::RecordNotFound("ItemNotFound".into()));
+    }
+    if cfg.app.disable_pwd_login || account.password.is_empty() {
+        let providers = get_login_provider_configs(&tx, cfg).await?;
+        let has_alternative = bindings.iter().any(|binding| {
+            binding.op != op
+                && providers
+                    .iter()
+                    .any(|provider| binding_matches(binding, provider))
+        });
+        // A directory-backed account may also sign in with its directory credentials.
+        let directory_login = !cfg.app.disable_pwd_login
+            && crate::services::ldap_settings::read(&tx, &cfg.ldap)
+                .await
+                .is_ok_and(|settings| settings.enable)
+            && ::entity::ldap_identity::Entity::find_by_id(user_id)
+                .one(&tx)
+                .await?
+                .is_some();
+        if !has_alternative && !directory_login {
+            return Err(DbErr::Custom("OauthLastLoginMethod".into()));
+        }
+    }
     user_third::Entity::delete_many()
-        .filter(user_third::Column::UserId.eq(user_id))
-        .filter(user_third::Column::Op.eq(op))
-        .exec(db)
+        .filter(user_third::Column::Id.is_in(ids))
+        .exec(&tx)
         .await?;
-    Ok(())
+    tx.commit().await
 }
 
 // ===========================================================================
@@ -283,7 +478,10 @@ fn http_client(cfg: &Config) -> reqwest::Client {
 }
 
 fn redirect_url(cfg: &Config) -> String {
-    format!("{}/api/oidc/callback", cfg.rustdesk.api_server)
+    format!(
+        "{}/api/oidc/callback",
+        cfg.rustdesk.api_server.trim_end_matches('/')
+    )
 }
 
 fn split_scopes(scopes: &str) -> Vec<String> {
@@ -421,37 +619,58 @@ fn pkce_challenge(verifier: &str) -> String {
 
 /// Build the authorize URL and per-flow secrets (≈ `BeginAuth`).
 /// Returns `(state, verifier, nonce, url)`.
+pub struct Authorization {
+    pub state: String,
+    pub verifier: String,
+    pub nonce: String,
+    pub url: String,
+    pub provider_identity: String,
+}
+
+fn callback_url(cfg: &Config, provider: &oauth::Model) -> String {
+    if provider.id == 0 && !cfg.oidc.redirect_url.trim().is_empty() {
+        cfg.oidc.redirect_url.trim().to_owned()
+    } else {
+        redirect_url(cfg)
+    }
+}
+
 pub async fn begin_auth(
     cfg: &Config,
     db: &DatabaseConnection,
     op: &str,
-) -> Result<(String, String, String, String), String> {
-    let state = format!(
-        "{}{}",
-        crate::support::random::random_string(10),
-        chrono::Utc::now().timestamp()
-    );
+) -> Result<Authorization, String> {
+    let state = crate::support::random::random_string(40);
     if op == oauth::TYPE_WEBAUTH {
         if !cfg.app.web_sso {
             return Err("Web SSO is disabled".into());
         }
-        let url = format!("{}/_admin/#/oauth/{}", cfg.rustdesk.api_server, state);
-        return Ok((state, String::new(), String::new(), url));
+        let url = format!(
+            "{}/_admin/#/oauth/{}",
+            cfg.rustdesk.api_server.trim_end_matches('/'),
+            state
+        );
+        return Ok(Authorization {
+            state,
+            url,
+            verifier: String::new(),
+            nonce: String::new(),
+            provider_identity: String::new(),
+        });
     }
-    let info = info_by_op(db, op)
+    let info = login_provider(db, cfg, op)
         .await
         .map_err(|e| e.to_string())?
-        .filter(is_login_provider_configured)
         .ok_or("ConfigNotFound")?;
     let client = http_client(cfg);
     let ep = endpoints(&client, &info).await?;
     validate_provider_endpoints(&info, &ep)?;
-    let nonce = crate::support::random::random_string(10);
+    let nonce = crate::support::random::random_string(40);
     let mut verifier = String::new();
     let mut params = vec![
         ("client_id", info.client_id.clone()),
         ("response_type", "code".to_string()),
-        ("redirect_uri", redirect_url(cfg)),
+        ("redirect_uri", callback_url(cfg, &info)),
         ("scope", ep.scopes.join(" ")),
         ("state", state.clone()),
         ("nonce", nonce.clone()),
@@ -466,12 +685,15 @@ pub async fn begin_auth(
             params.push(("code_challenge", verifier.clone()));
         }
     }
-    let query: Vec<String> = params
-        .iter()
-        .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
-        .collect();
-    let url = format!("{}?{}", ep.auth_url, query.join("&"));
-    Ok((state, verifier, nonce, url))
+    let mut url = url::Url::parse(&ep.auth_url).map_err(|_| "OAuthProviderEndpointMissing")?;
+    url.query_pairs_mut().extend_pairs(params);
+    Ok(Authorization {
+        state,
+        verifier,
+        nonce,
+        url: url.into(),
+        provider_identity: provider_identity(&info),
+    })
 }
 
 /// Exchange `code` for an access token and fetch the user info (≈ `Callback`).
@@ -611,25 +833,19 @@ fn provider_numeric_id(profile: &serde_json::Value) -> Result<i64, String> {
 
 pub async fn callback(
     cfg: &Config,
-    db: &DatabaseConnection,
+    info: &oauth::Model,
     code: &str,
     verifier: &str,
     nonce: &str,
-    op: &str,
 ) -> Result<OauthUser, String> {
-    let info = info_by_op(db, op)
-        .await
-        .map_err(|e| e.to_string())?
-        .filter(is_login_provider_configured)
-        .ok_or("ConfigNotFound")?;
     let client = http_client(cfg);
-    let ep = endpoints(&client, &info).await?;
-    validate_provider_endpoints(&info, &ep)?;
+    let ep = endpoints(&client, info).await?;
+    validate_provider_endpoints(info, &ep)?;
 
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
         ("code", code.to_string()),
-        ("redirect_uri", redirect_url(cfg)),
+        ("redirect_uri", callback_url(cfg, info)),
         ("client_id", info.client_id.clone()),
         ("client_secret", info.client_secret.clone()),
     ];
@@ -663,7 +879,7 @@ pub async fn callback(
             .get("id_token")
             .and_then(|v| v.as_str())
             .ok_or("GetOauthTokenError")?;
-        Some(validate_oidc_id_token(&client, &ep, &info, id_token, nonce).await?)
+        Some(validate_oidc_id_token(&client, &ep, info, id_token, nonce).await?)
     } else {
         None
     };
@@ -774,52 +990,54 @@ pub async fn callback(
     Ok(oauth_user)
 }
 
-/// Find or create the local user for an OAuth identity (≈ `RegisterByOauth`).
-pub async fn register_or_login(
+/// Return the linked account, or provision a regular account when explicitly enabled.
+pub async fn resolve_identity(
     db: &DatabaseConnection,
-    ou: &OauthUser,
-    op: &str,
+    provider: &oauth::Model,
+    identity: &OauthUser,
     allow_registration: bool,
-) -> Result<user::Model, String> {
-    let oauth_type = info_by_op(db, op)
-        .await
-        .map_err(|e| e.to_string())?
-        .map(|o| o.oauth_type)
-        .unwrap_or_else(|| op.to_string());
-
-    // already bound?
-    if let Ok(Some(ut)) = user_third_info(db, op, &ou.open_id).await {
-        if let Ok(Some(u)) = crate::services::user::info_by_id(db, ut.user_id).await {
-            return Ok(u);
-        }
+) -> Result<Option<user_third::Model>, DbErr> {
+    validate_subject(identity)?;
+    if let Some(binding) = linked_identity(db, provider, &identity.open_id).await? {
+        return Ok(Some(binding));
     }
-    // bind to an existing user by email
-    let email = ou.email.to_lowercase();
-    if !email.is_empty() && ou.verified_email {
-        if let Ok(Some(u)) = user::Entity::find()
+    if provider.id == 0
+        || !provider.auto_register.unwrap_or_default()
+        || !allow_registration
+        || !super::user::has_admin(db).await?
+    {
+        return Ok(None);
+    }
+    let tx = db.begin().await?;
+    let current = lock_stored_provider(&tx, provider.id).await?;
+    if provider_identity(&current) != provider_identity(provider)
+        || !current.auto_register.unwrap_or_default()
+    {
+        return Ok(None);
+    }
+    if let Some(binding) = linked_identity(&tx, &current, &identity.open_id).await? {
+        return Ok(Some(binding));
+    }
+    let email = if identity.verified_email {
+        identity.email.trim().to_lowercase()
+    } else {
+        String::new()
+    };
+    if !email.is_empty()
+        && user::Entity::find()
             .filter(user::Column::Email.eq(&email))
-            .one(db)
-            .await
-        {
-            if u.is_admin() {
-                return Err("Bind the OAuth identity from an authenticated Console session".into());
-            }
-            bind_user(db, u.id, ou, &oauth_type, op)
-                .await
-                .map_err(|e| e.to_string())?;
-            return Ok(u);
-        }
+            .one(&tx)
+            .await?
+            .is_some()
+    {
+        return Ok(None);
     }
-    if !allow_registration {
-        return Err("RegisterClosed".to_string());
-    }
-    // create a fresh user + binding
-    let username = generate_unique_username(db, &ou.username).await;
-    let am = user::ActiveModel {
+    let username = generate_unique_username(&tx, &identity.username).await?;
+    let account = user::ActiveModel {
         username: Set(username),
         email: Set(email),
-        nickname: Set(ou.name.clone()),
-        avatar: Set(ou.picture.clone()),
+        nickname: Set(identity.name.clone()),
+        avatar: Set(identity.picture.clone()),
         group_id: Set(1),
         is_admin: Set(Some(false)),
         status: Set(user::STATUS_ENABLE),
@@ -827,108 +1045,123 @@ pub async fn register_or_login(
         updated_at: Set(now()),
         ..Default::default()
     };
-    let created = super::login_security::insert_user_with_enrollment_policy(db, am)
-        .await
-        .map_err(|e| format!("OauthRegisterFailed: {e}"))?;
-    bind_user(db, created.id, ou, &oauth_type, op)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(created)
+    let created = super::login_security::insert_user_with_enrollment_policy(&tx, account).await?;
+    let binding = bind_user(&tx, created.id, identity, &current).await?;
+    tx.commit().await?;
+    Ok(Some(binding))
 }
 
-async fn generate_unique_username(db: &DatabaseConnection, base: &str) -> String {
-    let mut name = base.replace(' ', "").to_lowercase();
-    if name.is_empty() {
-        name = format!("user{}", chrono::Utc::now().timestamp());
+async fn generate_unique_username(db: &impl ConnectionTrait, base: &str) -> Result<String, DbErr> {
+    let name: String = base
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | '@')
+        })
+        .map(|character| character.to_ascii_lowercase())
+        .take(64)
+        .collect();
+    let name = if name.len() >= 2 {
+        name
+    } else {
+        "oauth-user".to_owned()
+    };
+    if user::Entity::find()
+        .filter(user::Column::Username.eq(&name))
+        .one(db)
+        .await?
+        .is_none()
+    {
+        return Ok(name);
     }
-    let mut suffix = 0;
-    loop {
-        let candidate = if suffix == 0 {
-            name.clone()
-        } else {
-            format!("{name}{suffix}")
-        };
-        let exists = user::Entity::find()
-            .filter(user::Column::Username.eq(&candidate))
-            .one(db)
-            .await
-            .ok()
-            .flatten()
-            .is_some();
-        if !exists {
-            return candidate;
-        }
-        suffix += 1;
+    Ok(format!(
+        "{name}-{}",
+        crate::support::random::random_string(16).to_ascii_lowercase()
+    ))
+}
+
+fn validate_subject(identity: &OauthUser) -> Result<(), DbErr> {
+    if identity.open_id.trim().is_empty() || identity.open_id.len() > 255 {
+        return Err(DbErr::Custom("Invalid OAuth subject".into()));
     }
+    Ok(())
+}
+
+pub async fn validate_binding_session(
+    db: &DatabaseConnection,
+    user_id: i32,
+    session_id: i32,
+) -> Result<(), DbErr> {
+    let tx = db.begin().await?;
+    let account = super::user::lock_account(&tx, user_id)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("user not found".into()))?;
+    super::user::lock_account_management_session(&tx, &account, session_id).await?;
+    tx.commit().await
 }
 
 /// Add a provider credential only while the session approving it is live.
 pub async fn bind_user_with_session(
     db: &DatabaseConnection,
+    cfg: &Config,
     user_id: i32,
     session_id: i32,
-    identity: &OauthUser,
+    expected: &str,
     op: &str,
+    identity: &OauthUser,
 ) -> Result<(), DbErr> {
-    let transaction = db.begin().await?;
-    let Some(account) = super::user::lock_account(&transaction, user_id).await? else {
-        return Err(DbErr::RecordNotFound("user not found".into()));
-    };
-    super::user::lock_full_session(&transaction, &account, session_id).await?;
-    // Serialize linking for the same provider across accounts.
-    oauth::Entity::update_many()
-        .col_expr(
-            oauth::Column::Id,
-            sea_orm::sea_query::Expr::col(oauth::Column::Id).into(),
-        )
-        .filter(oauth::Column::Op.eq(op))
-        .exec(&transaction)
-        .await?;
-    let provider = oauth::Entity::find()
-        .filter(oauth::Column::Op.eq(op))
-        .one(&transaction)
+    validate_subject(identity)?;
+    let tx = db.begin().await?;
+    let account = super::user::lock_account(&tx, user_id)
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("user not found".into()))?;
+    super::user::lock_account_management_session(&tx, &account, session_id).await?;
+    let mut provider = login_provider(&tx, cfg, op)
         .await?
         .ok_or_else(|| DbErr::RecordNotFound("OAuth provider not found".into()))?;
-    let duplicate = user_third::Entity::find()
-        .filter(user_third::Column::Op.eq(op))
-        .filter(
-            Condition::any()
-                .add(user_third::Column::OpenId.eq(&identity.open_id))
-                .add(user_third::Column::UserId.eq(user_id)),
-        )
-        .one(&transaction)
-        .await?;
-    if duplicate.is_some() {
-        return Err(DbErr::Custom("OAuth identity is already linked".into()));
+    if provider.id != 0 {
+        provider = lock_stored_provider(&tx, provider.id).await?;
     }
-    bind_user(&transaction, user_id, identity, &provider.oauth_type, op).await?;
-    transaction.commit().await
+    if provider_identity(&provider) != expected || !is_external_provider(&provider) {
+        return Err(DbErr::Custom("OAuth provider changed".into()));
+    }
+    if user_thirds_by_user_id(&tx, user_id)
+        .await?
+        .iter()
+        .any(|binding| binding.op == provider.op)
+        || linked_identity(&tx, &provider, &identity.open_id)
+            .await?
+            .is_some()
+    {
+        return Err(DbErr::Custom("OauthHasBindOtherUser".into()));
+    }
+    bind_user(&tx, user_id, identity, &provider).await?;
+    tx.commit().await
 }
 
 async fn bind_user(
     db: &impl ConnectionTrait,
     user_id: i32,
-    ou: &OauthUser,
-    oauth_type: &str,
-    op: &str,
-) -> Result<(), DbErr> {
-    let am = user_third::ActiveModel {
+    identity: &OauthUser,
+    provider: &oauth::Model,
+) -> Result<user_third::Model, DbErr> {
+    user_third::ActiveModel {
         user_id: Set(user_id),
-        open_id: Set(ou.open_id.clone()),
-        name: Set(ou.name.clone()),
-        username: Set(ou.username.clone()),
-        email: Set(ou.email.to_lowercase()),
-        verified_email: Set(ou.verified_email),
-        picture: Set(ou.picture.clone()),
-        oauth_type: Set(oauth_type.to_string()),
-        third_type: Set(oauth_type.to_string()),
-        op: Set(op.to_string()),
+        open_id: Set(identity.open_id.clone()),
+        name: Set(identity.name.clone()),
+        username: Set(identity.username.clone()),
+        email: Set(identity.email.trim().to_lowercase()),
+        verified_email: Set(identity.verified_email),
+        picture: Set(identity.picture.clone()),
+        oauth_type: Set(provider.oauth_type.clone()),
+        third_type: Set(provider.oauth_type.clone()),
+        op: Set(provider.op.clone()),
+        oidc_key: Set(Some(binding_key(provider, &identity.open_id))),
         created_at: Set(now()),
         updated_at: Set(now()),
         ..Default::default()
-    };
-    am.insert(db).await?;
-    Ok(())
+    }
+    .insert(db)
+    .await
 }
 
 #[cfg(test)]
@@ -971,6 +1204,196 @@ mod tests {
             created_at: None,
             updated_at: None,
         }
+    }
+
+    async fn accounts_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let cfg = Config::default();
+        crate::bootstrap::migrate_and_seed(&db, &cfg, &crate::i18n::I18n::load("en"), "en")
+            .await
+            .unwrap();
+        db
+    }
+
+    async fn account(
+        db: &DatabaseConnection,
+        username: &str,
+        password: &str,
+        admin: bool,
+    ) -> user::Model {
+        user::ActiveModel {
+            username: Set(username.into()),
+            email: Set(format!("{username}@example.test")),
+            password: Set(password.into()),
+            is_admin: Set(Some(admin)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn session(db: &DatabaseConnection, user_id: i32) -> i32 {
+        ::entity::user_token::ActiveModel {
+            user_id: Set(user_id),
+            expired_at: Set(chrono::Utc::now().timestamp() + 600),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn deployment_binding_is_explicit_unique_and_revocable() {
+        let db = accounts_db().await;
+        let cfg = Config {
+            oidc: crate::config::Oidc {
+                name: "TestProvider".into(),
+                issuer: "https://issuer.example.test".into(),
+                client_id: "client".into(),
+                client_secret: "test-secret".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let provider = login_provider(&db, &cfg, "TestProvider")
+            .await
+            .unwrap()
+            .unwrap();
+        let alice = account(&db, "alice", "test-hash", false).await;
+        let bob = account(&db, "bob", "", false).await;
+        let alice_session = session(&db, alice.id).await;
+        let bob_session = session(&db, bob.id).await;
+        let identity = OauthUser {
+            open_id: "subject".into(),
+            email: alice.email.clone(),
+            verified_email: true,
+            ..Default::default()
+        };
+        assert!(resolve_identity(&db, &provider, &identity, true)
+            .await
+            .unwrap()
+            .is_none());
+
+        let expected = provider_identity(&provider);
+        bind_user_with_session(
+            &db,
+            &cfg,
+            alice.id,
+            alice_session,
+            &expected,
+            &provider.op,
+            &identity,
+        )
+        .await
+        .unwrap();
+        assert!(bind_user_with_session(
+            &db,
+            &cfg,
+            bob.id,
+            bob_session,
+            &expected,
+            &provider.op,
+            &identity
+        )
+        .await
+        .is_err());
+        let link = resolve_identity(&db, &provider, &identity, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.user_id, alice.id);
+        assert!(binding_active(&db, &cfg, alice.id, link.id).await.unwrap());
+
+        let mut changed = cfg.clone();
+        changed.oidc.issuer = "https://other-issuer.example.test".into();
+        assert!(!binding_active(&db, &changed, alice.id, link.id)
+            .await
+            .unwrap());
+        unbind(&db, &cfg, alice.id, alice_session, &provider.op)
+            .await
+            .unwrap();
+        assert!(!binding_active(&db, &cfg, alice.id, link.id).await.unwrap());
+        assert!(resolve_identity(&db, &provider, &identity, true)
+            .await
+            .unwrap()
+            .is_none());
+
+        bind_user_with_session(
+            &db,
+            &cfg,
+            bob.id,
+            bob_session,
+            &expected,
+            &provider.op,
+            &identity,
+        )
+        .await
+        .unwrap();
+        let error = unbind(&db, &cfg, bob.id, bob_session, &provider.op)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, DbErr::Custom(message) if message == "OauthLastLoginMethod"));
+    }
+
+    #[tokio::test]
+    async fn oidc_provisioning_requires_an_initialized_site_and_creates_only_members() {
+        let db = accounts_db().await;
+        let cfg = Config::default();
+        let mut record = oauth_model(oauth::TYPE_OIDC);
+        record.auto_register = Some(true);
+        let provider = create(&db, record).await.unwrap();
+        let mut identity = OauthUser {
+            open_id: "issuer-subject".into(),
+            username: "New Member".into(),
+            email: "admin@example.test".into(),
+            verified_email: true,
+            ..Default::default()
+        };
+        assert!(resolve_identity(&db, &provider, &identity, true)
+            .await
+            .unwrap()
+            .is_none());
+
+        account(&db, "admin", "test-hash", true).await;
+        assert!(resolve_identity(&db, &provider, &identity, true)
+            .await
+            .unwrap()
+            .is_none());
+        identity.email = "member@example.test".into();
+        assert!(resolve_identity(&db, &provider, &identity, false)
+            .await
+            .unwrap()
+            .is_none());
+
+        let linked = resolve_identity(&db, &provider, &identity, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let same = resolve_identity(&db, &provider, &identity, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(linked.id, same.id);
+        let member = user::Entity::find_by_id(linked.user_id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!member.is_admin());
+        assert_eq!(member.group_id, 1);
+        assert_eq!(user::Entity::find().count(&db).await.unwrap(), 2);
+        assert!(binding_active(&db, &cfg, member.id, linked.id)
+            .await
+            .unwrap());
+        let mut changed = provider.clone();
+        changed.issuer = "https://other-issuer.example.test".into();
+        assert_eq!(
+            update(&db, changed).await.unwrap_err(),
+            "OauthProviderHasBindings"
+        );
     }
 
     fn jwt_header() -> jsonwebtoken::Header {

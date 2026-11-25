@@ -459,9 +459,12 @@ pub async fn login(
                 return resp::error(state.tr(&lang, &e));
             }
         };
+        if verified.federated {
+            return resp::error(state.tr(&lang, "OauthVerifyInConsole"));
+        }
         let user = verified.account;
         let device = verified.device;
-        let method = super::admin::challenge_method(verified.federated, verified.kind);
+        let method = super::admin::challenge_method(false, verified.kind);
         audit.subject(user.id);
         if !user.is_enabled() {
             audit.decision(method, "rejected", "account_disabled");
@@ -478,12 +481,7 @@ pub async fn login(
                 device_id: device.id,
                 uuid: device.uuid,
                 ip,
-                login_type: if verified.federated {
-                    login_log::TYPE_OAUTH
-                } else {
-                    login_log::TYPE_ACCOUNT
-                }
-                .to_owned(),
+                login_type: login_log::TYPE_ACCOUNT.to_owned(),
                 platform: device.os,
             },
         )
@@ -637,7 +635,7 @@ fn client_login_device_info(
 }
 
 pub async fn login_options(State(state): State<AppState>) -> Response {
-    let mut ops = services::oauth::get_login_providers(&state.db)
+    let mut ops = services::oauth::get_login_providers(&state.db, &state.config)
         .await
         .unwrap_or_default();
     if state.config.app.web_sso {

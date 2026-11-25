@@ -20,6 +20,7 @@ pub struct Model {
     pub kind: String,
     #[sea_orm(default_value = false)]
     pub federated: bool,
+    pub oauth_binding_id: Option<i32>,
     #[sea_orm(default_value = "")]
     #[serde(skip_serializing)]
     pub code_hash: String,

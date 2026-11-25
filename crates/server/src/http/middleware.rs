@@ -378,6 +378,10 @@ fn restricted_console_access(role: &ConsoleRole, method: &Method, path: &str) ->
             "/api/admin/logout"
             | "/api/admin/login/trusted-browsers/revoke-all"
             | "/api/admin/login/trusted-browsers/:id/revoke"
+            | "/api/admin/user/myOauth"
+            | "/api/admin/oauth/bind"
+            | "/api/admin/oauth/bindConfirm"
+            | "/api/admin/oauth/unbind"
             | "/api/admin/user/changeCurPwd"
             | "/api/admin/user/myTfaSetup"
             | "/api/admin/user/myTfaEnable",

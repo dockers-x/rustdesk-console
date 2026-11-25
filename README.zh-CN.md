@@ -208,15 +208,29 @@ RustDesk 客户端会通过 `GET /api/login-options` 获取第三方登录入口
 - 通用 OIDC 需要配置 `client_id`、`client_secret` 和 `issuer`。
 - 开启 `app.web-sso` 后，会额外暴露 `webauth` 入口。
 
-OAuth 应用里配置的回调地址必须是：
+在「个人中心 → 登录方式」绑定自己的第三方账号。完成提供商授权后会回到 Console，
+绑定会沿用当前账号的角色和本地二次验证策略。也可以在同一处解绑，账号必须保留至少一种
+可用的登录方式。邮箱仅用于显示或在明确允许建号时填写新账号资料。
 
-```text
-<rustdesk.api-server>/api/oidc/callback
-```
+默认只允许已绑定的身份登录。若管理员同时开启提供商的「自动注册」和站点注册，
+站点已有管理员时才可新建普通用户。部署配置提供的 OIDC 始终要求先绑定。
 
-Google 和通用 OIDC 登录会读取 `<issuer>/.well-known/openid-configuration`，
-通过 JWKS 校验 ID Token 签名，并验证 issuer、audience、subject 和 nonce 后才接受
-登录。按邮箱自动绑定已有本地用户时，要求提供商返回已验证邮箱。
+Google 和通用 OIDC 通过发现文档和 JWKS 验证 ID Token 的签名、issuer、audience、
+subject 和 nonce。默认回调为 `<rustdesk.api-server>/api/oidc/callback`。
+
+容器可通过通用环境变量配置一个 OIDC 提供商，密钥留在部署配置中：
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `RUSTDESK_API_OIDC_CLIENT_ID` | OpenID Connect Client ID |
+| `RUSTDESK_API_OIDC_CLIENT_SECRET` | OpenID Connect Client Secret |
+| `RUSTDESK_API_OIDC_ISSUER` | 与发现文档中 issuer 完全一致的 URL |
+| `RUSTDESK_API_OIDC_NAME` | 登录方式名称，默认为 `OIDC` |
+| `RUSTDESK_API_OIDC_REDIRECT_URL` | 可选的完整回调 URL，需与提供商登记值一致 |
+| `RUSTDESK_API_OIDC_SCOPES` | 可选的逗号分隔 scope，默认为 `openid,profile,email` |
+
+在 Console 的网页地址与回调地址同源时发起绑定。若管理员启用了本地 2FA，
+登录 Console 时依然执行二次验证。原版桌面客户端可通过 Webauth 由 Console 批准登录。
 
 后台 OAuth 页面提供“测试”操作，可以检查已保存配置、发现端点和回调地址，不会发起真实
 用户登录。内置 WebClient 和外部 `web.zip` WebClient 也支持通过 WebClient 的

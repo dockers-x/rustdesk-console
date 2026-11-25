@@ -16,7 +16,15 @@ pub struct OauthCacheItem {
     #[serde(skip)]
     pub poll_secret: String,
     #[serde(skip)]
-    pub(crate) binding_in_progress: bool,
+    pub(crate) callback_claimed: bool,
+    #[serde(skip)]
+    pub(crate) identity: Option<crate::services::oauth::OauthUser>,
+    #[serde(skip)]
+    pub(crate) provider_identity: String,
+    #[serde(skip)]
+    pub(crate) binding_id: Option<i32>,
+    #[serde(skip)]
+    pub(crate) failure: Option<&'static str>,
     pub id: String,
     pub op: String,
     pub action: String,
@@ -24,10 +32,6 @@ pub struct OauthCacheItem {
     pub device_name: String,
     pub device_os: String,
     pub device_type: String,
-    pub open_id: String,
-    pub username: String,
-    pub name: String,
-    pub email: String,
     #[serde(skip)]
     pub verifier: String,
     #[serde(skip)]
@@ -99,15 +103,28 @@ impl OauthCache {
             .filter(|item| !item.poll_secret.is_empty() && item.poll_secret == secret)
     }
 
-    pub fn update_login_callback(&self, key: &str, item: OauthCacheItem) -> bool {
+    pub fn claim_callback(&self, key: &str) -> Option<OauthCacheItem> {
+        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
+        prune_locked(&mut entries);
+        let entry = entries.get_mut(key)?;
+        if entry.item.callback_claimed || entry.item.op == entity::oauth::TYPE_WEBAUTH {
+            return None;
+        }
+        entry.item.callback_claimed = true;
+        Some(entry.item.clone())
+    }
+
+    pub fn complete_callback(&self, key: &str, item: OauthCacheItem) -> bool {
         let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
         prune_locked(&mut entries);
         let Some(entry) = entries.get_mut(key) else {
             return false;
         };
-        if entry.item.action != ACTION_LOGIN
-            || entry.item.user_id != 0
-            || entry.item.binding_in_progress
+        if !entry.item.callback_claimed
+            || entry.item.identity.is_some()
+            || entry.item.binding_id.is_some()
+            || entry.item.failure.is_some()
+            || entry.item.op == entity::oauth::TYPE_WEBAUTH
         {
             return false;
         }
@@ -115,42 +132,25 @@ impl OauthCache {
         true
     }
 
-    pub fn take_binding(&self, key: &str) -> Option<OauthCacheItem> {
+    pub fn take_ready_binding(
+        &self,
+        code: &str,
+        user_id: i32,
+        session_id: i32,
+    ) -> Option<OauthCacheItem> {
+        let (key, secret) = code.split_once('.')?;
         let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
         prune_locked(&mut entries);
-        if entries.get(key)?.item.action != ACTION_BIND {
+        let entry = entries.get(key)?;
+        if entry.item.action != ACTION_BIND
+            || entry.item.poll_secret != secret
+            || entry.item.user_id != user_id
+            || entry.item.source_session_id != Some(session_id)
+            || (entry.item.identity.is_none() && entry.item.failure.is_none())
+        {
             return None;
         }
         entries.remove(key).map(|entry| entry.item)
-    }
-
-    pub fn claim_login_binding(&self, key: &str) -> Option<OauthCacheItem> {
-        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
-        prune_locked(&mut entries);
-        let entry = entries.get_mut(key)?;
-        if entry.item.action != ACTION_LOGIN
-            || entry.item.user_id != 0
-            || entry.item.open_id.is_empty()
-            || entry.item.binding_in_progress
-        {
-            return None;
-        }
-        entry.item.binding_in_progress = true;
-        Some(entry.item.clone())
-    }
-
-    pub fn finish_login_binding(&self, key: &str, linked_user_id: Option<i32>) {
-        let mut entries = self.inner.lock().expect("OAuth cache mutex poisoned");
-        prune_locked(&mut entries);
-        if let Some(entry) = entries
-            .get_mut(key)
-            .filter(|entry| entry.item.binding_in_progress)
-        {
-            entry.item.binding_in_progress = false;
-            if let Some(user_id) = linked_user_id {
-                entry.item.user_id = user_id;
-            }
-        }
     }
 
     pub fn take_ready_login(&self, code: &str, console: bool) -> Option<OauthCacheItem> {
@@ -160,7 +160,7 @@ impl OauthCache {
         let entry = entries.get(key)?;
         if entry.item.poll_secret.is_empty()
             || entry.item.poll_secret != secret
-            || entry.item.user_id == 0
+            || (entry.item.user_id == 0 && entry.item.failure.is_none())
             || entry.item.action != ACTION_LOGIN
             || (entry.item.device_type == entity::login_log::CLIENT_WEB_ADMIN) != console
         {
@@ -239,7 +239,7 @@ mod tests {
         assert!(cache
             .take_ready_login("provider-state.client-secret", true)
             .is_none());
-        assert!(!cache.update_login_callback("provider-state", item()));
+        assert!(!cache.complete_callback("provider-state", item()));
     }
 
     #[test]

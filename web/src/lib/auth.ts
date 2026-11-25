@@ -93,20 +93,20 @@ export function subscribeAuthState(onStoreChange: () => void) {
 }
 
 export function setOidcCode(code: string) {
-  localStorage.setItem(OIDC_CODE_KEY, code);
-  localStorage.setItem(OIDC_CODE_EXPIRY_KEY, String(Date.now() + 60 * 1000));
+  sessionStorage.setItem(OIDC_CODE_KEY, code);
+  sessionStorage.setItem(OIDC_CODE_EXPIRY_KEY, String(Date.now() + 5 * 60 * 1000));
 }
 
 export function getOidcCode(): string {
-  const expiry = Number(localStorage.getItem(OIDC_CODE_EXPIRY_KEY) ?? 0);
+  const expiry = Number(sessionStorage.getItem(OIDC_CODE_EXPIRY_KEY) ?? 0);
   if (expiry && Date.now() > expiry) {
     clearOidcCode();
     return "";
   }
-  return localStorage.getItem(OIDC_CODE_KEY) ?? "";
+  return sessionStorage.getItem(OIDC_CODE_KEY) ?? "";
 }
 
 export function clearOidcCode() {
-  localStorage.removeItem(OIDC_CODE_KEY);
-  localStorage.removeItem(OIDC_CODE_EXPIRY_KEY);
+  sessionStorage.removeItem(OIDC_CODE_KEY);
+  sessionStorage.removeItem(OIDC_CODE_EXPIRY_KEY);
 }

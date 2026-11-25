@@ -235,17 +235,24 @@ The server only exposes providers that are complete enough to start login:
 - Generic OIDC requires `client_id`, `client_secret` and `issuer`.
 - Web SSO is exposed as `webauth` when `app.web-sso` is enabled.
 
-The callback URL configured in the provider application must be:
+Open **Personal Center → Sign-in methods** to link a provider account after
+signing in. Linking preserves the local role and local verification requirements.
+You can unlink the provider there while keeping another usable sign-in method.
 
-```text
-<rustdesk.api-server>/api/oidc/callback
-```
+By default, only linked identities can sign in. If both provider auto-registration
+and site registration are enabled, an initialized Console can provision regular
+members. An email match never links an existing account.
 
-For Google and generic OIDC, the server reads
-`<issuer>/.well-known/openid-configuration`, validates the ID Token signature via
-JWKS, and checks issuer, audience, subject and nonce before accepting the login.
-Automatic binding to an existing local user by email only happens when the
-provider returns a verified email address.
+For Google and generic OIDC, Console uses discovery and verifies the ID Token
+signature, issuer, audience, subject and nonce. The default callback is
+`<rustdesk.api-server>/api/oidc/callback`.
+
+To configure a deployment-managed provider that requires explicit linking, set
+`RUSTDESK_API_OIDC_CLIENT_ID`, `RUSTDESK_API_OIDC_CLIENT_SECRET` and
+`RUSTDESK_API_OIDC_ISSUER`. Optional overrides are `RUSTDESK_API_OIDC_NAME`
+(default `OIDC`), `RUSTDESK_API_OIDC_REDIRECT_URL` (the registered callback)
+and `RUSTDESK_API_OIDC_SCOPES` (default `openid,profile,email`). Start a
+Console binding from the same origin as its callback.
 
 The admin OAuth page includes a provider test action. It checks saved settings,
 discovery endpoints and the callback URL without starting a real user login.

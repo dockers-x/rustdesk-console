@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
@@ -12,14 +12,10 @@ interface OAuthInfo {
   device_name?: string;
   device_os?: string;
   device_type?: string;
-  username?: string;
-  name?: string;
-  email?: string;
 }
 
-export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
+export function OAuthActionPage() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const { code = "" } = useParams();
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -35,16 +31,8 @@ export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
     setError("");
     setLoading(true);
     try {
-      await apiPost(
-        mode === "bind"
-          ? "/api/admin/oauth/bindConfirm"
-          : "/api/admin/oauth/confirm",
-        { code },
-      );
+      await apiPost("/api/admin/oauth/confirm", { code });
       setMessage(t("operationSuccess"));
-      window.setTimeout(() => {
-        if (mode === "bind") navigate("/my", { replace: true });
-      }, 1000);
     } catch (err) {
       const ae = err as ApiError;
       setError(ae.message || t("operationFailed"));
@@ -53,24 +41,17 @@ export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
     }
   };
 
-  const rows =
-    mode === "bind"
-      ? [
-          [t("op"), data?.op],
-          [t("thirdName"), data?.name || data?.username || data?.email],
-          [t("email"), data?.email],
-        ]
-      : [
-          [t("device"), data?.device_name],
-          [t("deviceId"), data?.id],
-          [t("os"), data?.device_os],
-        ];
+  const rows = [
+    [t("device"), data?.device_name],
+    [t("deviceId"), data?.id],
+    [t("os"), data?.device_os],
+  ];
 
   return (
     <div className="mx-auto max-w-2xl">
       <div className="mb-4">
         <h1 className="text-2xl font-semibold">
-          {mode === "bind" ? t("oauthBinding") : t("oauthLogining")}
+          {t("oauthLogining")}
         </h1>
         <p className="mt-1 text-sm text-kumo-subtle">{t("oauthCloseNote")}</p>
       </div>
@@ -104,7 +85,7 @@ export function OAuthActionPage({ mode }: { mode: "confirm" | "bind" }) {
             {t("close")}
           </Button>
           <Button variant="primary" onClick={submit} disabled={loading || !code || Boolean(message)}>
-            {mode === "bind" ? t("bind") : t("confirmOauth")}
+            {t("confirmOauth")}
           </Button>
         </div>
       </div>

@@ -33,6 +33,9 @@ pub struct Model {
     pub oauth_type: String,
     #[sea_orm(default_value = "")]
     pub op: String,
+    /// Exact provider and subject identity, independent of database collation.
+    #[serde(skip)]
+    pub oidc_key: Option<String>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

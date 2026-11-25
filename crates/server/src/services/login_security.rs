@@ -478,7 +478,7 @@ pub async fn create_login_challenge(
     kind: VerificationKind,
     locale: &str,
 ) -> Result<LoginChallenge, String> {
-    create_challenge(db, u, device, kind, false, locale).await
+    create_challenge(db, u, device, kind, None, locale).await
 }
 
 pub async fn create_federated_challenge(
@@ -487,8 +487,9 @@ pub async fn create_federated_challenge(
     device: &DeviceLoginInfo,
     kind: VerificationKind,
     locale: &str,
+    binding_id: i32,
 ) -> Result<LoginChallenge, String> {
-    create_challenge(db, u, device, kind, true, locale).await
+    create_challenge(db, u, device, kind, Some(binding_id), locale).await
 }
 
 async fn create_challenge(
@@ -496,7 +497,7 @@ async fn create_challenge(
     u: &user::Model,
     device: &DeviceLoginInfo,
     kind: VerificationKind,
-    federated: bool,
+    binding_id: Option<i32>,
     locale: &str,
 ) -> Result<LoginChallenge, String> {
     let secret = crate::support::random::random_string(40);
@@ -559,7 +560,8 @@ async fn create_challenge(
         user_id: Set(u.id),
         secret: Set(secret.clone()),
         kind: Set(kind.as_str().to_string()),
-        federated: Set(federated),
+        federated: Set(binding_id.is_some()),
+        oauth_binding_id: Set(binding_id),
         code_hash: Set(code_hash),
         device_id: Set(device.id.clone()),
         device_uuid: Set(device.uuid.clone()),
@@ -808,6 +810,7 @@ pub struct VerifiedChallenge {
     pub device: DeviceLoginInfo,
     pub kind: VerificationKind,
     pub federated: bool,
+    pub oauth_binding_id: Option<i32>,
 }
 
 pub async fn verify_login_challenge(
@@ -896,6 +899,7 @@ pub async fn verify_login_challenge(
         device,
         kind,
         federated: challenge.federated,
+        oauth_binding_id: challenge.oauth_binding_id,
     })
 }
 

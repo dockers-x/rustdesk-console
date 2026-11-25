@@ -131,7 +131,10 @@ pub async fn login(
         } else {
             LoginProof::Totp
         };
-        let ut = match services::user::login(
+        if verified.federated && verified.oauth_binding_id.is_none() {
+            return resp::fail(101, state.tr(&lang, "OauthExpired"));
+        }
+        let ut = match services::user::login_with_binding(
             &state.db,
             &state.jwt,
             &state.config,
@@ -150,6 +153,7 @@ pub async fn login(
                 .to_owned(),
                 platform: device.os,
             },
+            verified.oauth_binding_id,
         )
         .await
         {
@@ -434,7 +438,7 @@ pub async fn login_options(
     if banned {
         return resp::fail(101, state.tr(&lang, "LoginBanned"));
     }
-    let ops: Vec<String> = services::oauth::get_login_providers(&state.db)
+    let ops: Vec<String> = services::oauth::get_login_providers(&state.db, &state.config)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -2991,7 +2995,7 @@ pub async fn oauth_update(
     }
     match services::oauth::update(&state.db, f.to_model()).await {
         Ok(_) => resp::success(Value::Null),
-        Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
+        Err(e) => resp::fail(101, state.tr(&lang, &e)),
     }
 }
 
@@ -3007,7 +3011,8 @@ pub async fn oauth_delete(
     match services::oauth::info_by_id(&state.db, f.id).await {
         Ok(Some(_)) => match services::oauth::delete(&state.db, f.id).await {
             Ok(_) => resp::success(Value::Null),
-            Err(e) => resp::fail(101, e.to_string()),
+            Err(sea_orm::DbErr::Custom(message)) => resp::fail(101, state.tr(&lang, &message)),
+            Err(_) => resp::fail(101, state.tr(&lang, "OperationFailed")),
         },
         _ => resp::fail(101, state.tr(&lang, "ItemNotFound")),
     }
@@ -3029,37 +3034,62 @@ pub async fn oauth_test(
     }
 }
 
-/// Replaces the earlier stub: real list of providers + bind status.
-pub async fn user_my_oauth_real(State(state): State<AppState>, user: BackendUser) -> Response {
-    let providers = services::oauth::get_login_provider_configs(&state.db)
-        .await
-        .unwrap_or_default();
-    let thirds = services::oauth::user_thirds_by_user_id(&state.db, user.user.id)
-        .await
-        .unwrap_or_default();
-    let bound: std::collections::HashMap<String, entity::user_third::Model> =
-        thirds.into_iter().map(|t| (t.op.clone(), t)).collect();
-    let res: Vec<Value> = providers
-        .into_iter()
-        .map(|o| {
-            let op = o.op;
-            let binding = bound.get(&op);
-            json!({
-                "op": op,
-                "oauth_type": o.oauth_type,
-                "status": if binding.is_some() { 1 } else { 0 },
-                "name": binding.map(|t| t.name.as_str()).unwrap_or(""),
-                "username": binding.map(|t| t.username.as_str()).unwrap_or(""),
-                "email": binding.map(|t| t.email.as_str()).unwrap_or(""),
-                "verified_email": binding.map(|t| t.verified_email).unwrap_or(false),
-                "picture": binding.map(|t| t.picture.as_str()).unwrap_or(""),
-                "created_at": binding
-                    .and_then(|t| t.created_at.map(|dt| dt.to_string()))
-                    .unwrap_or_default(),
-            })
+/// Show configured providers and retain unavailable links so users can remove them.
+pub async fn user_my_oauth_real(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    user: BackendUser,
+) -> Response {
+    let (providers, bindings) = tokio::join!(
+        services::oauth::get_login_provider_configs(&state.db, &state.config),
+        services::oauth::user_thirds_by_user_id(&state.db, user.user.id),
+    );
+    let (Ok(providers), Ok(bindings)) = (providers, bindings) else {
+        return resp::fail(101, state.tr(&lang, "OperationFailed"));
+    };
+    let status = |op: &str,
+                  oauth_type: &str,
+                  link: Option<&entity::user_third::Model>,
+                  available| {
+        json!({
+            "op": op,
+            "oauth_type": oauth_type,
+            "status": i32::from(link.is_some()),
+            "available": available,
+            "name": link.map(|binding| binding.name.as_str()).unwrap_or_default(),
+            "username": link.map(|binding| binding.username.as_str()).unwrap_or_default(),
+            "email": link.map(|binding| binding.email.as_str()).unwrap_or_default(),
+            "verified_email": link.is_some_and(|binding| binding.verified_email),
+            "picture": link.map(|binding| binding.picture.as_str()).unwrap_or_default(),
+            "created_at": link.and_then(|binding| binding.created_at).map(|dt| dt.to_string()).unwrap_or_default(),
         })
-        .collect();
-    resp::success(res)
+    };
+    let mut result = Vec::with_capacity(providers.len() + bindings.len());
+    let mut present = std::collections::HashSet::new();
+    for provider in &providers {
+        present.insert(provider.op.as_str());
+        let active = bindings
+            .iter()
+            .find(|link| services::oauth::binding_matches(link, provider));
+        let link = active.or_else(|| bindings.iter().find(|link| link.op == provider.op));
+        result.push(status(
+            &provider.op,
+            &provider.oauth_type,
+            link,
+            link.is_none() || active.is_some(),
+        ));
+    }
+    for binding in &bindings {
+        if present.insert(&binding.op) {
+            result.push(status(
+                &binding.op,
+                &binding.oauth_type,
+                Some(binding),
+                false,
+            ));
+        }
+    }
+    resp::no_store(resp::success(result))
 }
 
 #[derive(Deserialize, Default)]
@@ -3072,14 +3102,36 @@ pub async fn oauth_unbind(
     State(state): State<AppState>,
     AcceptLang(lang): AcceptLang,
     user: BackendUser,
+    audit: AuditContext,
     Json(f): Json<UnbindForm>,
 ) -> Response {
-    match services::oauth::user_third_by_user_and_op(&state.db, user.user.id, &f.op).await {
-        Ok(Some(_)) => match services::oauth::unbind(&state.db, user.user.id, &f.op).await {
-            Ok(_) => resp::success(Value::Null),
-            Err(e) => resp::fail(101, format!("{}{}", state.tr(&lang, "OperationFailed"), e)),
-        },
-        _ => resp::fail(101, state.tr(&lang, "ItemNotFound")),
+    if services::oauth::validate_binding_session(&state.db, user.user.id, user.user_token.id)
+        .await
+        .is_err()
+    {
+        return resp::fail(101, state.tr(&lang, "OauthVerifySession"));
+    }
+    match services::oauth::unbind(
+        &state.db,
+        &state.config,
+        user.user.id,
+        user.user_token.id,
+        &f.op,
+    )
+    .await
+    {
+        Ok(()) => {
+            audit.subject(user.user.id);
+            audit.management("oauth.unbind");
+            resp::success(Value::Null)
+        }
+        Err(sea_orm::DbErr::RecordNotFound(message) | sea_orm::DbErr::Custom(message)) => {
+            resp::fail(101, state.tr(&lang, &message))
+        }
+        Err(error) => {
+            tracing::warn!(%error, user_id = user.user.id, "Could not unlink OAuth identity");
+            resp::fail(101, state.tr(&lang, "OperationFailed"))
+        }
     }
 }
 

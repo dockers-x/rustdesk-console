@@ -47,6 +47,7 @@ interface OAuthStatus {
   op: string;
   oauth_type?: string;
   status: number;
+  available?: boolean;
   name?: string;
   username?: string;
   email?: string;
@@ -54,6 +55,8 @@ interface OAuthStatus {
   picture?: string;
   created_at?: string;
 }
+
+const OIDC_BIND_CODE = "rustdesk-console:oidc-bind-code";
 
 interface BindStart {
   code: string;
@@ -110,11 +113,11 @@ interface TrustedLoginDevice {
 export function MyProfilePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { hash, key } = useLocation();
+  const { hash, key, search } = useLocation();
 
   useEffect(() => {
-    if (hash === "#account-security") {
-      document.getElementById("account-security")?.scrollIntoView({ block: "start" });
+    if (hash === "#account-security" || hash === "#login-methods") {
+      document.getElementById(hash.slice(1))?.scrollIntoView({ block: "start" });
     }
   }, [hash, key]);
   const qc = useQueryClient();
@@ -128,7 +131,7 @@ export function MyProfilePage() {
   const [oauthError, setOauthError] = useState("");
   const [oauthMessage, setOauthMessage] = useState("");
   const [bindingTarget, setBindingTarget] = useState("");
-  const [refreshOnFocus, setRefreshOnFocus] = useState(false);
+  const bindingReturnHandled = useRef(false);
   const [unbindTarget, setUnbindTarget] = useState("");
   const [profileMessage, setProfileMessage] = useState("");
   const [profileError, setProfileError] = useState("");
@@ -222,12 +225,10 @@ export function MyProfilePage() {
     setBindingTarget(op);
     try {
       const res = await apiPost<BindStart>("/api/admin/oauth/bind", { op });
-      window.open(res.url, "_blank", "noopener,noreferrer");
-      setOauthMessage(t("oauthBindReturnHint"));
-      setRefreshOnFocus(true);
+      sessionStorage.setItem(OIDC_BIND_CODE, res.code);
+      window.location.assign(res.url);
     } catch (err) {
       setOauthError((err as ApiError).message || t("operationFailed"));
-    } finally {
       setBindingTarget("");
     }
   };
@@ -236,7 +237,8 @@ export function MyProfilePage() {
     mutationFn: (op: string) => apiPost("/api/admin/oauth/unbind", { op }),
     onSuccess: () => {
       setUnbindTarget("");
-      setOauthMessage("");
+      setOauthError("");
+      setOauthMessage(t("oidcUnlinked"));
       void qc.invalidateQueries({ queryKey: ["my-oauth"] });
     },
   });
@@ -304,14 +306,22 @@ export function MyProfilePage() {
   });
 
   useEffect(() => {
-    if (!refreshOnFocus) return;
-    const refresh = () => {
-      setRefreshOnFocus(false);
-      void qc.invalidateQueries({ queryKey: ["my-oauth"] });
-    };
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [qc, refreshOnFocus]);
+    if (new URLSearchParams(search).get("oidc") !== "bind" || bindingReturnHandled.current) return;
+    bindingReturnHandled.current = true;
+    const code = sessionStorage.getItem(OIDC_BIND_CODE);
+    sessionStorage.removeItem(OIDC_BIND_CODE);
+    navigate("/my#login-methods", { replace: true });
+    if (!code) {
+      setOauthError(t("oidcAttemptExpired"));
+      return;
+    }
+    void apiPost("/api/admin/oauth/bindConfirm", { code })
+      .then(() => {
+        setOauthMessage(t("oidcLinked"));
+        void qc.invalidateQueries({ queryKey: ["my-oauth"] });
+      })
+      .catch((err: ApiError) => setOauthError(err.message || t("operationFailed")));
+  }, [navigate, qc, search, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -815,7 +825,7 @@ export function MyProfilePage() {
           )}
         </section>
 
-        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+        <section id="login-methods" className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-base font-semibold">{t("loginMethods")}</h2>
@@ -881,7 +891,7 @@ export function MyProfilePage() {
               </TableState>
             )}
             {!oauth.isLoading && !oauth.error && (oauth.data ?? []).length === 0 && (
-              <TableState tone="empty">{t("noData")}</TableState>
+              <TableState tone="empty">{t("oidcNoProviders")}</TableState>
             )}
           </div>
         </section>
@@ -1180,6 +1190,9 @@ function OAuthMethodRow({
           <p className="mt-1 break-words text-sm text-kumo-subtle">
             {secondary}
           </p>
+          {row.available === false && (
+            <p className="mt-1 text-sm text-kumo-warning">{t("oidcProviderUnavailable")}</p>
+          )}
           {isBound && (row.email || row.username) && (
             <div className="mt-2 flex flex-wrap gap-2 text-xs text-kumo-subtle">
               {row.email && (

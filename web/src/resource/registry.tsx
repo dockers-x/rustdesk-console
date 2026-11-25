@@ -1069,6 +1069,8 @@ export const ADMIN_RESOURCES: ResourceConfig[] = [
         render: (row, t) => {
           const action = String(row.action ?? "");
           const labels: Record<string, string> = {
+            "oauth.bind": "auditOidcBind",
+            "oauth.unbind": "auditOidcUnbind",
             "login_security.trust_browser": "auditTrustBrowser",
             "login_security.revoke_browser": "auditRevokeBrowser",
             "login_security.revoke_all_browsers": "auditRevokeAllBrowsers",

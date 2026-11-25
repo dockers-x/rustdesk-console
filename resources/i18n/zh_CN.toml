@@ -113,8 +113,8 @@ other = "授权失败。"
 
 [OauthHasBindOtherUser]
 description = "Oauth has bind other user."
-one = "授权已绑定其他用户。"
-other = "授权已绑定其他用户。"
+one = "此第三方账号已被绑定。"
+other = "此第三方账号已被绑定。"
 
 [ParamIsEmpty]
 description = "Param is empty."
@@ -123,8 +123,8 @@ other = "{{.P0}} 为空。"
 
 [BindFail]
 description = "Bind fail."
-one = "绑定失败。"
-other = "绑定失败。"
+one = "绑定失败，请回到「登录方式」重新发起。"
+other = "绑定失败，请回到「登录方式」重新发起。"
 [BindSuccess]
 description = "Bind success."
 one = "绑定成功。"
@@ -289,3 +289,24 @@ one = "注册成功，请等待管理员审核。"
 other = "注册成功，请等待管理员审核。"
 
 TotpCodeInvalidOrUsed = "验证码错误、已过期或已使用，请输入新的验证器验证码。"
+
+[OauthBindingRequired]
+other = "此账号尚未绑定。请先通过已有方式登录 Console，再到「个人中心 → 登录方式」绑定。"
+
+[OauthAuthorizationCancelled]
+other = "授权已在提供商处取消，可以重新发起。"
+
+[OauthVerifySession]
+other = "请重新登录并完成所需验证，再修改账号绑定。"
+
+[OauthLastLoginMethod]
+other = "请先设置另一种登录方式，再解除此绑定。"
+
+[OauthProviderHasBindings]
+other = "此提供商仍有已绑定账号。请先解绑，再删除提供商或修改其身份配置。"
+
+[OauthProviderNameReserved]
+other = "此名称保留给 Web SSO。"
+
+[OauthVerifyInConsole]
+other = "请在 Console 完成验证。"

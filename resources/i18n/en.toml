@@ -112,8 +112,8 @@ other = "Oauth failed."
 
 [OauthHasBindOtherUser]
 description = "Oauth has bind other user."
-one = "Oauth has bind other user."
-other = "Oauth has bind other user."
+one = "This provider account is already linked."
+other = "This provider account is already linked."
 
 [ParamIsEmpty]
 description = "Param is empty."
@@ -122,8 +122,8 @@ other = "{{.P0}} is empty."
 
 [BindFail]
 description = "Bind fail."
-one = "Bind fail."
-other = "Bind fail."
+one = "Could not link this account. Start the link again from your sign-in methods."
+other = "Could not link this account. Start the link again from your sign-in methods."
 [BindSuccess]
 description = "Bind success."
 one = "Bind success."
@@ -287,3 +287,24 @@ one = "Register success, wait admin confirm."
 other = "Register success, wait admin confirm."
 
 TotpCodeInvalidOrUsed = "The authenticator code is incorrect, expired, or already used. Enter a new code."
+
+[OauthBindingRequired]
+other = "This account is not linked. Sign in to Console using an existing method, then link it under Personal Center → Sign-in methods."
+
+[OauthAuthorizationCancelled]
+other = "Authorization was cancelled at the provider. You can try again."
+
+[OauthVerifySession]
+other = "Sign in again and complete any required verification before changing linked accounts."
+
+[OauthLastLoginMethod]
+other = "Set up another sign-in method before unlinking this account."
+
+[OauthProviderHasBindings]
+other = "This provider still has linked accounts. Remove those links before deleting the provider or changing its identity."
+
+[OauthProviderNameReserved]
+other = "This provider name is reserved for Web SSO."
+
+[OauthVerifyInConsole]
+other = "Complete the verification in Console."
