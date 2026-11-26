@@ -17,6 +17,7 @@ use crate::{
 };
 
 pub use store::{FeatureStore, SettingsUpdate};
+pub(crate) use store::OperationError;
 
 pub const MAX_CONTENT_SIZE: usize = 1024 * 1024;
 const HARD_SETTINGS: &[&str] = &[

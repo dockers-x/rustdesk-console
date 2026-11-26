@@ -12,6 +12,7 @@ export interface Features {
 
 export interface SigningSettings {
   enabled: boolean;
+  download_portal_enabled: boolean;
   public_key: string;
   key_configured: boolean;
   fingerprint: string;
@@ -84,6 +85,7 @@ export function downloadGeneratedKeypair(generated: GeneratedSigningSettings): S
   }, null, 2), "application/json;charset=utf-8");
   return {
     enabled: generated.enabled,
+    download_portal_enabled: generated.download_portal_enabled,
     public_key: generated.public_key,
     key_configured: generated.key_configured,
     fingerprint: generated.fingerprint,

@@ -13,6 +13,7 @@ import { TableState } from "../../components/TableState";
 import { apiGet, apiPost, apiPut } from "../../lib/api";
 import { BuildAssets } from "./BuildAssets";
 import { Documentation } from "./Documentation";
+import { DownloadsPanel } from "./DownloadsPanel";
 import {
   downloadFile,
   downloadGeneratedKeypair,
@@ -30,7 +31,7 @@ import {
   type SigningSettings,
 } from "./api";
 
-type ClientTab = "keys" | "branding" | "options" | "docs";
+type ClientTab = "keys" | "branding" | "options" | "docs" | "downloads";
 type KeyAction = "generate" | "import";
 type Category = "config" | "local" | "display" | "builtin";
 
@@ -159,21 +160,27 @@ export function SelfSignedClientPage() {
           <h1 className="text-2xl font-semibold">{t("selfSignedClients")}</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-kumo-subtle">{t("selfSignedFeatureHint")}</p>
         </div>
-        {tab !== "docs" && profileReady && (
+        {tab !== "docs" && tab !== "downloads" && profileReady && (
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" disabled={busy} loading={saveProfile.isPending} onClick={() => saveProfile.mutate()}>{t("selfSignedSaveProfile")}</Button>
             <Button disabled={busy || !settings.data?.key_configured} loading={exportConfig.isPending} onClick={() => exportConfig.mutate()}><DownloadSimple size={16} />{t("selfSignedSign")}</Button>
           </div>
         )}
       </header>
-      <nav aria-label={t("selfSignedClients")} className="grid grid-cols-2 gap-1 rounded-lg border border-kumo-line bg-kumo-elevated p-1 lg:grid-cols-4">
-        {([['keys', 'selfSignedKeys'], ['branding', 'selfSignedBranding'], ['options', 'selfSignedOptions'], ['docs', 'selfSignedDocs']] as const).map(([value, label]) => (
+      <nav aria-label={t("selfSignedClients")} className="flex flex-wrap gap-1 rounded-lg border border-kumo-line bg-kumo-elevated p-1">
+        {([['keys', 'selfSignedKeys'], ['branding', 'selfSignedBranding'], ['options', 'selfSignedOptions'], ['downloads', 'clientDownloadsTab'], ['docs', 'selfSignedDocs']] as const).map(([value, label]) => (
           <button key={value} type="button" aria-current={tab === value ? "page" : undefined} onClick={() => { setTab(value); setMessage(""); setLocalError(""); }} className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand ${tab === value ? "bg-kumo-base text-kumo-default shadow-sm" : "text-kumo-subtle hover:bg-kumo-tint/60"}`}>{t(label)}</button>
         ))}
       </nav>
       {message && <InlineMessage tone="success">{message}</InlineMessage>}
       {Boolean(activeError) && <InlineMessage tone="error">{featureError(activeError)}</InlineMessage>}
-      {tab === "docs" ? <Documentation /> : !profileReady ? (
+      {tab === "docs" ? <Documentation /> : tab === "downloads" ? (
+        settings.data ? <DownloadsPanel enabled={settings.data.download_portal_enabled} /> : (
+          <TableState tone={settings.isError ? "error" : "loading"}>
+            {settings.isError ? featureError(settings.error) : t("loading")}
+          </TableState>
+        )
+      ) : !profileReady ? (
         <TableState tone={savedProfile.isError || settings.isError || catalog.isError ? "error" : "loading"}>
           {savedProfile.error || settings.error || catalog.error ? featureError(savedProfile.error || settings.error || catalog.error) : t("selfSignedProfileLoading")}
         </TableState>

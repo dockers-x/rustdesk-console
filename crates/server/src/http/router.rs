@@ -24,6 +24,7 @@ pub fn build(state: AppState) -> Router {
         .merge(crate::http::developer::routes())
         .merge(super::enrollment::routes())
         .merge(super::web_guest::routes())
+        .merge(super::client_download::routes())
         // web index + config
         .route("/", get(static_files::index))
         .route("/favicon.ico", get(static_files::favicon))

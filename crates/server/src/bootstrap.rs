@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 19] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 20] {
     [
         SchemaMigration {
             version: 271,
@@ -144,6 +144,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 19] {
             version: 287,
             name: "device presence history",
             apply: migration_287,
+        },
+        SchemaMigration {
+            version: 288,
+            name: "client download portals",
+            apply: migration_288,
         },
         SchemaMigration {
             version: 290,
@@ -612,6 +617,18 @@ fn migration_291<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> Migra
         ] {
             db.execute(backend.build(statement.clone().if_not_exists())).await?;
         }
+        Ok(())
+    })
+}
+
+fn migration_288<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let statement = Schema::new(backend)
+            .create_table_from_entity(entity::client_download_portal::Entity)
+            .if_not_exists()
+            .to_owned();
+        db.execute(backend.build(&statement)).await?;
         Ok(())
     })
 }
@@ -1973,6 +1990,38 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(versions, (271..=DATABASE_VERSION).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn existing_schema_gains_client_download_portals() {
+        use entity::client_download_portal;
+
+        let db = memory_db().await;
+        let cfg = test_config("");
+        create_tables(&db).await.unwrap();
+        record_schema_version(&db, 286).await.unwrap();
+
+        let first = initialize_database(&db, &cfg, None).await.unwrap();
+        assert_eq!(first.from_schema, Some(286));
+        assert_eq!(first.installed_schema, DATABASE_VERSION);
+        client_download_portal::ActiveModel {
+            token: Set("retained".to_string()),
+            version: Set("1.4.0".to_string()),
+            packages: Set("[]".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        initialize_database(&db, &cfg, None).await.unwrap();
+        assert_eq!(
+            client_download_portal::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]

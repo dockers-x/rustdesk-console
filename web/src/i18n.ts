@@ -2,6 +2,7 @@ import { browserTrustMessages } from "./locales/browserTrust";
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { selfSignedMessages } from "./features/self-signed-client/messages";
+import { downloadMessages } from "./features/self-signed-client/downloadMessages";
 import { developerMessages } from "./features/developer/messages";
 import { addressBookMessages } from "./locales/addressBook";
 import { routingPolicyMessages } from "./locales/routingPolicy";
@@ -57,6 +58,7 @@ const en: Record<string, string> = {
   ldapTestPassed: "Directory connection and bind succeeded.",
   ldapSaved: "LDAP settings saved.",
   ...selfSignedMessages.en,
+  ...downloadMessages.en,
   ...developerMessages.en,
   appTitle: "RustDesk Console",
   login: "Sign in",
@@ -1118,6 +1120,7 @@ const zhCN: Record<string, string> = {
   ldapTestPassed: "目录连接和绑定成功。",
   ldapSaved: "LDAP 设置已保存。",
   ...selfSignedMessages.zhCN,
+  ...downloadMessages.zhCN,
   ...developerMessages["zh-CN"],
   appTitle: "RustDesk 控制台",
   login: "登录",

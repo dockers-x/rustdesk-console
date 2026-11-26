@@ -17,6 +17,8 @@ use super::{SignRequest, SignedArtifact, MAX_CONTENT_SIZE};
 #[serde(deny_unknown_fields)]
 struct StoredSettings {
     enabled: bool,
+    #[serde(default)]
+    download_portal_enabled: bool,
     public_key: String,
     private_key: String,
     #[serde(default)]
@@ -34,6 +36,7 @@ pub struct SettingsUpdate {
 #[derive(Serialize)]
 pub struct PublicSettings {
     pub enabled: bool,
+    pub download_portal_enabled: bool,
     pub public_key: String,
     pub key_configured: bool,
     pub fingerprint: String,
@@ -86,6 +89,27 @@ impl FeatureStore {
 
     pub async fn settings(&self) -> Result<PublicSettings, OperationError> {
         self.run(|path| public_settings(&load(path)?)).await
+    }
+
+    pub(crate) async fn download_portal_enabled(&self) -> Result<bool, OperationError> {
+        self.run(|path| {
+            let settings = load(path)?;
+            Ok(settings.enabled && settings.download_portal_enabled)
+        })
+        .await
+    }
+
+    pub(crate) async fn set_download_portal_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), OperationError> {
+        self.run(move |path| {
+            let mut settings = load(path)?;
+            require_enabled(&settings)?;
+            settings.download_portal_enabled = enabled;
+            persist(path, &settings)
+        })
+        .await
     }
 
     pub async fn profile(&self) -> Result<SignRequest, OperationError> {
@@ -245,6 +269,7 @@ fn public_settings(settings: &StoredSettings) -> Result<PublicSettings, Operatio
     };
     Ok(PublicSettings {
         enabled: settings.enabled,
+        download_portal_enabled: settings.enabled && settings.download_portal_enabled,
         public_key: settings.public_key.clone(),
         key_configured: !settings.private_key.is_empty(),
         fingerprint,

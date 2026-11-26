@@ -19,6 +19,7 @@ describe("generated signing key backup", () => {
     const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const settings = {
       enabled: true,
+      download_portal_enabled: false,
       public_key: "test-public-key",
       key_configured: true,
       fingerprint: "test-fingerprint",
