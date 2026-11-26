@@ -50,6 +50,8 @@ async-trait = { workspace = true }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
 maxminddb = { workspace = true }
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
 fs2 = { workspace = true }
 ldap3 = { workspace = true }
 rustls = "0.21"

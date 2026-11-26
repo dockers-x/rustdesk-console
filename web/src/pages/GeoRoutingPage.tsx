@@ -20,6 +20,22 @@ import { TableState } from "../components/TableState";
 import { apiGet, apiPost, apiPut } from "../lib/api";
 
 type MmdbKind = "country" | "city" | "asn";
+type MmdbSourceMode = "custom" | "maxmind";
+type SourceUrls = Partial<Record<MmdbKind, string | null>>;
+
+interface MmdbSourceSettings {
+  mode: MmdbSourceMode;
+  maxmindAccountId: string;
+  maxmindKeyConfigured: boolean;
+}
+
+const mmdbKinds = ["country", "city", "asn"] as const;
+const p3terxDownloadRoot = "https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download";
+const p3terxUrls: Record<MmdbKind, string> = {
+  country: `${p3terxDownloadRoot}/GeoLite2-Country.mmdb`,
+  city: `${p3terxDownloadRoot}/GeoLite2-City.mmdb`,
+  asn: `${p3terxDownloadRoot}/GeoLite2-ASN.mmdb`,
+};
 
 interface GeoRule {
   name: string;
@@ -63,6 +79,7 @@ interface GeoOverview {
   settings: GeoSettings;
   databases: MmdbStatus[];
   updatePolicy: MmdbUpdatePolicy;
+  source?: MmdbSourceSettings;
   runtime: RuntimeStatus;
 }
 
@@ -145,6 +162,11 @@ export function GeoRoutingPage() {
   const [deleteIndex, setDeleteIndex] = useState<number | null>(null);
   const [databaseKind, setDatabaseKind] = useState<MmdbKind | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
+  const [sourceModeDraft, setSourceModeDraft] = useState<MmdbSourceMode | null>(null);
+  const [customSourceDraft, setCustomSourceDraft] = useState<SourceUrls>({});
+  const [accountIdDraft, setAccountIdDraft] = useState<string | null>(null);
+  const [licenseKey, setLicenseKey] = useState("");
   const [restoreKind, setRestoreKind] = useState<MmdbKind | null>(null);
   const [clientA, setClientA] = useState("");
   const [clientB, setClientB] = useState("");
@@ -175,6 +197,28 @@ export function GeoRoutingPage() {
       return hasLocalChanges ? current : incomingPolicy;
     });
   }, [overview.data]);
+
+  const savedSource = overview.data?.source;
+  const savedMode = savedSource?.mode ?? "custom";
+  const sourceMode = sourceModeDraft ?? savedMode;
+  const savedAccountId = savedSource?.maxmindAccountId ?? "";
+  const accountId = accountIdDraft ?? savedAccountId;
+  const savedSourceUrl = (kind: MmdbKind) =>
+    overview.data?.databases.find((database) => database.kind === kind)?.sourceUrl ?? "";
+  const sourceChanges: SourceUrls = {};
+  for (const kind of mmdbKinds) {
+    const url = customSourceDraft[kind]?.trim();
+    if (url !== undefined && url !== savedSourceUrl(kind)) sourceChanges[kind] = url;
+  }
+
+  const sourceIsDirty = sourceMode !== savedMode ||
+    (sourceMode === "maxmind"
+      ? accountId.trim() !== savedAccountId || Boolean(licenseKey.trim())
+      : Object.keys(sourceChanges).length > 0);
+  const requireNewLicense = !savedSource?.maxmindKeyConfigured || accountId.trim() !== savedAccountId;
+  const sourceCanSave = overview.isSuccess && sourceIsDirty &&
+    (sourceMode === "custom" || (/^\d{1,20}$/.test(accountId.trim()) &&
+      (!requireNewLicense || Boolean(licenseKey.trim()))));
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["rustdesk-geo"] });
 
@@ -210,7 +254,7 @@ export function GeoRoutingPage() {
     mutationFn: () =>
       apiPost<DatabaseActionResult>(
         `/api/admin/rustdesk/geo/databases/${databaseKind}/download`,
-        { sourceUrl: sourceUrl.trim() },
+        savedMode === "maxmind" ? {} : { sourceUrl: sourceUrl.trim() },
       ),
     onSuccess: (result) => {
       setDatabaseKind(null);
@@ -262,6 +306,36 @@ export function GeoRoutingPage() {
       void refresh();
     },
     onError: (value) => setError((value as Error).message || t("operationFailed")),
+  });
+
+  const saveSources = useMutation({
+    mutationFn: () => apiPut<{ source: MmdbSourceSettings; custom: SourceUrls }>(
+      "/api/admin/rustdesk/geo/databases/sources",
+      sourceMode === "maxmind"
+        ? { mode: sourceMode, maxmindAccountId: accountId.trim(), maxmindLicenseKey: licenseKey.trim() || undefined }
+        : { mode: sourceMode, custom: sourceChanges },
+    ),
+    onSuccess: ({ source, custom }) => {
+      qc.setQueryData<GeoOverview>(["rustdesk-geo"], (current) => current && ({
+        ...current,
+        source,
+        databases: current.databases.map((database) => ({
+          ...database,
+          sourceUrl: custom[database.kind] ?? null,
+        })),
+      }));
+      setSourceModeDraft(null);
+      setAccountIdDraft(null);
+      setLicenseKey("");
+      if (source.mode === "custom") setCustomSourceDraft({});
+      setError("");
+      setMessage(t("geoSourcesSaved"));
+      void refresh();
+    },
+    onError: (value) => {
+      setMessage("");
+      setError((value as Error).message || t("operationFailed"));
+    },
   });
 
   const reload = useMutation({
@@ -383,7 +457,7 @@ export function GeoRoutingPage() {
       </section>
 
       <section>
-        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <h2 className="text-base font-semibold">{t("geoMmdbTitle")}</h2>
             <p className="mt-1 text-sm text-kumo-default/75">{t("geoMmdbHint")}</p>
@@ -415,6 +489,96 @@ export function GeoRoutingPage() {
             >
               {t("save")}
             </Button>
+            <Field label={t("geoDownloadSource")}>
+              <select
+                className="w-full rounded-lg border border-kumo-line bg-kumo-base px-2 py-2 text-sm"
+                value={sourceMode}
+                disabled={!overview.isSuccess || saveSources.isPending}
+                onChange={(event) => {
+                  setSourceModeDraft(event.target.value === "maxmind" ? "maxmind" : "custom");
+                  setSourceEditorOpen(true);
+                }}
+              >
+                <option value="maxmind">{t("geoMaxmindOfficial")}</option>
+                <option value="custom">{t("geoCustomSource")}</option>
+              </select>
+            </Field>
+            <button
+              type="button"
+              className="min-h-9 text-sm font-medium text-kumo-brand underline underline-offset-2"
+              aria-expanded={sourceEditorOpen}
+              aria-controls="geo-download-source-editor"
+              disabled={!overview.isSuccess || saveSources.isPending}
+              onClick={() => setSourceEditorOpen((open) => !open)}
+            >
+              {t("geoEditSource")}
+            </button>
+            {sourceMode === "custom" && (
+              <button
+                type="button"
+                className="min-h-9 text-sm font-medium text-kumo-brand underline underline-offset-2"
+                disabled={!overview.isSuccess || saveSources.isPending}
+                onClick={() => {
+                  setCustomSourceDraft(p3terxUrls);
+                  setSourceEditorOpen(true);
+                }}
+              >
+                {t("geoFillP3terx")}
+              </button>
+            )}
+          </div>
+        </div>
+        <div id="geo-download-source-editor" hidden={!sourceEditorOpen}
+          className="mb-3 rounded-lg border border-kumo-line bg-kumo-base p-4">
+          <p className="mb-3 text-sm text-kumo-subtle">
+            {t(sourceMode === "maxmind" ? "geoMaxmindSettingsHint" : "geoCustomSourceHint")}
+          </p>
+          <div className="grid gap-3 lg:grid-cols-3">
+            {sourceMode === "maxmind" ? (
+              <>
+                <Field label={t("geoMaxmindAccountId")}>
+                  <Input
+                    className="w-full"
+                    inputMode="numeric"
+                    maxLength={20}
+                    autoComplete="off"
+                    value={accountId}
+                    disabled={saveSources.isPending}
+                    onChange={(event) => setAccountIdDraft(event.target.value)}
+                  />
+                </Field>
+                <Field label={t("geoMaxmindLicenseKey")}>
+                  <Input
+                    className="w-full"
+                    type="password"
+                    maxLength={256}
+                    autoComplete="new-password"
+                    value={licenseKey}
+                    placeholder={requireNewLicense ? undefined : t("geoKeepMaxmindKey")}
+                    disabled={saveSources.isPending}
+                    onChange={(event) => setLicenseKey(event.target.value)}
+                  />
+                </Field>
+              </>
+            ) : mmdbKinds.map((kind) => (
+              <Field key={kind} label={t(`geoMmdb_${kind}`)}>
+                <Input
+                  className="w-full"
+                  type="url"
+                  maxLength={4096}
+                  value={customSourceDraft[kind] ?? savedSourceUrl(kind)}
+                  placeholder="https://"
+                  disabled={saveSources.isPending}
+                  onChange={(event) => setCustomSourceDraft({ ...customSourceDraft, [kind]: event.target.value })}
+                />
+              </Field>
+            ))}
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button size="sm" disabled={!sourceCanSave || download.isPending} loading={saveSources.isPending}
+              onClick={() => saveSources.mutate()}>
+              {t("geoSaveSource")}
+            </Button>
           </div>
         </div>
         <div className="grid gap-3 lg:grid-cols-3">
@@ -443,7 +607,11 @@ export function GeoRoutingPage() {
                 </dl>
                 {database.error && <p className="mt-3 break-words text-xs text-kumo-danger">{database.error}</p>}
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => { setDatabaseKind(database.kind); setSourceUrl(database.sourceUrl || ""); }}>
+                  <Button size="sm" disabled={sourceMode !== savedMode || saveSources.isPending} onClick={() => {
+                    download.reset();
+                    setDatabaseKind(database.kind);
+                    setSourceUrl(database.sourceUrl || "");
+                  }}>
                     {t("download")}
                   </Button>
                   <Button size="sm" variant="secondary" disabled={!database.hasBackup} onClick={() => setRestoreKind(database.kind)}>
@@ -552,8 +720,23 @@ export function GeoRoutingPage() {
       <Dialog.Root open={databaseKind != null} onOpenChange={(open) => !open && setDatabaseKind(null)}>
         <Dialog size="lg" className={dialogPanelClass}>
           <DialogHeader title={`${t("download")} MMDB`} description={<span className="text-kumo-default/75">{t("geoDownloadHint")}</span>} />
-          <DialogBody><Field label={t("geoSourceUrl")}><Input maxLength={4096} value={sourceUrl} placeholder="https://example.com/GeoLite2-City.mmdb" onChange={(event) => setSourceUrl(event.target.value)} /></Field></DialogBody>
-          <DialogFooter error={download.error ? (download.error as Error).message : undefined}><Button variant="secondary" onClick={() => setDatabaseKind(null)}>{t("cancel")}</Button><Button disabled={!sourceUrl.trim()} loading={download.isPending} onClick={() => download.mutate()}>{t("download")}</Button></DialogFooter>
+          <DialogBody>
+            {savedMode === "maxmind" ? (
+              <p className="text-sm text-kumo-subtle">{t("geoDownloadFromMaxmind")}</p>
+            ) : (
+              <Field label={t("geoSourceUrl")}>
+                <Input className="w-full" maxLength={4096} value={sourceUrl} placeholder="https://example.com/GeoLite2-City.mmdb"
+                  onChange={(event) => setSourceUrl(event.target.value)} />
+              </Field>
+            )}
+          </DialogBody>
+          <DialogFooter error={download.error?.message}>
+            <Button variant="secondary" onClick={() => setDatabaseKind(null)}>{t("cancel")}</Button>
+            <Button disabled={savedMode === "maxmind" ? !savedSource?.maxmindKeyConfigured : !sourceUrl.trim()}
+              loading={download.isPending} onClick={() => download.mutate()}>
+              {t("download")}
+            </Button>
+          </DialogFooter>
         </Dialog>
       </Dialog.Root>
 

@@ -9,17 +9,18 @@ use crate::{config::Config, services::server_cmd};
 use sea_orm::DatabaseConnection;
 
 pub use types::{
-    GeoOverview, GeoSettings, MmdbKind, MmdbStatus, MmdbUpdatePolicy, SaveSettingsResult,
+    GeoOverview, GeoSettings, MmdbKind, MmdbSourceUpdate, MmdbStatus, MmdbUpdatePolicy,
+    SaveSettingsResult,
 };
 
 pub async fn overview(db: &DatabaseConnection, config: &Config) -> Result<GeoOverview, String> {
     let settings = store::load_settings(db).await?;
-    let sources = store::load_sources(db).await?;
     let update_policy = store::load_update_policy(db).await?;
+    let source = store::load_source_config(db).await?;
     let databases = MmdbKind::ALL
         .into_iter()
         .map(
-            |kind| match mmdb::database_status(config, kind, Some(&sources)) {
+            |kind| match mmdb::database_status(config, kind, Some(&source.custom)) {
                 Ok(status) => status,
                 Err(error) => MmdbStatus {
                     kind,
@@ -30,7 +31,7 @@ pub async fn overview(db: &DatabaseConnection, config: &Config) -> Result<GeoOve
                     database_type: None,
                     build_epoch: None,
                     has_backup: false,
-                    source_url: sources.get(kind).map(str::to_owned),
+                    source_url: source.custom.get(kind).map(str::to_owned),
                     error: Some(error),
                 },
             },
@@ -41,6 +42,7 @@ pub async fn overview(db: &DatabaseConnection, config: &Config) -> Result<GeoOve
         settings,
         databases,
         update_policy,
+        source: source.view(),
         runtime,
     })
 }
@@ -50,6 +52,14 @@ pub async fn save_update_policy(
     policy: MmdbUpdatePolicy,
 ) -> Result<MmdbUpdatePolicy, String> {
     store::save_update_policy(db, policy).await
+}
+
+pub async fn save_sources(
+    db: &DatabaseConnection,
+    config: &Config,
+    update: &MmdbSourceUpdate,
+) -> Result<types::MmdbSourceResult, String> {
+    store::save_source_config(db, config, update).await
 }
 
 pub async fn validate_relay_pool_change(
@@ -107,23 +117,45 @@ pub async fn download_database(
     db: &DatabaseConnection,
     config: &Config,
     kind: MmdbKind,
-    source_url: &str,
+    source_url: Option<&str>,
 ) -> Result<(MmdbStatus, bool, Option<String>, bool, Option<String>), String> {
     let _guard = mmdb::acquire_mutation_lock(config, kind)?;
-    let mut status = mmdb::download(config, kind, source_url).await?;
-    let (is_source_saved, source_message) =
-        match store::save_source(db, kind, source_url.trim().to_owned()).await {
-            Ok(sources) => {
-                status.source_url = sources.get(kind).map(str::to_owned);
-                (true, None)
-            }
-            Err(error) => (
-                false,
-                Some(format!(
-                    "MMDB was installed, but its source URL could not be saved: {error}"
-                )),
-            ),
-        };
+    let source = store::load_source_config(db).await?;
+    if source.mode == types::MmdbSourceMode::Maxmind {
+        let (account_id, license_key) = source.maxmind_credentials(config)?;
+        let status = mmdb::download(
+            config,
+            kind,
+            mmdb::DownloadSource::Maxmind {
+                account_id,
+                license_key: &license_key,
+            },
+        )
+        .await?;
+        let (is_reloaded, reload_message) = reload_database(config, kind).await;
+        return Ok((status, is_reloaded, reload_message, true, None));
+    }
+
+    let source_url = source_url
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .or_else(|| source.custom.get(kind))
+        .ok_or_else(|| "Configure a custom download URL for this database".to_owned())?;
+    let mut status = mmdb::download(config, kind, mmdb::DownloadSource::Custom(source_url)).await?;
+    let mut change = types::MmdbSources::default();
+    change.set(kind, Some(source_url.to_owned()));
+    let (is_source_saved, source_message) = match store::save_sources(db, &change).await {
+        Ok(sources) => {
+            status.source_url = sources.get(kind).map(str::to_owned);
+            (true, None)
+        }
+        Err(error) => (
+            false,
+            Some(format!(
+                "MMDB was installed, but its source URL could not be saved: {error}"
+            )),
+        ),
+    };
     let (is_reloaded, reload_message) = reload_database(config, kind).await;
     Ok((
         status,
@@ -306,12 +338,12 @@ async fn update_due_databases(
     if !policy.enabled {
         return Ok(());
     }
-    let sources = store::load_sources(db).await?;
+    let source = store::load_source_config(db).await?;
     let interval = std::time::Duration::from_secs(u64::from(policy.interval_hours) * 60 * 60);
     for kind in MmdbKind::ALL {
-        let Some(source_url) = sources.get(kind) else {
+        if source.mode == types::MmdbSourceMode::Custom && source.custom.get(kind).is_none() {
             continue;
-        };
+        }
         if !mmdb::is_update_due(config, kind, interval)? {
             continue;
         }
@@ -323,14 +355,36 @@ async fn update_due_databases(
             continue;
         }
         last_attempts.insert(kind, std::time::Instant::now());
-        match download_database(db, config, kind, source_url).await {
-            Ok((_, is_reloaded, reload_message, is_source_saved, source_message)) => {
+        // Reuse the selected source without writing the download snapshot
+        // back over an administrator's source edits.
+        let result = match source.mode {
+            types::MmdbSourceMode::Custom => {
+                let Some(url) = source.custom.get(kind) else {
+                    continue;
+                };
+                download_automatic_update(config, kind, mmdb::DownloadSource::Custom(url)).await
+            }
+            types::MmdbSourceMode::Maxmind => match source.maxmind_credentials(config) {
+                Ok((account_id, license_key)) => {
+                    download_automatic_update(
+                        config,
+                        kind,
+                        mmdb::DownloadSource::Maxmind {
+                            account_id,
+                            license_key: &license_key,
+                        },
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            },
+        };
+        match result {
+            Ok((is_reloaded, reload_message)) => {
                 tracing::info!(
                     database_kind = ?kind,
                     reloaded = is_reloaded,
-                    source_saved = is_source_saved,
                     reload_message,
-                    source_message,
                     "automatic MMDB update completed"
                 );
             }
@@ -343,6 +397,16 @@ async fn update_due_databases(
         }
     }
     Ok(())
+}
+
+async fn download_automatic_update(
+    config: &Config,
+    kind: MmdbKind,
+    source: mmdb::DownloadSource<'_>,
+) -> Result<(bool, Option<String>), String> {
+    let _guard = mmdb::acquire_mutation_lock(config, kind)?;
+    mmdb::download(config, kind, source).await?;
+    Ok(reload_database(config, kind).await)
 }
 
 async fn runtime_status(config: &Config) -> types::RuntimeStatus {

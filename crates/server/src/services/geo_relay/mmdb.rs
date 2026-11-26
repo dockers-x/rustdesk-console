@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use maxminddb::Reader;
-use reqwest::{redirect::Policy, Client, Url};
+use reqwest::{header, redirect::Policy, Client, Response, Url};
 use std::{
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
+    io::{self, Read},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
@@ -20,6 +21,25 @@ use super::{
 
 const MAX_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCE_URL_BYTES: usize = 4096;
+const MAX_UNPACKED_BYTES: u64 = MAX_DOWNLOAD_BYTES + 8 * 1024 * 1024;
+const P3TERX_PATH: &str = "/P3TERX/GeoLite.mmdb/releases/";
+const MAXMIND_STORAGE_HOST: &str =
+    "mm-prod-geoip-databases.a2649acb697e2c09b632799562c076f2.r2.cloudflarestorage.com";
+
+pub(super) enum DownloadSource<'a> {
+    Custom(&'a str),
+    Maxmind {
+        account_id: &'a str,
+        license_key: &'a str,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    Direct,
+    P3terx,
+    Maxmind,
+}
 
 pub fn acquire_mutation_lock(config: &Config, kind: MmdbKind) -> Result<std::fs::File, String> {
     let directory = handoff::data_dir(config)?;
@@ -47,41 +67,33 @@ pub fn acquire_mutation_lock(config: &Config, kind: MmdbKind) -> Result<std::fs:
     Ok(file)
 }
 
-pub async fn download(
+pub(super) async fn download(
     config: &Config,
     kind: MmdbKind,
-    source_url: &str,
+    source: DownloadSource<'_>,
 ) -> Result<MmdbStatus, String> {
-    let url = validate_url(source_url)?;
-    let host = url
-        .host_str()
-        .ok_or_else(|| "MMDB source URL has no hostname".to_owned())?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| "MMDB source URL has no port".to_owned())?;
-    let addresses = resolve_public_addresses(host, port).await?;
-    let client = Client::builder()
-        .no_proxy()
-        .redirect(Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(120))
-        .resolve_to_addrs(host, &addresses)
-        .build()
-        .map_err(|_| "cannot initialize the MMDB download client".to_owned())?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| "MMDB download request failed".to_owned())?;
-    if response.status().is_redirection() {
-        return Err("MMDB source redirects are not allowed".to_owned());
-    }
-    if !response.status().is_success() {
-        return Err(format!(
-            "MMDB source returned HTTP {}",
-            response.status().as_u16()
-        ));
-    }
+    let (url, delivery, credentials) = match source {
+        DownloadSource::Custom(source) => {
+            let url = validate_url(source)?;
+            let delivery = if p3terx_release_url(&url, kind) {
+                Delivery::P3terx
+            } else {
+                Delivery::Direct
+            };
+            (url, delivery, None)
+        }
+        DownloadSource::Maxmind {
+            account_id,
+            license_key,
+        } => {
+            let edition = kind.file_name().trim_end_matches(".mmdb");
+            let url = validate_url(&format!(
+                "https://download.maxmind.com/geoip/databases/{edition}/download?suffix=tar.gz"
+            ))?;
+            (url, Delivery::Maxmind, Some((account_id, license_key)))
+        }
+    };
+    let response = request_download(url, delivery, kind, credentials).await?;
     if response
         .content_length()
         .map(|length| length > MAX_DOWNLOAD_BYTES)
@@ -124,12 +136,30 @@ pub async fn download(
         .await
         .map_err(|error| format!("cannot sync MMDB temporary file: {error}"))?;
     drop(file);
+    let unpacked = unique_temporary(&directory, kind, "unpacked");
+    let mut unpacked_guard = TemporaryGuard::new(unpacked.clone());
     let validation_path = temporary.clone();
-    tokio::task::spawn_blocking(move || validate_database(&validation_path, kind))
-        .await
-        .map_err(|error| format!("MMDB validation task failed: {error}"))??;
-    let warning = replace_with_backup(&temporary, &target, kind)?;
-    temporary_guard.disarm();
+    let unpacked_path = unpacked.clone();
+    tokio::task::spawn_blocking(move || {
+        if delivery == Delivery::Maxmind {
+            extract_maxmind_database(&validation_path, &unpacked_path, kind)?;
+            validate_database(&unpacked_path, kind)
+        } else {
+            validate_database(&validation_path, kind)
+        }
+    })
+    .await
+    .map_err(|error| format!("MMDB validation task failed: {error}"))??;
+
+    let warning = if delivery == Delivery::Maxmind {
+        let warning = replace_with_backup(&unpacked, &target, kind)?;
+        unpacked_guard.disarm();
+        warning
+    } else {
+        let warning = replace_with_backup(&temporary, &target, kind)?;
+        temporary_guard.disarm();
+        warning
+    };
     let status_config = config.clone();
     let mut status =
         tokio::task::spawn_blocking(move || database_status(&status_config, kind, None))
@@ -137,6 +167,151 @@ pub async fn download(
             .map_err(|error| format!("MMDB status task failed: {error}"))??;
     status.error = warning;
     Ok(status)
+}
+
+fn p3terx_release_url(url: &Url, kind: MmdbKind) -> bool {
+    if url.host_str() != Some("github.com")
+        || url.port_or_known_default() != Some(443)
+        || url.query().is_some()
+    {
+        return false;
+    }
+    let Some(path) = url.path().strip_prefix(P3TERX_PATH) else {
+        return false;
+    };
+    if path == format!("latest/download/{}", kind.file_name()) {
+        return true;
+    }
+    let Some((tag, filename)) = path
+        .strip_prefix("download/")
+        .and_then(|path| path.split_once('/'))
+    else {
+        return false;
+    };
+    !tag.is_empty() && filename == kind.file_name()
+}
+
+fn allowed_redirect(delivery: Delivery, url: &Url, kind: MmdbKind, hop: usize) -> bool {
+    if url.port_or_known_default() != Some(443) {
+        return false;
+    }
+    match delivery {
+        Delivery::Direct => false,
+        Delivery::Maxmind => hop == 0 && url.host_str() == Some(MAXMIND_STORAGE_HOST),
+        Delivery::P3terx => {
+            matches!(url.host_str(), Some("release-assets.githubusercontent.com"))
+                || (hop == 0 && p3terx_release_url(url, kind))
+        }
+    }
+}
+
+async fn request_download(
+    mut url: Url,
+    delivery: Delivery,
+    kind: MmdbKind,
+    credentials: Option<(&str, &str)>,
+) -> Result<Response, String> {
+    for hop in 0..=2 {
+        let host = url.host_str().ok_or("MMDB source URL has no hostname")?;
+        let port = url
+            .port_or_known_default()
+            .ok_or("MMDB source URL has no port")?;
+        let addresses = resolve_public_addresses(host, port).await?;
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .resolve_to_addrs(host, &addresses)
+            .build()
+            .map_err(|_| "cannot initialize the MMDB download client".to_owned())?;
+        let mut request = client
+            .get(url.clone())
+            .header(header::ACCEPT_ENCODING, "identity");
+        if hop == 0 {
+            if let Some((account_id, license_key)) = credentials {
+                request = request.basic_auth(account_id, Some(license_key));
+            }
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "MMDB download request failed".to_owned())?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        if !response.status().is_redirection() {
+            let source = if delivery == Delivery::Maxmind {
+                "MaxMind"
+            } else {
+                "MMDB source"
+            };
+            return Err(format!(
+                "{source} returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+        let next = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|location| location.to_str().ok())
+            .and_then(|location| url.join(location).ok())
+            .and_then(|next| validate_url(next.as_str()).ok())
+            .filter(|next| allowed_redirect(delivery, next, kind, hop))
+            .ok_or("MMDB source redirect is not allowed")?;
+        url = next;
+    }
+    Err("Too many MMDB source redirects".to_owned())
+}
+
+fn extract_maxmind_database(
+    archive_path: &Path,
+    output_path: &Path,
+    kind: MmdbKind,
+) -> Result<(), String> {
+    let archive_file = File::open(archive_path).map_err(|_| "Cannot read the MaxMind archive")?;
+    // Bound both the compressed transfer and the decompressed archive. Copy the
+    // requested regular file only, into an application-owned temporary path.
+    let decoder = flate2::read::GzDecoder::new(archive_file).take(MAX_UNPACKED_BYTES + 1);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .map_err(|_| "Invalid MaxMind tar.gz archive")?;
+    let mut found = false;
+    for entry in entries {
+        let mut entry = entry.map_err(|_| "Invalid entry in MaxMind archive")?;
+        let path = entry
+            .path()
+            .map_err(|_| "Invalid entry name in MaxMind archive")?;
+        if path.file_name() != Some(std::ffi::OsStr::new(kind.file_name())) {
+            continue;
+        }
+        if found || !entry.header().entry_type().is_file() || entry.size() > MAX_DOWNLOAD_BYTES {
+            return Err("Invalid database file in MaxMind archive".to_owned());
+        }
+        let mut output = private_file(output_path)?;
+        let written =
+            io::copy(&mut entry, &mut output).map_err(|_| "Cannot extract the MaxMind database")?;
+        if written != entry.size() {
+            return Err("The MaxMind database is truncated".to_owned());
+        }
+        output
+            .sync_all()
+            .map_err(|_| "Cannot sync the extracted MaxMind database")?;
+        found = true;
+    }
+    let mut decoder = archive.into_inner();
+    io::copy(&mut decoder, &mut io::sink()).map_err(|_| "Invalid MaxMind gzip stream")?;
+    if decoder.limit() == 0 {
+        return Err("MaxMind archive exceeds the decompression limit".to_owned());
+    }
+    if !found {
+        return Err(format!(
+            "MaxMind archive did not contain {}",
+            kind.file_name()
+        ));
+    }
+    Ok(())
 }
 
 pub fn database_status(
@@ -294,7 +469,7 @@ fn unique_temporary(directory: &Path, kind: MmdbKind, label: &str) -> PathBuf {
     ))
 }
 
-fn validate_url(raw: &str) -> Result<Url, String> {
+pub(super) fn validate_url(raw: &str) -> Result<Url, String> {
     let raw = raw.trim();
     if raw.is_empty() || raw.len() > MAX_SOURCE_URL_BYTES {
         return Err(format!(
@@ -500,6 +675,64 @@ impl Drop for TemporaryGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_built_in_sources_follow_their_expected_redirects() {
+        let kind = MmdbKind::City;
+        let preset = validate_url(
+            "https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-City.mmdb",
+        )
+        .unwrap();
+        let tagged = validate_url("https://github.com/P3TERX/GeoLite.mmdb/releases/download/2026.11.25/GeoLite2-City.mmdb").unwrap();
+        let asset =
+            validate_url("https://release-assets.githubusercontent.com/assets/file").unwrap();
+        let official = validate_url(&format!(
+            "https://{MAXMIND_STORAGE_HOST}/file?signature=test"
+        ))
+        .unwrap();
+        assert!(p3terx_release_url(&preset, kind));
+        assert!(!p3terx_release_url(&preset, MmdbKind::Country));
+        assert!(allowed_redirect(Delivery::P3terx, &tagged, kind, 0));
+        assert!(allowed_redirect(Delivery::P3terx, &asset, kind, 1));
+        assert!(!allowed_redirect(Delivery::P3terx, &official, kind, 0));
+        assert!(!allowed_redirect(Delivery::Direct, &asset, kind, 0));
+        assert!(!allowed_redirect(Delivery::Maxmind, &asset, kind, 0));
+        assert!(allowed_redirect(Delivery::Maxmind, &official, kind, 0));
+        assert!(!allowed_redirect(Delivery::Maxmind, &official, kind, 1));
+    }
+
+    #[test]
+    fn official_archives_extract_only_the_requested_database() {
+        let directory = std::env::temp_dir().join(format!("rd-maxmind-archive-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let archive_path = directory.join("source.tar.gz");
+        let output = directory.join("output.mmdb");
+        let file = File::create(&archive_path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (path, payload) in [
+            ("GeoLite2-City_20261125/LICENSE.txt", b"License".as_slice()),
+            (
+                "GeoLite2-City_20261125/GeoLite2-City.mmdb",
+                b"Only the requested database",
+            ),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o600);
+            header.set_size(payload.len() as u64);
+            archive.append_data(&mut header, path, payload).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap();
+        assert!(extract_maxmind_database(&archive_path, &output, MmdbKind::Country).is_err());
+        assert!(!output.exists());
+        extract_maxmind_database(&archive_path, &output, MmdbKind::City).unwrap();
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            b"Only the requested database"
+        );
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn rejects_unsafe_source_urls() {

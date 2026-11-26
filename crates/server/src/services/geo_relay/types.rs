@@ -100,6 +100,38 @@ pub struct MmdbSources {
     pub asn: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MmdbSourceMode {
+    #[default]
+    Custom,
+    Maxmind,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct MmdbSourceUpdate {
+    pub mode: MmdbSourceMode,
+    pub custom: MmdbSources,
+    pub maxmind_account_id: Option<String>,
+    pub maxmind_license_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MmdbSourceView {
+    pub mode: MmdbSourceMode,
+    pub maxmind_account_id: String,
+    pub maxmind_key_configured: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MmdbSourceResult {
+    pub source: MmdbSourceView,
+    pub custom: MmdbSources,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct MmdbUpdatePolicy {
@@ -136,11 +168,11 @@ impl MmdbSources {
         }
     }
 
-    pub fn set(&mut self, kind: MmdbKind, value: String) {
+    pub fn set(&mut self, kind: MmdbKind, value: Option<String>) {
         match kind {
-            MmdbKind::Country => self.country = Some(value),
-            MmdbKind::City => self.city = Some(value),
-            MmdbKind::Asn => self.asn = Some(value),
+            MmdbKind::Country => self.country = value,
+            MmdbKind::City => self.city = value,
+            MmdbKind::Asn => self.asn = value,
         }
     }
 }
@@ -181,6 +213,7 @@ pub struct GeoOverview {
     pub settings: GeoSettings,
     pub databases: Vec<MmdbStatus>,
     pub update_policy: MmdbUpdatePolicy,
+    pub source: MmdbSourceView,
     pub runtime: RuntimeStatus,
 }
 

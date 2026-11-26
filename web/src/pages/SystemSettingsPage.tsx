@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@cloudflare/kumo/components/button";
@@ -91,7 +91,7 @@ interface EmailSettingsForm {
   from_name: string;
   tls: string;
 }
-type SettingsTab = "site" | "security" | "ldap" | "features" | "backups";
+type SettingsTab = "site" | "security" | "email" | "ldap" | "features" | "backups";
 
 const emptyForm: AdminConfigForm = {
   title: "",
@@ -174,6 +174,8 @@ export function SystemSettingsPage() {
   const [error, setError] = useState("");
   const [securityMessage, setSecurityMessage] = useState("");
   const [securityError, setSecurityError] = useState("");
+  const [smtpMessage, setSmtpMessage] = useState("");
+  const [smtpError, setSmtpError] = useState("");
   const [testEmail, setTestEmail] = useState("");
   const [params, setParams] = useSearchParams();
   const adminConfig = usePublicAdminConfig();
@@ -281,14 +283,14 @@ export function SystemSettingsPage() {
       setSmtpCreating(false);
       setSelectedSmtpId(saved.id);
       setEmailForm(normalizeEmailConfig(saved));
-      setSecurityMessage(t("smtpConfigSaved"));
-      setSecurityError("");
+      setSmtpMessage(t("smtpConfigSaved"));
+      setSmtpError("");
       void qc.invalidateQueries({ queryKey: ["smtp-email-configs"] });
     },
     onError: (err) => {
       const ae = err as ApiError;
-      setSecurityError(ae.message || t("operationFailed"));
-      setSecurityMessage("");
+      setSmtpError(ae.message || t("operationFailed"));
+      setSmtpMessage("");
     },
   });
   const enableSmtp = useMutation({
@@ -298,14 +300,14 @@ export function SystemSettingsPage() {
       setSmtpCreating(false);
       setSelectedSmtpId(saved.id);
       setEmailForm(normalizeEmailConfig(saved));
-      setSecurityMessage(t("smtpConfigEnabled"));
-      setSecurityError("");
+      setSmtpMessage(t("smtpConfigEnabled"));
+      setSmtpError("");
       void qc.invalidateQueries({ queryKey: ["smtp-email-configs"] });
     },
     onError: (err) => {
       const ae = err as ApiError;
-      setSecurityError(ae.message || t("operationFailed"));
-      setSecurityMessage("");
+      setSmtpError(ae.message || t("operationFailed"));
+      setSmtpMessage("");
     },
   });
   const deleteSmtp = useMutation({
@@ -316,14 +318,14 @@ export function SystemSettingsPage() {
       setSmtpCreating(false);
       setSelectedSmtpId(0);
       setEmailForm(emptyEmailForm);
-      setSecurityMessage(t("smtpConfigDeleted"));
-      setSecurityError("");
+      setSmtpMessage(t("smtpConfigDeleted"));
+      setSmtpError("");
       void qc.invalidateQueries({ queryKey: ["smtp-email-configs"] });
     },
     onError: (err) => {
       const ae = err as ApiError;
-      setSecurityError(ae.message || t("operationFailed"));
-      setSecurityMessage("");
+      setSmtpError(ae.message || t("operationFailed"));
+      setSmtpMessage("");
     },
   });
   const testEmailMutation = useMutation({
@@ -333,13 +335,13 @@ export function SystemSettingsPage() {
         to: testEmail.trim(),
       }),
     onSuccess: () => {
-      setSecurityMessage(t("testEmailSent"));
-      setSecurityError("");
+      setSmtpMessage(t("testEmailSent"));
+      setSmtpError("");
     },
     onError: (err) => {
       const ae = err as ApiError;
-      setSecurityError(ae.message || t("operationFailed"));
-      setSecurityMessage("");
+      setSmtpError(ae.message || t("operationFailed"));
+      setSmtpMessage("");
     },
   });
 
@@ -382,8 +384,8 @@ export function SystemSettingsPage() {
       ...current,
       [field]: value,
     }));
-    setSecurityMessage("");
-    setSecurityError("");
+    setSmtpMessage("");
+    setSmtpError("");
   };
 
   const inlineHello = form.hello.trim();
@@ -422,19 +424,20 @@ export function SystemSettingsPage() {
     setSmtpCreating(true);
     setSelectedSmtpId(0);
     setEmailForm(emptyEmailForm);
-    setSecurityMessage("");
-    setSecurityError("");
+    setSmtpMessage("");
+    setSmtpError("");
   };
   const selectSmtpConfig = (config: EmailSettingsView) => {
     setSmtpCreating(false);
     setSelectedSmtpId(config.id);
     setEmailForm(normalizeEmailConfig(config));
-    setSecurityMessage("");
-    setSecurityError("");
+    setSmtpMessage("");
+    setSmtpError("");
   };
   const tabs: Array<{ value: SettingsTab; label: string }> = [
     { value: "site", label: t("settingsTabSiteIdentity") },
     { value: "security", label: t("settingsTabLoginSecurity") },
+    { value: "email", label: t("settingsTabEmail") },
     { value: "ldap", label: t("ldapSettingsTab") },
     { value: "features", label: t("selfSignedFeatureTab") },
     { value: "backups", label: t("automaticBackup") },
@@ -617,398 +620,406 @@ export function SystemSettingsPage() {
             </div>
           </div>
 
-          {emailRequired && !emailConfigured && (
-            <p className="mb-4 rounded-md border border-kumo-danger/25 bg-kumo-danger-tint/30 px-3 py-2 text-sm leading-6 text-kumo-danger">
-              {t("loginSecurityEmailRequiredHint")}
+          {emailRequired && smtpConfigs.isSuccess && !emailConfigured && (
+            <p className="mb-4 flex flex-wrap items-baseline gap-x-3 rounded-md border border-kumo-danger/25 bg-kumo-danger-tint/30 px-3 py-2 text-sm leading-6 text-kumo-danger">
+              <span>{t("loginSecurityEmailRequiredHint")}</span>
+              <Link className="font-medium underline underline-offset-2" to="?tab=email">
+                {t("settingsTabEmail")}
+              </Link>
             </p>
           )}
 
-          {(loginSecurity.isLoading || smtpConfigs.isLoading) && (
+          {loginSecurity.isPending && (
             <TableState tone="loading">{t("loading")}</TableState>
           )}
-          {(loginSecurity.error || smtpConfigs.error) && (
+          {loginSecurity.error && (
             <TableState tone="error">
-              {((loginSecurity.error || smtpConfigs.error) as Error).message ||
-                t("operationFailed")}
+              {loginSecurity.error.message || t("operationFailed")}
             </TableState>
           )}
 
-          {!loginSecurity.isLoading &&
-            !smtpConfigs.isLoading &&
-            !loginSecurity.error &&
-            !smtpConfigs.error && (
-            <div className="grid gap-5">
-              <section className="rounded-lg border border-kumo-line bg-kumo-base p-4">
-                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          {loginSecurity.isSuccess && (
+            <section className="rounded-lg border border-kumo-line bg-kumo-base p-4">
+              <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">
+                    {t("loginSecurityPolicy")}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-kumo-subtle">
+                    {t("loginSecurityPolicyHint")}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  className="w-full md:w-auto"
+                  loading={saveSecurity.isPending}
+                  disabled={saveSecurity.isPending}
+                  onClick={saveLoginSecurity}
+                >
+                  <ShieldCheck size={16} />
+                  {t("saveLoginSecurity")}
+                </Button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <SecuritySwitch
+                  title={t("requireTotp")}
+                  description={t("requireTotpHint")}
+                  checked={loginForm.require_totp}
+                  onCheckedChange={(value) =>
+                    updateLoginSecurity("require_totp", value)
+                  }
+                />
+                <SecuritySwitch
+                  title={t("requireTotpForNewUsers")}
+                  description={t("requireTotpForNewUsersHint")}
+                  checked={loginForm.new_user_require_totp}
+                  onCheckedChange={(value) => updateLoginSecurity("new_user_require_totp", value)}
+                />
+                <SecuritySwitch
+                  title={t("requireAdminTotp")}
+                  description={t("requireAdminTotpHint")}
+                  checked={loginForm.require_admin_totp}
+                  onCheckedChange={(value) => updateLoginSecurity("require_admin_totp", value)}
+                />
+                <SecuritySwitch
+                  title={t("requireEmailVerification")}
+                  description={t("requireEmailVerificationHint")}
+                  checked={loginForm.require_email_verification}
+                  onCheckedChange={(value) =>
+                    updateLoginSecurity("require_email_verification", value)
+                  }
+                />
+                <label className="grid gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 py-3 text-sm">
+                  <span className="font-medium">{t("browserTrustDuration")}</span>
+                  <select
+                    className="w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 text-kumo-default sm:max-w-40"
+                    value={loginForm.browser_trust_days}
+                    disabled={!loginForm.allow_trusted_login_devices}
+                    onChange={(event) => updateLoginSecurity("browser_trust_days", event.target.value === "7" ? 7 : 30)}
+                  >
+                    <option value="7">{t("browserTrustDays", { days: 7 })}</option>
+                    <option value="30">{t("browserTrustDays", { days: 30 })}</option>
+                  </select>
+                  <span className="text-kumo-subtle">{t("browserTrustDurationHint")}</span>
+                </label>
+                <SecuritySwitch
+                  title={t("requireDeviceVerification")}
+                  description={t("requireDeviceVerificationHint")}
+                  checked={loginForm.require_device_verification}
+                  onCheckedChange={(value) =>
+                    updateLoginSecurity("require_device_verification", value)
+                  }
+                />
+                <SecuritySwitch
+                  title={t("allowTrustedLoginDevices")}
+                  description={t("allowTrustedLoginDevicesHint")}
+                  checked={loginForm.allow_trusted_login_devices}
+                  onCheckedChange={(value) =>
+                    updateLoginSecurity("allow_trusted_login_devices", value)
+                  }
+                />
+                <SecuritySwitch
+                  title={t("allowRegistration")}
+                  description={t("allowRegistrationHint")}
+                  checked={loginForm.allow_registration}
+                  onCheckedChange={(value) => updateLoginSecurity("allow_registration", value)}
+                />
+                <label className="grid content-start gap-2 rounded-md border border-kumo-line p-3 text-sm">
+                  <span className="font-medium">{t("totpIssuer")}</span>
+                  <Input
+                    value={loginForm.totp_issuer}
+                    maxLength={80}
+                    placeholder="RustDesk Console"
+                    aria-describedby="totp-issuer-hint"
+                    onChange={(event) => updateLoginSecurity("totp_issuer", event.target.value)}
+                  />
+                  <span id="totp-issuer-hint" className="text-kumo-subtle">{t("totpIssuerHint")}</span>
+                </label>
+              </div>
+            </section>
+          )}
+        </section>
+      )}
+
+      {activeTab === "email" && (
+        <section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5">
+          <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-elevated text-kumo-brand">
+                <EnvelopeSimple size={18} />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold">
+                  {t("emailSettings")}
+                </h2>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-kumo-subtle">
+                  {t("emailSettingsHint")}
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full lg:w-auto"
+              disabled={!smtpConfigs.isSuccess}
+              onClick={startNewSmtpConfig}
+            >
+              <Plus size={16} />
+              {t("addSmtpConfig")}
+            </Button>
+          </div>
+
+          {smtpMessage && <InlineMessage tone="success" className="mb-4">{smtpMessage}</InlineMessage>}
+          {smtpError && <InlineMessage tone="error" className="mb-4">{smtpError}</InlineMessage>}
+          {smtpConfigs.isPending && <TableState tone="loading">{t("loading")}</TableState>}
+          {smtpConfigs.error && (
+            <TableState tone="error">{smtpConfigs.error.message || t("operationFailed")}</TableState>
+          )}
+          {smtpConfigs.isSuccess && (
+            <div className="grid gap-4 lg:grid-cols-[minmax(220px,320px)_minmax(0,1fr)]">
+              <div className="space-y-2">
+                {smtpConfigs.data?.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-kumo-line bg-kumo-elevated px-3 py-4 text-sm leading-6 text-kumo-subtle">
+                    {t("noSmtpConfigs")}
+                  </div>
+                )}
+                {smtpConfigs.data?.map((config) => {
+                  const selected = config.id === emailForm.id;
+                  return (
+                    <button
+                      key={config.id}
+                      type="button"
+                      className={[
+                        "w-full rounded-lg border px-3 py-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand",
+                        selected
+                          ? "border-kumo-brand bg-kumo-brand/10"
+                          : "border-kumo-line bg-kumo-elevated hover:bg-kumo-tint/60",
+                      ].join(" ")}
+                      onClick={() => selectSmtpConfig(config)}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate text-sm font-semibold">
+                          {config.name || config.host || t("smtpUnnamedConfig")}
+                        </span>
+                        {config.enabled && (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-kumo-success/10 px-2 py-0.5 text-xs font-medium text-kumo-success">
+                            <CheckCircle size={12} weight="fill" />
+                            {t("activeSmtpConfig")}
+                          </span>
+                        )}
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-kumo-subtle">
+                        {config.host || t("emptyValue")}
+                        {config.from ? ` / ${config.from}` : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-4">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold">
-                      {t("loginSecurityPolicy")}
-                    </h3>
-                    <p className="mt-1 text-sm leading-6 text-kumo-subtle">
-                      {t("loginSecurityPolicyHint")}
+                    <h4 className="text-sm font-semibold">
+                      {emailForm.id ? t("editSmtpConfig") : t("newSmtpConfig")}
+                    </h4>
+                    <p className="mt-1 text-xs leading-5 text-kumo-subtle">
+                      {emailForm.id && selectedSmtpConfig?.enabled
+                        ? t("activeSmtpConfigHint")
+                        : t("smtpConfigFormHint")}
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    className="w-full md:w-auto"
-                    loading={saveSecurity.isPending}
-                    disabled={saveSecurity.isPending}
-                    onClick={saveLoginSecurity}
-                  >
-                    <ShieldCheck size={16} />
-                    {t("saveLoginSecurity")}
-                  </Button>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <SecuritySwitch
-                    title={t("requireTotp")}
-                    description={t("requireTotpHint")}
-                    checked={loginForm.require_totp}
-                    onCheckedChange={(value) =>
-                      updateLoginSecurity("require_totp", value)
-                    }
-                  />
-                  <SecuritySwitch
-                    title={t("requireTotpForNewUsers")}
-                    description={t("requireTotpForNewUsersHint")}
-                    checked={loginForm.new_user_require_totp}
-                    onCheckedChange={(value) => updateLoginSecurity("new_user_require_totp", value)}
-                  />
-                  <SecuritySwitch
-                    title={t("requireAdminTotp")}
-                    description={t("requireAdminTotpHint")}
-                    checked={loginForm.require_admin_totp}
-                    onCheckedChange={(value) => updateLoginSecurity("require_admin_totp", value)}
-                  />
-                  <SecuritySwitch
-                    title={t("requireEmailVerification")}
-                    description={t("requireEmailVerificationHint")}
-                    checked={loginForm.require_email_verification}
-                    onCheckedChange={(value) =>
-                      updateLoginSecurity("require_email_verification", value)
-                    }
-                  />
-                  <label className="grid gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 py-3 text-sm">
-                    <span className="font-medium">{t("browserTrustDuration")}</span>
-                    <select
-                      className="w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 py-2 text-kumo-default sm:max-w-40"
-                      value={loginForm.browser_trust_days}
-                      disabled={!loginForm.allow_trusted_login_devices}
-                      onChange={(event) => updateLoginSecurity("browser_trust_days", event.target.value === "7" ? 7 : 30)}
+                  {emailForm.id > 0 && !selectedSmtpConfig?.enabled && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-full sm:w-auto"
+                      loading={enableSmtp.isPending}
+                      disabled={enableSmtp.isPending}
+                      onClick={() => enableSmtp.mutate(emailForm.id)}
                     >
-                      <option value="7">{t("browserTrustDays", { days: 7 })}</option>
-                      <option value="30">{t("browserTrustDays", { days: 30 })}</option>
-                    </select>
-                    <span className="text-kumo-subtle">{t("browserTrustDurationHint")}</span>
-                  </label>
-                  <SecuritySwitch
-                    title={t("requireDeviceVerification")}
-                    description={t("requireDeviceVerificationHint")}
-                    checked={loginForm.require_device_verification}
-                    onCheckedChange={(value) =>
-                      updateLoginSecurity("require_device_verification", value)
-                    }
-                  />
-                  <SecuritySwitch
-                    title={t("allowTrustedLoginDevices")}
-                    description={t("allowTrustedLoginDevicesHint")}
-                    checked={loginForm.allow_trusted_login_devices}
-                    onCheckedChange={(value) =>
-                      updateLoginSecurity("allow_trusted_login_devices", value)
-                    }
-                  />
-                  <SecuritySwitch
-                    title={t("allowRegistration")}
-                    description={t("allowRegistrationHint")}
-                    checked={loginForm.allow_registration}
-                    onCheckedChange={(value) => updateLoginSecurity("allow_registration", value)}
-                  />
-                  <label className="grid content-start gap-2 rounded-md border border-kumo-line p-3 text-sm">
-                    <span className="font-medium">{t("totpIssuer")}</span>
+                      <CheckCircle size={16} />
+                      {t("enableSmtpConfig")}
+                    </Button>
+                  )}
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block md:col-span-2">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpConfigName")}
+                    </span>
                     <Input
-                      value={loginForm.totp_issuer}
+                      aria-label={t("smtpConfigName")}
+                      value={emailForm.name}
                       maxLength={80}
-                      placeholder="RustDesk Console"
-                      aria-describedby="totp-issuer-hint"
-                      onChange={(event) => updateLoginSecurity("totp_issuer", event.target.value)}
+                      placeholder={t("smtpConfigNamePlaceholder")}
+                      onChange={(e) => updateEmail("name", e.target.value)}
                     />
-                    <span id="totp-issuer-hint" className="text-kumo-subtle">{t("totpIssuerHint")}</span>
                   </label>
-                </div>
-              </section>
-
-              <section className="rounded-lg border border-kumo-line bg-kumo-base p-4">
-                <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="flex items-start gap-3">
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-kumo-line bg-kumo-elevated text-kumo-brand">
-                      <EnvelopeSimple size={18} />
+                  <label className="block md:col-span-2">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpHost")}
+                    </span>
+                    <Input
+                      aria-label={t("smtpHost")}
+                      value={emailForm.host}
+                      maxLength={255}
+                      onChange={(e) => updateEmail("host", e.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpPort")}
+                    </span>
+                    <Input
+                      aria-label={t("smtpPort")}
+                      type="number"
+                      value={String(emailForm.port)}
+                      onChange={(e) =>
+                        updateEmail("port", Number(e.target.value) || 0)
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpTls")}
+                    </span>
+                    <select
+                      className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                      value={emailForm.tls}
+                      onChange={(e) => updateEmail("tls", e.target.value)}
+                    >
+                      <option value="starttls">{t("smtpTlsStarttls")}</option>
+                      <option value="tls">{t("smtpTlsTls")}</option>
+                      <option value="none">{t("smtpTlsNone")}</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpUsername")}
+                    </span>
+                    <Input
+                      aria-label={t("smtpUsername")}
+                      value={emailForm.username}
+                      maxLength={255}
+                      autoComplete="username"
+                      onChange={(e) => updateEmail("username", e.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpPassword")}
+                    </span>
+                    <Input
+                      aria-label={t("smtpPassword")}
+                      type="password"
+                      value={emailForm.password}
+                      maxLength={500}
+                      autoComplete="new-password"
+                      placeholder={
+                        selectedSmtpConfig?.password_set
+                          ? t("secretConfiguredPlaceholder")
+                          : t("secretEmptyPlaceholder")
+                      }
+                      onChange={(e) => updateEmail("password", e.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpFrom")}
+                    </span>
+                    <Input
+                      aria-label={t("smtpFrom")}
+                      type="email"
+                      value={emailForm.from}
+                      maxLength={255}
+                      autoComplete="email"
+                      onChange={(e) => updateEmail("from", e.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("smtpFromName")}
+                    </span>
+                    <Input
+                      aria-label={t("smtpFromName")}
+                      value={emailForm.from_name}
+                      maxLength={120}
+                      placeholder={t("smtpFromNamePlaceholder")}
+                      onChange={(e) => updateEmail("from_name", e.target.value)}
+                    />
+                  </label>
+                  {selectedSmtpConfig?.password_set && (
+                    <div className="rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 md:col-span-2">
+                      <Switch
+                        label={t("clearConfiguredSecret")}
+                        controlFirst={false}
+                        checked={emailForm.clear_password}
+                        onCheckedChange={(value: boolean) =>
+                          updateEmail("clear_password", value)
+                        }
+                      />
                     </div>
-                    <div>
-                      <h3 className="text-sm font-semibold">
-                        {t("emailSettings")}
-                      </h3>
-                      <p className="mt-1 max-w-3xl text-sm leading-6 text-kumo-subtle">
-                        {t("emailSettingsHint")}
-                      </p>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="w-full lg:w-auto"
-                    onClick={startNewSmtpConfig}
-                  >
-                    <Plus size={16} />
-                    {t("addSmtpConfig")}
-                  </Button>
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-[minmax(220px,320px)_minmax(0,1fr)]">
-                  <div className="space-y-2">
-                    {smtpConfigs.data?.length === 0 && (
-                      <div className="rounded-lg border border-dashed border-kumo-line bg-kumo-elevated px-3 py-4 text-sm leading-6 text-kumo-subtle">
-                        {t("noSmtpConfigs")}
-                      </div>
-                    )}
-                    {smtpConfigs.data?.map((config) => {
-                      const selected = config.id === emailForm.id;
-                      return (
-                        <button
-                          key={config.id}
-                          type="button"
-                          className={[
-                            "w-full rounded-lg border px-3 py-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand",
-                            selected
-                              ? "border-kumo-brand bg-kumo-brand/10"
-                              : "border-kumo-line bg-kumo-elevated hover:bg-kumo-tint/60",
-                          ].join(" ")}
-                          onClick={() => selectSmtpConfig(config)}
-                        >
-                          <span className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate text-sm font-semibold">
-                              {config.name || config.host || t("smtpUnnamedConfig")}
-                            </span>
-                            {config.enabled && (
-                              <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-kumo-success/10 px-2 py-0.5 text-xs font-medium text-kumo-success">
-                                <CheckCircle size={12} weight="fill" />
-                                {t("activeSmtpConfig")}
-                              </span>
-                            )}
-                          </span>
-                          <span className="mt-1 block truncate text-xs text-kumo-subtle">
-                            {config.host || t("emptyValue")}
-                            {config.from ? ` / ${config.from}` : ""}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="rounded-lg border border-kumo-line bg-kumo-elevated p-4">
-                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <h4 className="text-sm font-semibold">
-                          {emailForm.id ? t("editSmtpConfig") : t("newSmtpConfig")}
-                        </h4>
-                        <p className="mt-1 text-xs leading-5 text-kumo-subtle">
-                          {emailForm.id && selectedSmtpConfig?.enabled
-                            ? t("activeSmtpConfigHint")
-                            : t("smtpConfigFormHint")}
-                        </p>
-                      </div>
-                      {emailForm.id > 0 && !selectedSmtpConfig?.enabled && (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="w-full sm:w-auto"
-                          loading={enableSmtp.isPending}
-                          disabled={enableSmtp.isPending}
-                          onClick={() => enableSmtp.mutate(emailForm.id)}
-                        >
-                          <CheckCircle size={16} />
-                          {t("enableSmtpConfig")}
-                        </Button>
-                      )}
-                    </div>
-
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <label className="block md:col-span-2">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpConfigName")}
-                        </span>
-                        <Input
-                          aria-label={t("smtpConfigName")}
-                          value={emailForm.name}
-                          maxLength={80}
-                          placeholder={t("smtpConfigNamePlaceholder")}
-                          onChange={(e) => updateEmail("name", e.target.value)}
-                        />
-                      </label>
-                      <label className="block md:col-span-2">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpHost")}
-                        </span>
-                        <Input
-                          aria-label={t("smtpHost")}
-                          value={emailForm.host}
-                          maxLength={255}
-                          onChange={(e) => updateEmail("host", e.target.value)}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpPort")}
-                        </span>
-                        <Input
-                          aria-label={t("smtpPort")}
-                          type="number"
-                          value={String(emailForm.port)}
-                          onChange={(e) =>
-                            updateEmail("port", Number(e.target.value) || 0)
-                          }
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpTls")}
-                        </span>
-                        <select
-                          className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
-                          value={emailForm.tls}
-                          onChange={(e) => updateEmail("tls", e.target.value)}
-                        >
-                          <option value="starttls">{t("smtpTlsStarttls")}</option>
-                          <option value="tls">{t("smtpTlsTls")}</option>
-                          <option value="none">{t("smtpTlsNone")}</option>
-                        </select>
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpUsername")}
-                        </span>
-                        <Input
-                          aria-label={t("smtpUsername")}
-                          value={emailForm.username}
-                          maxLength={255}
-                          autoComplete="username"
-                          onChange={(e) => updateEmail("username", e.target.value)}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpPassword")}
-                        </span>
-                        <Input
-                          aria-label={t("smtpPassword")}
-                          type="password"
-                          value={emailForm.password}
-                          maxLength={500}
-                          autoComplete="new-password"
-                          placeholder={
-                            selectedSmtpConfig?.password_set
-                              ? t("secretConfiguredPlaceholder")
-                              : t("secretEmptyPlaceholder")
-                          }
-                          onChange={(e) => updateEmail("password", e.target.value)}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpFrom")}
-                        </span>
-                        <Input
-                          aria-label={t("smtpFrom")}
-                          type="email"
-                          value={emailForm.from}
-                          maxLength={255}
-                          autoComplete="email"
-                          onChange={(e) => updateEmail("from", e.target.value)}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("smtpFromName")}
-                        </span>
-                        <Input
-                          aria-label={t("smtpFromName")}
-                          value={emailForm.from_name}
-                          maxLength={120}
-                          placeholder={t("smtpFromNamePlaceholder")}
-                          onChange={(e) => updateEmail("from_name", e.target.value)}
-                        />
-                      </label>
-                      {selectedSmtpConfig?.password_set && (
-                        <div className="rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 md:col-span-2">
-                          <Switch
-                            label={t("clearConfiguredSecret")}
-                            controlFirst={false}
-                            checked={emailForm.clear_password}
-                            onCheckedChange={(value: boolean) =>
-                              updateEmail("clear_password", value)
-                            }
-                          />
-                        </div>
-                      )}
-                      <label className="block md:col-span-2">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("testEmailRecipient")}
-                        </span>
-                        <div className="flex flex-col gap-2 sm:flex-row">
-                          <Input
-                            aria-label={t("testEmailRecipient")}
-                            type="email"
-                            value={testEmail}
-                            placeholder={t("testEmailRecipientPlaceholder")}
-                            className="min-w-0 flex-1"
-                            onChange={(e) => setTestEmail(e.target.value)}
-                          />
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            loading={testEmailMutation.isPending}
-                            disabled={
-                              testEmailMutation.isPending || emailForm.id <= 0
-                            }
-                            onClick={() => testEmailMutation.mutate()}
-                          >
-                            <PaperPlaneTilt size={16} />
-                            {t("sendTestEmail")}
-                          </Button>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="mt-5 flex flex-col-reverse gap-2 border-t border-kumo-line pt-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        {emailForm.id > 0 && (
-                          <Button
-                            type="button"
-                            variant="secondary-destructive"
-                            className="w-full sm:w-auto"
-                            disabled={deleteSmtp.isPending}
-                            onClick={() => {
-                              if (selectedSmtpConfig) setSmtpDeleteTarget(selectedSmtpConfig);
-                            }}
-                          >
-                            <Trash size={16} />
-                            {t("deleteSmtpConfig")}
-                          </Button>
-                        )}
-                      </div>
+                  )}
+                  <label className="block md:col-span-2">
+                    <span className="mb-1.5 block text-sm font-medium">
+                      {t("testEmailRecipient")}
+                    </span>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        aria-label={t("testEmailRecipient")}
+                        type="email"
+                        value={testEmail}
+                        placeholder={t("testEmailRecipientPlaceholder")}
+                        className="min-w-0 flex-1"
+                        onChange={(e) => setTestEmail(e.target.value)}
+                      />
                       <Button
                         type="button"
-                        className="w-full sm:w-auto"
-                        loading={saveSmtp.isPending}
-                        disabled={saveSmtp.isPending}
-                        onClick={saveSmtpConfig}
+                        variant="secondary"
+                        loading={testEmailMutation.isPending}
+                        disabled={
+                          testEmailMutation.isPending || emailForm.id <= 0
+                        }
+                        onClick={() => testEmailMutation.mutate()}
                       >
-                        <EnvelopeSimple size={16} />
-                        {t("saveSmtpConfig")}
+                        <PaperPlaneTilt size={16} />
+                        {t("sendTestEmail")}
                       </Button>
                     </div>
-                  </div>
+                  </label>
                 </div>
-              </section>
+
+                <div className="mt-5 flex flex-col-reverse gap-2 border-t border-kumo-line pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    {emailForm.id > 0 && (
+                      <Button
+                        type="button"
+                        variant="secondary-destructive"
+                        className="w-full sm:w-auto"
+                        disabled={deleteSmtp.isPending}
+                        onClick={() => {
+                          if (selectedSmtpConfig) setSmtpDeleteTarget(selectedSmtpConfig);
+                        }}
+                      >
+                        <Trash size={16} />
+                        {t("deleteSmtpConfig")}
+                      </Button>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    className="w-full sm:w-auto"
+                    loading={saveSmtp.isPending}
+                    disabled={saveSmtp.isPending}
+                    onClick={saveSmtpConfig}
+                  >
+                    <EnvelopeSimple size={16} />
+                    {t("saveSmtpConfig")}
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </section>

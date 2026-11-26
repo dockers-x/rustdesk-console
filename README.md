@@ -177,6 +177,12 @@ refer to the same host directory. Missing or invalid MMDB files do not prevent H
 from starting and do not disable its normal relay pool. Console only creates a
 short-lived `.geo-config-*.json` file while applying settings, and removes it after
 HBBS responds.
+In **Geo relay routing → Download source**, select **MaxMind official** or **Custom**.
+The official source supports the GeoLite2 Country, City and ASN editions and requires a
+MaxMind account ID and license key. Console encrypts the license key with its existing
+encryption key. For direct HTTPS sources, enter each URL or fill all three from P3TERX.
+Saving applies the selected source to manual downloads and automatic updates.
+
 Automatic updates are optional and disabled by default. When enabled in the Geo
 routing page, Console checks every 15 minutes and downloads a database only after
 its configured interval has elapsed; the same full MMDB integrity and type checks

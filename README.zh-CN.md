@@ -161,6 +161,12 @@ Geo 规则和 MMDB 下载地址保存在 Console 数据库中。Console 约定�
 MMDB 必须对应同一个宿主机目录。MMDB 缺失或损坏不会阻止 HBBS 启动，也不会影响原有
 Relay 池。Console 仅在下发配置时创建短期 `.geo-config-*.json` 临时文件，收到 HBBS
 响应后即删除。
+在「Geo Relay 路由 → 下载来源」选择「MaxMind 官方」或「自定义」。官方模式支持
+国家、城市和 ASN 三个 GeoLite2 版本，需要填写 MaxMind 账户 ID 和 License Key。
+Console 使用已有的加密密钥保护 License Key。自定义模式可逐项填入 HTTPS 地址，
+也可点「填入 P3TERX」一次填写三个地址。两种来源分别保留自己的配置，
+保存选定的来源后，手动下载和自动更新都会使用它。
+
 自动更新默认关闭。启用后，Console 每 15 分钟检查一次，仅在配置的更新间隔到期后下载；
 每次替换前仍会执行完整的 MMDB 完整性和数据库类型校验。
 

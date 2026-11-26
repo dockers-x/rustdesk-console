@@ -4502,7 +4502,7 @@ mod geo_error_tests {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MmdbDownloadForm {
-    pub source_url: String,
+    pub source_url: Option<String>,
 }
 
 pub async fn rustdesk_geo_download_database(
@@ -4518,7 +4518,7 @@ pub async fn rustdesk_geo_download_database(
         &state.db,
         &state.config,
         kind,
-        &input.source_url,
+        input.source_url.as_deref(),
     )
     .await
     {
@@ -4562,6 +4562,20 @@ pub async fn rustdesk_geo_restore_database(
                 "isReloaded": is_reloaded,
                 "reloadMessage": reload_message,
             }))
+        }
+        Err(error) => resp::fail(101, error),
+    }
+}
+
+pub async fn rustdesk_geo_save_sources(
+    State(state): State<AppState>,
+    user: AdminUser,
+    Json(changes): Json<services::geo_relay::MmdbSourceUpdate>,
+) -> Response {
+    match services::geo_relay::save_sources(&state.db, &state.config, &changes).await {
+        Ok(sources) => {
+            tracing::info!(admin_id = user.user.id, "admin updated MMDB sources");
+            resp::success(sources)
         }
         Err(error) => resp::fail(101, error),
     }

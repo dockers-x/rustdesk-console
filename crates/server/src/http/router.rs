@@ -765,6 +765,10 @@ fn admin_routes() -> Router<AppState> {
             post(admin::rustdesk_geo_restore_database),
         )
         .route(
+            "/api/admin/rustdesk/geo/databases/sources",
+            put(admin::rustdesk_geo_save_sources),
+        )
+        .route(
             "/api/admin/rustdesk/geo/databases/update-policy",
             put(admin::rustdesk_geo_save_update_policy),
         )

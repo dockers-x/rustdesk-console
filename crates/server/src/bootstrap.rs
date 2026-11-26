@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 285;
+pub const DATABASE_VERSION: i32 = 286;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 15] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 16] {
     [
         SchemaMigration {
             version: 271,
@@ -134,6 +134,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 15] {
             version: 285,
             name: "deployment OIDC identity and verification bindings",
             apply: migration_285,
+        },
+        SchemaMigration {
+            version: 286,
+            name: "GeoIP download sources",
+            apply: migration_286,
         },
     ]
 }
@@ -549,6 +554,18 @@ async fn create_tables(db: &impl ConnectionTrait) -> anyhow::Result<()> {
 
 fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
+}
+
+fn migration_286<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let statement = Schema::new(backend)
+            .create_table_from_entity(entity::geo_mmdb_download::Entity)
+            .if_not_exists()
+            .to_owned();
+        db.execute(backend.build(&statement)).await?;
+        Ok(())
+    })
 }
 
 fn migration_285<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
@@ -1809,6 +1826,7 @@ mod tests {
                 282,
                 283,
                 284,
+                285,
                 DATABASE_VERSION
             ]
         );
