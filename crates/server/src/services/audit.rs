@@ -207,6 +207,64 @@ fn conn_reports(query: Select<audit_conn::Entity>) -> Select<audit_conn::Entity>
     query.column_as(has_recent_snapshot, "has_recent_snapshot")
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct DeviceConnectionReport {
+    id: i32,
+    peer_id: String,
+    from_peer: String,
+    #[serde(serialize_with = "::entity::datetime::serialize_opt")]
+    created_at: Option<NaiveDateTime>,
+    close_time: i64,
+    end_status: &'static str,
+}
+
+/// Read existing audit reports for a device on either side of a connection.
+pub(crate) async fn conn_recent_for_device(
+    db: &DatabaseConnection,
+    device: &peer::Model,
+    since: NaiveDateTime,
+    until: NaiveDateTime,
+    limit: u64,
+) -> Result<Vec<DeviceConnectionReport>, DbErr> {
+    use super::exact_device_id_eq;
+    use audit_conn::Column as Audit;
+
+    if device.id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let backend = db.get_database_backend();
+    let target = exact_device_id_eq(backend, Audit::PeerId, &device.id).add_option(
+        (!device.uuid.is_empty()).then(|| {
+            Condition::any()
+                .add(exact_device_id_eq(backend, Audit::Uuid, ""))
+                .add(exact_device_id_eq(backend, Audit::Uuid, &device.uuid))
+        }),
+    );
+    let source = exact_device_id_eq(backend, Audit::FromPeer, &device.id);
+    let query = audit_conn::Entity::find()
+        .filter(Condition::any().add(target).add(source))
+        .filter(Audit::CreatedAt.between(since, until));
+    let reports = conn_reports(query)
+        .order_by_desc(Audit::CreatedAt)
+        .order_by_desc(Audit::Id)
+        .limit(limit)
+        .into_model::<ConnReport>()
+        .all(db)
+        .await?;
+    Ok(reports
+        .into_iter()
+        .map(ConnAuditRow::from)
+        .map(|report| DeviceConnectionReport {
+            id: report.row.id,
+            peer_id: report.row.peer_id,
+            from_peer: report.row.from_peer,
+            created_at: report.row.created_at,
+            close_time: report.row.close_time,
+            end_status: report.end_status,
+        })
+        .collect())
+}
+
 pub(crate) async fn conn_list_with_details(
     db: &DatabaseConnection,
     query: Select<audit_conn::Entity>,

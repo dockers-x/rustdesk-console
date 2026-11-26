@@ -10,6 +10,7 @@ use ::entity::{
     device_group, device_presence_state, peer, user, webhook_delivery, webhook_subscription,
 };
 
+use super::device_activity::{self, Presence};
 use super::notification_channel::{self, Channel};
 use super::{notification_delivery, notification_template, now, paginate};
 
@@ -378,9 +379,12 @@ pub async fn mark_device_seen(db: &DatabaseConnection, p: peer::Model) -> Result
     let now_ts = Utc::now().timestamp();
     let existing = latest_presence(&transaction, p.row_id).await?;
     let previous_seen_at = existing.as_ref().map_or(0, |row| row.last_seen_at);
+    let missed_heartbeats = existing
+        .as_ref()
+        .is_some_and(|row| row.online && row.last_seen_at < now_ts - ONLINE_WINDOW_SECONDS);
     let should_emit = existing
         .as_ref()
-        .is_none_or(|row| !row.online || row.last_seen_at < now_ts - ONLINE_WINDOW_SECONDS);
+        .is_none_or(|row| !row.online || missed_heartbeats);
     if let Some(row) = existing {
         let mut active: device_presence_state::ActiveModel = row.into();
         active.peer_id = Set(p.id.clone());
@@ -406,6 +410,11 @@ pub async fn mark_device_seen(db: &DatabaseConnection, p: peer::Model) -> Result
         .await?;
     }
     if should_emit {
+        // A returning heartbeat can detect the timeout before the scan runs.
+        if missed_heartbeats {
+            device_activity::record(&transaction, &p, Presence::Offline, now_ts).await?;
+        }
+        device_activity::record(&transaction, &p, Presence::Online, now_ts).await?;
         queue_device_event(
             &transaction,
             DeviceEvent {
@@ -472,6 +481,7 @@ async fn scan_offline_devices(db: &DatabaseConnection) -> Result<(), DbErr> {
         active.updated_at = Set(now());
         active.update(&transaction).await?;
         if let Some(p) = device {
+            device_activity::record(&transaction, &p, Presence::Offline, now_ts).await?;
             queue_device_event(
                 &transaction,
                 DeviceEvent {
@@ -751,6 +761,7 @@ mod tests {
         for table in [
             schema.create_table_from_entity(peer::Entity),
             schema.create_table_from_entity(device_presence_state::Entity),
+            schema.create_table_from_entity(::entity::device_presence_event::Entity),
             schema.create_table_from_entity(webhook_subscription::Entity),
             schema.create_table_from_entity(::entity::notification_template::Entity),
             schema.create_table_from_entity(::entity::notification_template_binding::Entity),
@@ -808,6 +819,13 @@ mod tests {
         first.unwrap();
         repeat.unwrap();
         assert_eq!(
+            ::entity::device_presence_event::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
             device_presence_state::Entity::find()
                 .count(&db)
                 .await
@@ -829,6 +847,69 @@ mod tests {
                 && row.event_type == EVENT_DEVICE_ONLINE
                 && row.attempt == 0
                 && row.execute_at > 0));
+    }
+
+    #[tokio::test]
+    async fn device_activity_records_timeout_once_and_observes_recovery() {
+        use ::entity::device_presence_event;
+
+        let (db, device) = fixture().await;
+        let started_at = Utc::now().timestamp();
+        let age_presence = || async {
+            device_presence_state::Entity::update_many()
+                .col_expr(
+                    device_presence_state::Column::LastSeenAt,
+                    (started_at - 120).into(),
+                )
+                .filter(device_presence_state::Column::PeerRowId.eq(device.row_id))
+                .exec(&db)
+                .await
+                .unwrap();
+        };
+
+        mark_device_seen(&db, device.clone()).await.unwrap();
+        age_presence().await;
+        scan_offline_devices(&db).await.unwrap();
+        scan_offline_devices(&db).await.unwrap();
+        mark_device_seen(&db, device.clone()).await.unwrap();
+        age_presence().await;
+        // This heartbeat observes the timeout before the worker can scan.
+        mark_device_seen(&db, device.clone()).await.unwrap();
+        mark_device_seen(&db, device.clone()).await.unwrap();
+        scan_offline_devices(&db).await.unwrap();
+
+        let events = device_presence_event::Entity::find()
+            .order_by_asc(device_presence_event::Column::Id)
+            .all(&db)
+            .await
+            .unwrap();
+        let states: Vec<_> = events.iter().map(|event| event.online).collect();
+        assert_eq!(states, [true, false, true, false, true]);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.peer_row_id == device.row_id && event.observed_at >= started_at)
+        );
+        assert_eq!(events[3].observed_at, events[4].observed_at);
+    }
+
+    #[tokio::test]
+    async fn device_activity_record_failure_rolls_back_presence_change() {
+        let (db, device) = fixture().await;
+        db.execute_unprepared(
+            "CREATE TRIGGER reject_presence_history BEFORE INSERT ON device_presence_events
+             BEGIN SELECT RAISE(FAIL, 'record failed'); END",
+        )
+        .await
+        .unwrap();
+        assert!(mark_device_seen(&db, device).await.is_err());
+        assert_eq!(
+            device_presence_state::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]

@@ -14,6 +14,7 @@ pub(crate) mod console_roles;
 pub(crate) mod delegated_admin;
 pub mod deployment;
 pub mod developer;
+pub(crate) mod device_activity;
 pub mod device_admission;
 pub mod diagnostics;
 pub mod geo_relay;

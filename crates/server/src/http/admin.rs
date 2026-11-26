@@ -2596,6 +2596,46 @@ pub async fn peer_detail(
     }
 }
 
+#[derive(Deserialize)]
+pub struct PeerActivityQuery {
+    days: Option<i64>,
+}
+
+/// Show heartbeat transitions and connection audits to full Console administrators.
+pub async fn peer_activity(
+    State(state): State<AppState>,
+    AcceptLang(lang): AcceptLang,
+    _user: AdminUser,
+    Path(id): Path<i32>,
+    Query(query): Query<PeerActivityQuery>,
+) -> Response {
+    use services::device_activity;
+
+    let response = async {
+        let Some(range) =
+            device_activity::range(query.days.unwrap_or(device_activity::DEFAULT_RANGE_DAYS))
+        else {
+            return resp::fail(101, state.tr(&lang, "ParamsError"));
+        };
+        let device = match services::peer::info_by_row_id(&state.db, id).await {
+            Ok(Some(device)) => device,
+            Ok(None) => return resp::fail(101, state.tr(&lang, "ItemNotFound")),
+            Err(error) => {
+                tracing::warn!(%error, peer_row_id = id, "Could not load device for activity");
+                return resp::fail(101, state.tr(&lang, "OperationFailed"));
+            }
+        };
+        match device_activity::recent(&state.db, &device, chrono::Utc::now(), range).await {
+            Ok(activity) => resp::success(activity),
+            Err(error) => {
+                tracing::warn!(%error, peer_row_id = id, "Could not load device activity");
+                resp::fail(101, state.tr(&lang, "OperationFailed"))
+            }
+        }
+    };
+    resp::no_store(response.await)
+}
+
 #[derive(Deserialize, Default)]
 pub struct PeerForm {
     #[serde(default)]

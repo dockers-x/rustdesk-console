@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 18] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 19] {
     [
         SchemaMigration {
             version: 271,
@@ -139,6 +139,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 18] {
             version: 286,
             name: "GeoIP download sources",
             apply: migration_286,
+        },
+        SchemaMigration {
+            version: 287,
+            name: "device presence history",
+            apply: migration_287,
         },
         SchemaMigration {
             version: 290,
@@ -564,6 +569,37 @@ async fn create_tables(db: &impl ConnectionTrait) -> anyhow::Result<()> {
 
 fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
+}
+
+fn migration_287<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let table = Schema::new(backend)
+            .create_table_from_entity(entity::device_presence_event::Entity)
+            .if_not_exists()
+            .to_owned();
+        db.execute(backend.build(&table)).await?;
+        for (table, index, columns) in [
+            (
+                "device_presence_events",
+                "idx_presence_events_peer_time",
+                &["peer_row_id", "observed_at", "id"][..],
+            ),
+            (
+                "device_presence_events",
+                "idx_presence_events_time",
+                &["observed_at", "id"][..],
+            ),
+            (
+                "audit_conns",
+                "idx_audit_conns_device_activity_time",
+                &["created_at", "id"][..],
+            ),
+        ] {
+            create_index(db, table, index, columns).await?;
+        }
+        Ok(())
+    })
 }
 
 fn migration_291<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
@@ -1702,6 +1738,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_activity_migration_preserves_286_state_without_backfill() {
+        use entity::device_presence_event;
+
+        let db = memory_db().await;
+        let cfg = test_config("");
+        create_tables(&db).await.unwrap();
+        record_schema_version(&db, 286).await.unwrap();
+        let device = peer::ActiveModel {
+            id: Set("existing".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        device_presence_state::ActiveModel {
+            peer_row_id: Set(device.row_id),
+            online: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let upgrade = initialize_database(&db, &cfg, None).await.unwrap();
+        assert_eq!(upgrade.from_schema, Some(286));
+        assert_eq!(
+            device_presence_state::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            device_presence_event::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            db.query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT 1 FROM sqlite_schema WHERE name = 'idx_presence_events_peer_time'"
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        );
+
+        device_presence_event::ActiveModel {
+            peer_row_id: Set(device.row_id),
+            observed_at: Set(1),
+            online: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            device_presence_event::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn device_activity_schema_can_be_built_for_each_backend() {
+        for backend in [DbBackend::Sqlite, DbBackend::MySql, DbBackend::Postgres] {
+            let statement = Schema::new(backend)
+                .create_table_from_entity(entity::device_presence_event::Entity);
+            let ddl = backend
+                .build(&statement)
+                .sql
+                .replace(['"', '`'], "")
+                .to_ascii_lowercase();
+            assert!(
+                ddl.starts_with("create table device_presence_events"),
+                "{ddl}"
+            );
+            assert!(
+                ddl.contains("peer_row_id ")
+                    && ddl.contains("observed_at ")
+                    && ddl.contains("primary key"),
+                "{ddl}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn startup_never_creates_tables_on_a_future_schema() {
         let db = memory_db().await;
         let future_version = DATABASE_VERSION + 1;
@@ -1845,27 +1972,7 @@ mod tests {
             .map(|row| row.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            versions,
-            vec![
-                271,
-                272,
-                273,
-                274,
-                275,
-                276,
-                277,
-                278,
-                279,
-                280,
-                281,
-                282,
-                283,
-                284,
-                285,
-                DATABASE_VERSION
-            ]
-        );
+        assert_eq!(versions, (271..=DATABASE_VERSION).collect::<Vec<_>>());
     }
 
     #[tokio::test]

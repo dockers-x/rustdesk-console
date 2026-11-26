@@ -9,6 +9,7 @@ import { apiGet } from "../lib/api";
 import { getAuthSessionId } from "../lib/auth";
 import { formatDateTime, formatUnixSeconds } from "../lib/dateFormat";
 import { usePublicAdminConfig } from "../lib/adminTitle";
+import { DeviceActivity } from "./DeviceActivity";
 import { TableState } from "./TableState";
 
 const PEER_ONLINE_WINDOW_SECONDS = 90;
@@ -128,6 +129,7 @@ export function PeerInfoDrawer({
   const adminConfig = usePublicAdminConfig();
   const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
   const peerId = String(row.id ?? "");
+  const rowId = numberValue(row.row_id);
   const uuid = String(row.uuid ?? "");
   const online = isPeerOnline(row);
   const authSessionId = getAuthSessionId();
@@ -249,6 +251,10 @@ export function PeerInfoDrawer({
                   />
                 </dl>
               </section>
+
+              {scope === "admin" && rowId > 0 && (
+                <DeviceActivity rowId={rowId} peerId={peerId} timeZone={displayTimeZone} />
+              )}
 
               <section className="mt-5 grid gap-3">
                 <h3 className="text-sm font-semibold">{t("deviceIdentity")}</h3>

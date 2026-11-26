@@ -177,6 +177,8 @@ mod tests {
             schema.create_table_from_entity(entity::ldap_identity::Entity),
             schema.create_table_from_entity(user_token::Entity),
             schema.create_table_from_entity(peer::Entity),
+            schema.create_table_from_entity(entity::device_presence_event::Entity),
+            schema.create_table_from_entity(entity::active_connection::Entity),
             schema.create_table_from_entity(address_book::Entity),
             schema.create_table_from_entity(address_book_collection::Entity),
             schema.create_table_from_entity(address_book_collection_rule::Entity),
@@ -262,6 +264,125 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
         body["allowed"].as_bool().unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn device_activity_requires_full_admin_and_scopes_both_histories() {
+        use super::super::response::{CODE_NEED_LOGIN, CODE_NO_ACCESS};
+        use chrono::{TimeDelta, Utc};
+        use entity::{audit_conn, device_presence_event, system_setting};
+
+        let state = fixture().await;
+        let path = "/api/admin/peer/activity/1";
+        for (token, denied) in [(None, CODE_NEED_LOGIN), (Some("token-1"), CODE_NO_ACCESS)] {
+            let (_, body) = json_request(&state, "GET", path, json!(null), token).await;
+            assert_eq!(body["code"], denied, "{body}");
+        }
+        let mut role = system_setting::ActiveModel {
+            key: Set("console_role:2".into()),
+            value: Set(json!({"role":"device_group_operator", "group_ids":[42]}).to_string()),
+            ..Default::default()
+        }
+        .insert(&state.db)
+        .await
+        .unwrap();
+        for value in [None, Some(json!({"role":"audit_reader"}))] {
+            if let Some(value) = value {
+                let mut active: system_setting::ActiveModel = role.into();
+                active.value = Set(value.to_string());
+                role = active.update(&state.db).await.unwrap();
+            }
+            let (_, body) = json_request(&state, "GET", path, json!(null), Some("token-2")).await;
+            assert_eq!(body["code"], CODE_NO_ACCESS, "{body}");
+        }
+
+        let now = Utc::now();
+        peer::ActiveModel {
+            row_id: Set(1),
+            created_at: Set(Some((now - TimeDelta::days(20)).naive_utc())),
+            ..Default::default()
+        }
+        .update(&state.db)
+        .await
+        .unwrap();
+        let other = peer::ActiveModel {
+            id: Set("other".into()),
+            ..Default::default()
+        }
+        .insert(&state.db)
+        .await
+        .unwrap();
+        for (peer_row_id, days) in [(1, 0), (1, 8), (other.row_id, 0)] {
+            device_presence_event::ActiveModel {
+                peer_row_id: Set(peer_row_id),
+                observed_at: Set((now - TimeDelta::days(days)).timestamp()),
+                online: Set(true),
+                ..Default::default()
+            }
+            .insert(&state.db)
+            .await
+            .unwrap();
+        }
+        for (target, source, uuid, days) in [
+            ("device-1", "incoming", "device-uuid", 0),
+            ("outgoing", "device-1", "other-uuid", 0),
+            ("device-12", "unrelated", "device-uuid", 0),
+            ("Device-1", "unrelated", "device-uuid", 0),
+            ("device-1", "prior device", "wrong-uuid", 0),
+            ("device-1", "older", "", 8),
+            ("device-1", "before enrollment", "", 21),
+        ] {
+            audit_conn::ActiveModel {
+                peer_id: Set(target.into()),
+                from_peer: Set(source.into()),
+                uuid: Set(uuid.into()),
+                created_at: Set(Some((now - TimeDelta::days(days)).naive_utc())),
+                ..Default::default()
+            }
+            .insert(&state.db)
+            .await
+            .unwrap();
+        }
+
+        for (query, presence, connections) in [("", 1, 2), ("?days=30", 2, 3)] {
+            let response = super::super::router::build(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("{path}{query}"))
+                        .header("api-token", "token-3")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["code"], 0, "{body}");
+            assert_eq!(
+                body["data"]["presence"]["entries"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                presence
+            );
+            let entries = body["data"]["connections"]["entries"].as_array().unwrap();
+            let ids: Vec<_> = entries
+                .iter()
+                .map(|entry| entry["id"].as_i64().unwrap())
+                .collect();
+            assert_eq!(ids, &([2, 1, 6][..connections]));
+        }
+        let (_, body) = json_request(
+            &state,
+            "GET",
+            &format!("{path}?days=91"),
+            json!(null),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(body["code"], 101, "{body}");
     }
 
     #[tokio::test]
