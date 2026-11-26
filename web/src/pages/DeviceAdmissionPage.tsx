@@ -16,6 +16,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DialogBody, DialogFooter, DialogHeader, dialogPanelClass } from "../components/DialogLayout";
 import { apiGet, apiPost, apiPut } from "../lib/api";
 import { ConnectionGrantsPanel } from "./ConnectionGrantsPanel";
+import { EnrollmentPanel } from "../features/enrollment/EnrollmentPanel";
 import { formatDateTime } from "../lib/dateFormat";
 
 interface AdmissionSettings {
@@ -187,6 +188,7 @@ export function DeviceAdmissionPage() {
           <Button size="sm" variant="secondary" disabled={page * pageSize >= devices.data.total} onClick={() => setPage(page + 1)}>{t("bookNext")}</Button>
         </div>}
       </section>
+      <EnrollmentPanel />
       <ConnectionGrantsPanel />
       {enable !== null && <ConfirmDialog open title={t("requireDeviceDeployment")}
         description={t(enable ? "admissionEnableDescription" : "admissionDisableDescription")}

@@ -8,6 +8,7 @@ mod storage_profiles;
 mod delegated_admin;
 pub mod developer;
 mod developer_openapi;
+mod enrollment;
 pub mod file;
 mod ldap_settings;
 pub mod middleware;

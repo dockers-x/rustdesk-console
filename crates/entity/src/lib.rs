@@ -25,6 +25,7 @@ pub mod device_admission;
 pub mod device_group;
 pub mod routing_settings;
 pub mod device_presence_state;
+pub mod enrollment_invitation;
 pub mod geo_mmdb_download;
 pub mod group;
 pub mod ldap_identity;

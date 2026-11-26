@@ -13,6 +13,7 @@ import { passwordResetMessages } from "./locales/passwordReset";
 import { backupAndGrants } from "./locales/backupAndGrants";
 import { storageProfileMessages } from "./locales/storageProfiles";
 import { ru } from "./locales/ru";
+import { enrollmentMessages } from "./features/enrollment/messages";
 
 const en: Record<string, string> = {
   ldapSettingsTab: "LDAP",
@@ -2155,9 +2156,9 @@ i18n.on("languageChanged", (language) => {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en, ...fileAuditMessages.en, ...connectionAuditMessages.en, ...delegationMessages.en, ...passwordResetMessages.en, ...backupAndGrants.en, ...storageProfileMessages.en, ...browserTrustMessages.en } },
-    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru, ...fileAuditMessages.ru, ...connectionAuditMessages.ru, ...delegationMessages.ru, ...passwordResetMessages.ru, ...backupAndGrants.ru, ...storageProfileMessages.ru, ...browserTrustMessages.ru } },
-    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"], ...fileAuditMessages["zh-CN"], ...connectionAuditMessages["zh-CN"], ...delegationMessages["zh-CN"], ...passwordResetMessages["zh-CN"], ...backupAndGrants["zh-CN"], ...storageProfileMessages["zh-CN"], ...browserTrustMessages["zh-CN"] } },
+    en: { translation: { ...en, ...addressBookMessages.en, ...routingPolicyMessages.en, ...consoleAuditMessages.en, ...fileAuditMessages.en, ...connectionAuditMessages.en, ...delegationMessages.en, ...passwordResetMessages.en, ...backupAndGrants.en, ...storageProfileMessages.en, ...browserTrustMessages.en, ...enrollmentMessages.en } },
+    ru: { translation: { ...developerMessages.ru, ...ru, ...addressBookMessages.ru, ...routingPolicyMessages.ru, ...consoleAuditMessages.ru, ...fileAuditMessages.ru, ...connectionAuditMessages.ru, ...delegationMessages.ru, ...passwordResetMessages.ru, ...backupAndGrants.ru, ...storageProfileMessages.ru, ...browserTrustMessages.ru, ...enrollmentMessages.ru } },
+    "zh-CN": { translation: { ...zhCN, ...addressBookMessages["zh-CN"], ...routingPolicyMessages["zh-CN"], ...consoleAuditMessages["zh-CN"], ...fileAuditMessages["zh-CN"], ...connectionAuditMessages["zh-CN"], ...delegationMessages["zh-CN"], ...passwordResetMessages["zh-CN"], ...backupAndGrants["zh-CN"], ...storageProfileMessages["zh-CN"], ...browserTrustMessages["zh-CN"], ...enrollmentMessages["zh-CN"] } },
   },
   lng: detectLang(),
   fallbackLng: "en",

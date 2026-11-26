@@ -200,6 +200,8 @@ fn management_action(route: &str, method: &Method) -> Option<&'static str> {
         (Method::PUT, "/api/admin/user/control-role/:id") => Some("roles.control_assign"),
         (Method::PUT, "/api/admin/device-admission/settings") => Some("admission.settings"),
         (Method::POST, "/api/admin/device-admission/review") => Some("admission.review"),
+        (Method::POST, "/api/admin/enrollment-invitations") => Some("admission.invite"),
+        (Method::DELETE, "/api/admin/enrollment-invitations/:id") => Some("admission.revoke_invitation"),
         (Method::POST, "/api/admin/storage/profiles") => Some("storage.profile_create"),
         (Method::PUT, "/api/admin/storage/profiles/:id") => Some("storage.profile_update"),
         (Method::DELETE, "/api/admin/storage/profiles/:id") => Some("storage.profile_archive"),

@@ -21,6 +21,7 @@ import { AppTitleController } from "./lib/adminTitle";
 import { ForceChangePasswordPage } from "./pages/ForceChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { EnrollmentPage } from "./features/enrollment/EnrollmentPage";
 
 const AUTH_CHUNK_RELOAD_KEY = "rustdesk-console:auth-chunk-reload";
 
@@ -128,6 +129,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/pair-device" element={<EnrollmentPage />} />
         <Route
           path="/change-password"
           element={

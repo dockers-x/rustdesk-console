@@ -22,6 +22,7 @@ pub fn build(state: AppState) -> Router {
     let mut app = Router::new()
         .merge(crate::features::routes())
         .merge(crate::http::developer::routes())
+        .merge(super::enrollment::routes())
         // web index + config
         .route("/", get(static_files::index))
         .route("/favicon.ico", get(static_files::favicon))
