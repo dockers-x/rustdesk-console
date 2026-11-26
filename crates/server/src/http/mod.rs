@@ -24,3 +24,5 @@ pub mod security;
 pub(crate) mod security_audit;
 pub mod static_files;
 pub mod switch_grant;
+mod web_guest;
+mod web_guest_protocol;

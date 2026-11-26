@@ -32,6 +32,8 @@ sha1 = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
 futures-util = "0.3"
+prost = "0.14"
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

@@ -590,6 +590,30 @@ fn looks_like_windows_drive_path(value: &str) -> bool {
     bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
 }
 
+pub(super) fn embedded_guest_asset(path: &str) -> Response {
+    if !matches!(path, "" | "index.html") {
+        let Some(path) = safe_web_asset_path(path) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let path = path.to_string_lossy();
+        return match Resources::read(&format!("web/{path}")) {
+            Some(bytes) => respond(bytes, &path),
+            None => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
+    let Some(html) = Resources::read("web/index.html")
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let html = rewrite_webclient_index_html(html, WebClientVersion::V1)
+        .replace(r#"<base href="/webclient/">"#, r#"<base href="/webguest/">"#)
+        .replace(r#"<base href="/webclient/" />"#, r#"<base href="/webguest/" />"#)
+        .replace(r#"<script src="/webclient-config/index.js"></script>"#, "")
+        .replace("'serviceWorker' in navigator", "false");
+    super::response::no_store(respond_html(html))
+}
+
 pub async fn webclient_v1_index(State(state): State<AppState>) -> Response {
     let _ = state;
     embedded_web_asset("", WebClientVersion::V1)

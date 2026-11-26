@@ -14,7 +14,7 @@ export default class Websock {
   _uri: string;
   _isRendezvous: boolean;
 
-  constructor(uri: string, isRendezvous: boolean = true) {
+  constructor(uri: string, isRendezvous: boolean = true, protocols?: string[]) {
     this._eventHandlers = {
       message: (_: any) => {},
       open: () => {},
@@ -24,7 +24,7 @@ export default class Websock {
     this._uri = uri;
     this._status = "";
     this._buf = [];
-    this._websocket = new WebSocket(uri);
+    this._websocket = new WebSocket(uri, protocols);
     this._websocket.onmessage = this._recv_message.bind(this);
     this._websocket.binaryType = "arraybuffer";
     this._latency = new Date().getTime();

@@ -22,6 +22,7 @@ import { ForceChangePasswordPage } from "./pages/ForceChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { EnrollmentPage } from "./features/enrollment/EnrollmentPage";
+import { WebGuestPage } from "./features/web-guests/WebGuestPage";
 
 const AUTH_CHUNK_RELOAD_KEY = "rustdesk-console:auth-chunk-reload";
 
@@ -130,6 +131,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/pair-device" element={<EnrollmentPage />} />
+        <Route path="/guest-connect" element={<WebGuestPage />} />
         <Route
           path="/change-password"
           element={

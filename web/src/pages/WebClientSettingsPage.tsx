@@ -16,6 +16,7 @@ import {
   TerminalWindow,
 } from "@phosphor-icons/react";
 import { ConfigField } from "../components/ConfigField";
+import { WebGuestPanel } from "../features/web-guests/WebGuestPanel";
 import { InlineMessage } from "../components/InlineMessage";
 import { apiGet, apiPatch, apiPost, ApiError } from "../lib/api";
 import { copyToClipboard } from "../lib/clipboard";
@@ -415,6 +416,7 @@ export function WebClientSettingsPage() {
         </Button>
       </div>
 
+      <WebGuestPanel />
       <div className="space-y-4">
         <section className="rounded-lg border border-kumo-line bg-kumo-elevated">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-kumo-line px-4 py-3">

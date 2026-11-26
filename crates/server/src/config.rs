@@ -100,6 +100,8 @@ impl Default for Security {
 pub struct App {
     #[serde(rename = "web-client")]
     pub web_client: i32,
+    #[serde(rename = "web-guests")]
+    pub web_guests: bool,
     pub register: bool,
     #[serde(rename = "register-status")]
     pub register_status: i32,

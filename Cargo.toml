@@ -19,7 +19,7 @@ description = "RustDesk API server, rewritten in Rust (axum + SeaORM)"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 # Web
-axum = { version = "0.7", features = ["macros", "multipart"] }
+axum = { version = "0.7", features = ["macros", "multipart", "ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"] }
 # ORM

@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 290;
+pub const DATABASE_VERSION: i32 = 291;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 17] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 18] {
     [
         SchemaMigration {
             version: 271,
@@ -144,6 +144,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 17] {
             version: 290,
             name: "one-time enrollment invitations",
             apply: migration_290,
+        },
+        SchemaMigration {
+            version: 291,
+            name: "scoped WebClient guest sessions",
+            apply: migration_291,
         },
     ]
 }
@@ -559,6 +564,20 @@ async fn create_tables(db: &impl ConnectionTrait) -> anyhow::Result<()> {
 
 fn migration_271<'a>(db: &'a impl ConnectionTrait, config: &'a Config) -> MigrationFuture<'a> {
     Box::pin(async move { migrate_271_legacy_columns(db, config).await })
+}
+
+fn migration_291<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let schema = Schema::new(backend);
+        for statement in [
+            schema.create_table_from_entity(entity::web_guest_grant::Entity),
+            schema.create_table_from_entity(entity::web_guest_ticket::Entity),
+        ] {
+            db.execute(backend.build(statement.clone().if_not_exists())).await?;
+        }
+        Ok(())
+    })
 }
 
 fn migration_290<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {

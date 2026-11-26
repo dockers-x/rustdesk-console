@@ -53,6 +53,8 @@ pub mod user;
 pub mod user_third;
 pub mod user_token;
 pub mod version;
+pub mod web_guest_grant;
+pub mod web_guest_ticket;
 pub mod webhook_delivery;
 pub mod webhook_subscription;
 

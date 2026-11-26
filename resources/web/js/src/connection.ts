@@ -5,6 +5,7 @@ import { loadVp9 } from "./codec";
 import * as sha256 from "fast-sha256";
 import * as globals from "./globals";
 import { decompress, mapKey, sleep } from "./common";
+import { connectGuest, guestMode } from "./guest";
 
 const PORT = 21116;
 // only the first is used to init `HOST`
@@ -37,6 +38,7 @@ export default class Connection {
   _firstFrame: Boolean | undefined;
   _videoDecoder: any;
   _password: Uint8Array | undefined;
+  _guestServerKey: string | undefined;
   _options: any;
   _videoTestSpeed: number[];
   //_cursors: { [name: number]: any };
@@ -63,6 +65,17 @@ export default class Connection {
   }
 
   async _start(id: string) {
+    if (guestMode) {
+      const guest = await connectGuest(id);
+      this._id = id;
+      this._options = {};
+      this._password = undefined;
+      this._guestServerKey = guest.server_key;
+      this.startMessagePump();
+      this.loadVideoDecoder();
+      const peerKey = Uint8Array.from(atob(guest.peer_key), (character) => character.charCodeAt(0));
+      return this.connectRelay(rendezvous.RelayResponse.fromPartial({ pk: peerKey }), guest.relay_ticket);
+    }
     if (!this._options) {
       this._options = globals.getPeers()[id] || {};
     }
@@ -76,12 +89,7 @@ export default class Connection {
         }
       }
     }
-    this._interval = setInterval(() => {
-      while (this._msgs.length) {
-        this._ws?.sendMessage(this._msgs[0]);
-        this._msgs.splice(0, 1);
-      }
-    }, 1);
+    this.startMessagePump();
     this.loadVideoDecoder();
     const uri = getDefaultUri();
     const ws = new Websock(uri, true);
@@ -137,9 +145,18 @@ export default class Connection {
     }
   }
 
-  async connectRelay(rr: rendezvous.RelayResponse) {
+  startMessagePump() {
+    this._interval = setInterval(() => {
+      while (this._msgs.length) {
+        this._ws?.sendMessage(this._msgs[0]);
+        this._msgs.splice(0, 1);
+      }
+    }, 1);
+  }
+
+  async connectRelay(rr: rendezvous.RelayResponse, guestTicket?: string) {
     const pk = rr.pk;
-    let uri = getConfiguredWsUri(true);
+    let uri = guestTicket ? SCHEMA + location.host + "/api/web-guests/relay" : getConfiguredWsUri(true);
     if (!uri && rr.relay_server) {
       uri = rr.relay_server;
       uri = getrUriFromRs(uri, true, 2);
@@ -148,16 +165,23 @@ export default class Connection {
     }
     const uuid = rr.uuid;
     console.log(new Date() + ": Connecting to relay server: " + uri);
-    const ws = new Websock(uri, false);
+    const protocols = guestTicket ? ["rustdesk-guest-v1", "ticket." + guestTicket] : undefined;
+    const ws = new Websock(uri, false, protocols);
     await ws.open();
     console.log(new Date() + ": Connected to relay server");
     this._ws = ws;
-    const request_relay = rendezvous.RequestRelay.fromPartial({
-      licence_key: localStorage.getItem("key") || undefined,
-      uuid,
-    });
-    ws.sendRendezvous({ request_relay });
+    if (!guestTicket) {
+      const request_relay = rendezvous.RequestRelay.fromPartial({
+        licence_key: localStorage.getItem("key") || undefined,
+        uuid,
+      });
+      ws.sendRendezvous({ request_relay });
+    }
     const secure = (await this.secure(pk)) || false;
+    if (guestTicket && !secure) {
+      this.close();
+      throw new Error("The guest connection could not be encrypted");
+    }
     globals.pushEvent("connection_ready", { secure, direct: false });
     await this.msgLoop();
   }
@@ -166,7 +190,7 @@ export default class Connection {
     if (pk) {
       const RS_PK = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
       try {
-        pk = await globals.verify(pk, localStorage.getItem("key") || RS_PK);
+        pk = await globals.verify(pk, this._guestServerKey || localStorage.getItem("key") || RS_PK);
         if (pk) {
           const idpk = message.IdPk.decode(pk);
           if (idpk.id == this._id) {
@@ -187,16 +211,20 @@ export default class Connection {
     }
     if (!pk) {
       // send an empty message out in case server is setting up secure and waiting for first message
-      const public_key = message.PublicKey.fromPartial({});
-      this._ws?.sendMessage({ public_key });
+      if (!guestMode) {
+        const public_key = message.PublicKey.fromPartial({});
+        this._ws?.sendMessage({ public_key });
+      }
       return;
     }
     const msg = (await this._ws?.next()) as message.Message;
     let signedId: any = msg?.signed_id;
     if (!signedId) {
       console.error("Handshake failed: invalid message type");
-      const public_key = message.PublicKey.fromPartial({});
-      this._ws?.sendMessage({ public_key });
+      if (!guestMode) {
+        const public_key = message.PublicKey.fromPartial({});
+        this._ws?.sendMessage({ public_key });
+      }
       return;
     }
     try {
@@ -205,8 +233,10 @@ export default class Connection {
       console.error(e);
       // fall back to non-secure connection in case pk mismatch
       console.error("pk mismatch, fall back to non-secure");
-      const public_key = message.PublicKey.fromPartial({});
-      this._ws?.sendMessage({ public_key });
+      if (!guestMode) {
+        const public_key = message.PublicKey.fromPartial({});
+        this._ws?.sendMessage({ public_key });
+      }
       return;
     }
     const idpk = message.IdPk.decode(signedId);
@@ -214,16 +244,20 @@ export default class Connection {
     const theirPk = idpk.pk;
     if (id != this._id!) {
       console.error("Handshake failed: sign failure");
-      const public_key = message.PublicKey.fromPartial({});
-      this._ws?.sendMessage({ public_key });
+      if (!guestMode) {
+        const public_key = message.PublicKey.fromPartial({});
+        this._ws?.sendMessage({ public_key });
+      }
       return;
     }
     if (theirPk.length != 32) {
       console.error(
         "Handshake failed: invalid public box key length from peer"
       );
-      const public_key = message.PublicKey.fromPartial({});
-      this._ws?.sendMessage({ public_key });
+      if (!guestMode) {
+        const public_key = message.PublicKey.fromPartial({});
+        this._ws?.sendMessage({ public_key });
+      }
       return;
     }
     const [mySk, asymmetric_value] = globals.genBoxKeyPair();
@@ -559,6 +593,8 @@ export default class Connection {
     } else {
       this._options[name] = value;
     }
+    if (guestMode) return;
+
     this._options["tm"] = new Date().getTime();
     const peers = globals.getPeers();
     peers[this._id] = this._options;
@@ -752,7 +788,7 @@ function testDelay() {
   });
 }
 
-testDelay();
+if (!guestMode) testDelay();
 
 function getDefaultUri(isRelay: Boolean = false): string {
   const wsUri = getConfiguredWsUri(isRelay);

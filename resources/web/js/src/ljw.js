@@ -1,3 +1,5 @@
+import { guestMode } from "./guest";
+
 window._gwen = {}
 window._gwen.kv = {}
 const apiserver = localStorage.getItem('api-server')
@@ -28,7 +30,7 @@ if (id) {
     localStorage.setItem('remote-id', id)
 }
 const share_token = window._gwen.kv.share_token || ''
-if (share_token) {
+if (share_token && !guestMode) {
     fetch(apiserver + "/api/shared-peer", {
         method: 'POST',
         headers: {
@@ -52,7 +54,7 @@ if (share_token) {
 let fetching = false
 export function getServerConf(token){
     console.log('getServerConf', token)
-    if(fetching){
+    if(fetching || guestMode){
         return
     }
     fetching = true
