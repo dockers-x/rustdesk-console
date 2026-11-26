@@ -25,7 +25,7 @@ import { WebClientSettingsPage } from "./pages/WebClientSettingsPage";
 import { SelfSignedClientPage } from "./features/self-signed-client/SelfSignedClientPage";
 import { DeveloperPage } from "./features/developer/DeveloperPage";
 import { ResourcePage } from "./resource/ResourcePage";
-import { PeerIdentitySummary } from "./components/PeerInfoDrawer";
+import { PeerInfoDrawer } from "./components/PeerInfoDrawer";
 import type { ResourceConfig } from "./resource/types";
 import { ALL_RESOURCES, resourcePath } from "./resource/registry";
 import { apiGet } from "./lib/api";
@@ -53,7 +53,7 @@ function resourceForRole(resource: ResourceConfig, role?: RestrictedConsoleRole)
       columns: resource.columns
         .filter(({ key }) => key !== "__peer_actions")
         .map((column) => column.key === "id"
-          ? { ...column, render: (row) => <PeerIdentitySummary row={row} /> }
+          ? { ...column, render: (row) => <PeerInfoDrawer row={row} /> }
           : column),
       fields: resource.fields.filter(({ name }) => name === "alias"),
     };

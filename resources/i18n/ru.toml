@@ -31,7 +31,7 @@ LdapBindFailed = "Не удалось выполнить привязку к к�
 WakeOnLanInvalidMac = "Введите индивидуальный MAC-адрес, например 00:1B:63:12:34:56."
 WakeOnLanDeviceDisabled = "Это устройство отключено."
 WakeOnLanMissingMac = "Сохраните MAC-адрес устройства перед отправкой пакета пробуждения."
-WakeOnLanUnconfigured = "Укажите локальную сеть для Wake-on-LAN в конфигурации сервера консоли."
+WakeOnLanNoBroadcastInterface = "На сервере Console нет активного интерфейса с широковещанием IPv4."
 WakeOnLanRateLimited = "Достигнут лимит отправки пакетов пробуждения. Повторите попытку позже."
 WakeOnLanSendFailed = "Не удалось отправить пакет пробуждения. Проверьте настройки сети сервера консоли."
 

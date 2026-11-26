@@ -44,7 +44,7 @@ LdapBindFailed = "The directory bind failed. Check the bind DN and password."
 WakeOnLanInvalidMac = "Enter a unicast MAC address such as 00:1B:63:12:34:56."
 WakeOnLanDeviceDisabled = "This device is disabled."
 WakeOnLanMissingMac = "Save the device’s MAC address before sending a wake packet."
-WakeOnLanUnconfigured = "Wake-on-LAN needs a local network in the Console server configuration."
+WakeOnLanNoBroadcastInterface = "The Console server has no active network interface with IPv4 broadcast."
 WakeOnLanRateLimited = "Wake packet limit reached. Wait a moment and try again."
 WakeOnLanSendFailed = "Could not send the wake packet. Check the Console server’s network configuration."
 

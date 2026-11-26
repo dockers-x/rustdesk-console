@@ -609,7 +609,7 @@ export function AppShell({
               />
             )}
             <div className="admin-page min-w-0">
-              <Outlet />
+              <Outlet context={isAdmin} />
             </div>
           </div>
         </main>

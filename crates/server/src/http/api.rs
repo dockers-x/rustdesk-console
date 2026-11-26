@@ -3477,7 +3477,7 @@ pub(crate) mod deployment_tests {
             i18n: Arc::new(I18n::load("en")),
             oauth_cache: Arc::new(OauthCache::new()),
             disconnect_store: Arc::new(DisconnectStore::new()),
-            wake_on_lan: Arc::new(crate::support::wake_on_lan::WakeOnLan::new(None)),
+            wake_on_lan: Arc::new(crate::support::wake_on_lan::WakeOnLan::new()),
             external_webclient: None,
             admin_config: Arc::new(AdminConfigStore::new(
                 PathBuf::from("/tmp/rustdesk-console-test-config.yaml"),

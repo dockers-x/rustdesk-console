@@ -5,13 +5,14 @@ import { Button } from "@cloudflare/kumo/components/button";
 import { Table } from "@cloudflare/kumo/components/table";
 import { Tooltip } from "@cloudflare/kumo/components/tooltip";
 import { useTranslation } from "react-i18next";
+import { useOutletContext } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import { getAuthSessionId } from "../lib/auth";
 import { formatDateTime, formatUnixSeconds } from "../lib/dateFormat";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { DeviceActivity } from "./DeviceActivity";
 import { TableState } from "./TableState";
-import { DeviceWakeControl } from "./DeviceWakeControl";
+import { DeviceWakeAction } from "./DeviceWakeControl";
 
 const PEER_ONLINE_WINDOW_SECONDS = 90;
 const ACTIVE_CONNECTION_PAGE_SIZE = 50;
@@ -59,18 +60,6 @@ function PresenceDot({ online }: { online: boolean }) {
       aria-hidden="true"
       className={`size-2.5 shrink-0 rounded-full ${online ? "bg-kumo-success" : "border border-current text-kumo-subtle"}`}
     />
-  );
-}
-
-export function PeerIdentitySummary({ row }: { row: Record<string, unknown> }) {
-  const { t } = useTranslation();
-  const online = isPeerOnline(row);
-  return (
-    <span className="inline-flex items-center gap-2 whitespace-nowrap">
-      <PresenceDot online={online} />
-      <span className="font-mono tabular-nums">{textValue(row.id)}</span>
-      <span className="text-xs text-kumo-subtle">{t(online ? "online" : "offline")}</span>
-    </span>
   );
 }
 
@@ -127,6 +116,8 @@ export function PeerInfoDrawer({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [wakeOpen, setWakeOpen] = useState(false);
+  const isAdmin = useOutletContext<boolean>() === true;
   const adminConfig = usePublicAdminConfig();
   const displayTimeZone = adminConfig.data?.timezone?.trim() || undefined;
   const peerId = String(row.id ?? "");
@@ -156,13 +147,13 @@ export function PeerInfoDrawer({
   });
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || wakeOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [open, wakeOpen]);
 
   const heartbeatTime = useMemo(
     () => formatUnixSeconds(row.last_online_time, displayTimeZone),
@@ -228,11 +219,21 @@ export function PeerInfoDrawer({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 [scrollbar-gutter:stable] sm:px-5">
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                <StatusPill online={online} />
-                <span className="rounded-md border border-kumo-warning/25 bg-kumo-warning-tint/30 px-2.5 py-1 text-xs font-medium text-kumo-warning">
-                  {t("deviceSnapshotNotLiveMetrics")}
-                </span>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusPill online={online} />
+                  <span className="rounded-md border border-kumo-warning/25 bg-kumo-warning-tint/30 px-2.5 py-1 text-xs font-medium text-kumo-warning">
+                    {t("deviceSnapshotNotLiveMetrics")}
+                  </span>
+                </div>
+                <DeviceWakeAction
+                  peerId={peerId}
+                  rowId={rowId}
+                  lastHeartbeat={numberValue(row.last_online_time)}
+                  isAdmin={isAdmin}
+                  open={wakeOpen}
+                  onOpenChange={setWakeOpen}
+                />
               </div>
 
               <section className="grid gap-3">
@@ -283,13 +284,6 @@ export function PeerInfoDrawer({
                   {t("standardClientMetricsHint")}
                 </p>
               </section>
-
-              {scope === "admin" && Number(row.row_id) > 0 && (
-                <DeviceWakeControl
-                  rowId={Number(row.row_id)}
-                  lastHeartbeat={numberValue(row.last_online_time)}
-                />
-              )}
 
               {scope === "admin" && (
                 <section className="mt-5 grid gap-3">

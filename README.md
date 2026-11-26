@@ -140,16 +140,13 @@ time and for the admin UI's local-time display.
 
 ### Wake-on-LAN
 
-Leave `wake-on-lan.source-cidr` empty to disable sending. To enable it, set
-`RUSTDESK_API_WAKE_ON_LAN_SOURCE_CIDR` or the YAML setting to the Console
-server's IPv4 address and prefix on the device network, such as
-`192.168.1.10/24`, and restart the Console. The Console sends UDP port 9 from
-that local address to the subnet's broadcast address. The process must be able
-to reach that broadcast domain from its network namespace, including when the
-Console runs in a container.
+Console discovers its active IPv4 broadcast interfaces automatically and sends
+one magic packet per interface on UDP port 9. A container can reach the local
+broadcast domains exposed to its network namespace.
 
-In **Devices**, open a device's details, save the MAC address of an adapter
-configured to allow Wake-on-LAN, and select **Send wake packet**. The Console
+In **Devices** or **My devices**, click the device ID and select **Wake-on-LAN**
+at the top of the details. Save the MAC address of an adapter configured for
+Wake-on-LAN and select **Send wake packet**. The Console
 reports packet dispatch and then reports a newer RustDesk heartbeat if one
 arrives. Only full Console administrators can save MAC addresses and send
 packets. Console audit records both actions. Each Console process allows one

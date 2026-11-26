@@ -1,8 +1,6 @@
 lang: "zh-CN"
 security:
   allow-legacy-device-reports: true
-wake-on-lan:
-  source-cidr: "" # Local Console IPv4 address and prefix, e.g. "192.168.1.10/24". Empty disables sending.
 app:
   web-client: 1  # 1:启用 0:禁用
   web-guests: false  # 需要同机配套 HBBS/HBBR 和共享准入令牌

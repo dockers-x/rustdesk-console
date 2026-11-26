@@ -302,6 +302,19 @@ body {
   transition-duration: 150ms;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .wake-feedback {
+    animation: wake-feedback-in 160ms var(--ease-out) both;
+  }
+}
+
+@keyframes wake-feedback-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
 :root[data-keyboard] :is(.admin-dialog-panel, .admin-mobile-nav, .admin-mobile-backdrop, [role="tablist"] *, nav svg) {
   transition-duration: 0s !important;
 }

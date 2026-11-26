@@ -1,9 +1,9 @@
 //! Wake-on-LAN controls for Console administrators managing an existing device.
 
 use axum::{
+    Json,
     extract::{Path, State},
     response::Response,
-    Json,
 };
 use entity::{peer, user};
 use sea_orm::{ActiveModelTrait, Set};
@@ -31,7 +31,7 @@ struct DeviceSettings {
 }
 
 impl DeviceSettings {
-    fn read(state: &AppState, peer: peer::Model) -> Self {
+    async fn read(state: &AppState, peer: peer::Model) -> Self {
         let manufacturer = peer
             .wake_mac_address
             .as_deref()
@@ -39,7 +39,7 @@ impl DeviceSettings {
         Self {
             mac_address: peer.wake_mac_address,
             manufacturer,
-            network_configured: state.wake_on_lan.configured(),
+            network_configured: state.wake_on_lan.available().await,
             device_enabled: peer.status == user::STATUS_ENABLE,
         }
     }
@@ -79,7 +79,7 @@ pub(crate) async fn settings(
     Path(id): Path<i32>,
 ) -> Response {
     match find_device(&state, id).await {
-        Ok(peer) => resp::no_store(resp::success(DeviceSettings::read(&state, peer))),
+        Ok(peer) => resp::no_store(resp::success(DeviceSettings::read(&state, peer).await)),
         Err(message) => resp::fail(101, state.tr(&lang, message)),
     }
 }
@@ -120,7 +120,7 @@ pub(crate) async fn save(
             }
         };
     }
-    resp::no_store(resp::success(DeviceSettings::read(&state, peer)))
+    resp::no_store(resp::success(DeviceSettings::read(&state, peer).await))
 }
 
 pub(crate) async fn send(
@@ -151,7 +151,9 @@ pub(crate) async fn send(
             packet_sent: true,
             sent_at: chrono::Utc::now().timestamp(),
         })),
-        Err(SendError::NotConfigured) => resp::fail(101, state.tr(&lang, "WakeOnLanUnconfigured")),
+        Err(SendError::NoBroadcastInterface) => {
+            resp::fail(101, state.tr(&lang, "WakeOnLanNoBroadcastInterface"))
+        }
         Err(SendError::RateLimited) => resp::fail(429, state.tr(&lang, "WakeOnLanRateLimited")),
         Err(error) => {
             tracing::warn!(%error, row_id = id, "Wake-on-LAN packet send failed");
@@ -164,13 +166,13 @@ pub(crate) async fn send(
 mod tests {
     use super::*;
     use axum::{
-        body::{to_bytes, Body},
-        http::{Request, StatusCode},
         Router,
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
     };
     use entity::{console_audit, device_group, system_setting, user_token};
     use sea_orm::{ConnectionTrait, Database, DbBackend, EntityTrait, Schema};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::UdpSocket;
@@ -271,11 +273,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sends_the_stored_mac_to_the_configured_endpoint_and_audits_the_device() {
-        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let (state, app) = fixture(WakeOnLan::with_loopback_destination(
-            socket.local_addr().unwrap().port(),
-        ))
+    async fn sends_the_stored_mac_to_each_endpoint_and_audits_the_device() {
+        let first = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let second = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (state, app) = fixture(WakeOnLan::with_loopback_destinations(&[
+            first.local_addr().unwrap().port(),
+            second.local_addr().unwrap().port(),
+        ]))
         .await;
 
         let saved = body(
@@ -291,9 +295,11 @@ mod tests {
         .await;
         assert_eq!(saved["code"], 0, "{saved}");
         assert_eq!(saved["data"]["mac_address"], "00:1B:63:12:34:56");
-        assert!(saved["data"]["manufacturer"]
-            .as_str()
-            .is_some_and(|name| name.contains("Apple")));
+        assert!(
+            saved["data"]["manufacturer"]
+                .as_str()
+                .is_some_and(|name| name.contains("Apple"))
+        );
 
         let injection = request(
             &app,
@@ -308,25 +314,29 @@ mod tests {
         assert_eq!(sent["data"]["packet_sent"], true);
         assert!(sent["data"]["sent_at"].as_i64().unwrap() > 100);
         let mut bytes = [0; 256];
-        let count = tokio::time::timeout(Duration::from_secs(2), socket.recv(&mut bytes))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(count, 102);
-        assert_eq!(&bytes[..6], &[0xff; 6]);
-        let (repeats, remainder) = bytes[6..count].as_chunks::<6>();
-        assert!(remainder.is_empty());
-        assert_eq!(repeats, &[[0x00, 0x1B, 0x63, 0x12, 0x34, 0x56]; 16]);
+        for socket in [&first, &second] {
+            let count = tokio::time::timeout(Duration::from_secs(2), socket.recv(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(count, 102);
+            assert_eq!(&bytes[..6], &[0xff; 6]);
+            let (repeats, remainder) = bytes[6..count].as_chunks::<6>();
+            assert!(remainder.is_empty());
+            assert_eq!(repeats, &[[0x00, 0x1B, 0x63, 0x12, 0x34, 0x56]; 16]);
+        }
         let detail =
             body(request(&app, "GET", "/api/admin/peer/detail/1", 1, Value::Null).await).await;
         assert_eq!(detail["data"]["last_online_time"], 100);
         assert!(detail["data"].get("wake_mac_address").is_none());
         let limited = body(request(&app, "POST", SEND, 1, json!({})).await).await;
         assert_eq!(limited["code"], 429);
-        assert_eq!(
-            socket.try_recv(&mut bytes).unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
+        for socket in [&first, &second] {
+            assert_eq!(
+                socket.try_recv(&mut bytes).unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
 
         let entries = console_audit::Entity::find().all(&state.db).await.unwrap();
         for (action, result) in [
@@ -343,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_requests_outside_admin_scope_and_without_wake_prerequisites() {
-        let (state, app) = fixture(WakeOnLan::new(None)).await;
+        let (state, app) = fixture(WakeOnLan::with_loopback_destinations(&[])).await;
         for endpoint in [("GET", SETTINGS), ("PUT", SETTINGS), ("POST", SEND)] {
             for (actor, code) in [(0, resp::CODE_NEED_LOGIN), (2, resp::CODE_NO_ACCESS)] {
                 let result =
@@ -364,11 +374,13 @@ mod tests {
         )
         .await;
         assert_eq!(nonexistent["code"], 101);
-        assert!(peer::Entity::find_by_id(999)
-            .one(&state.db)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            peer::Entity::find_by_id(999)
+                .one(&state.db)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         let missing = body(request(&app, "POST", SEND, 1, json!({})).await).await;
         assert_eq!(missing["message"], state.tr("en", "WakeOnLanMissingMac"));
@@ -401,7 +413,7 @@ mod tests {
         let disabled_transport = body(request(&app, "POST", SEND, 1, json!({})).await).await;
         assert_eq!(
             disabled_transport["message"],
-            state.tr("en", "WakeOnLanUnconfigured")
+            state.tr("en", "WakeOnLanNoBroadcastInterface")
         );
         peer::ActiveModel {
             row_id: Set(1),
@@ -421,12 +433,14 @@ mod tests {
             body(request(&app, "PUT", SETTINGS, 1, json!({"mac_address": ""})).await).await;
         assert_eq!(removed["code"], 0);
         assert_eq!(removed["data"]["mac_address"], Value::Null);
-        assert!(peer::Entity::find_by_id(1)
-            .one(&state.db)
-            .await
-            .unwrap()
-            .unwrap()
-            .wake_mac_address
-            .is_none());
+        assert!(
+            peer::Entity::find_by_id(1)
+                .one(&state.db)
+                .await
+                .unwrap()
+                .unwrap()
+                .wake_mac_address
+                .is_none()
+        );
     }
 }

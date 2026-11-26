@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "entity"
-version = "0.2.61"
+version = "0.2.62"
 dependencies = [
  "chrono",
  "sea-orm",
@@ -1762,6 +1762,16 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3085,7 +3095,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-client-config"
-version = "0.2.61"
+version = "0.2.62"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -3094,7 +3104,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-console"
-version = "0.2.61"
+version = "0.2.62"
 dependencies = [
  "age",
  "anyhow",
@@ -3112,6 +3122,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hmac",
+ "if-addrs",
  "ipnetwork",
  "jsonwebtoken",
  "ldap3",
@@ -3139,6 +3150,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "socket2",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -3159,7 +3171,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-server-control"
-version = "0.2.61"
+version = "0.2.62"
 dependencies = [
  "serde",
  "tokio",
@@ -3167,7 +3179,7 @@ dependencies = [
 
 [[package]]
 name = "rustdesk-uri"
-version = "0.2.61"
+version = "0.2.62"
 dependencies = [
  "urlencoding",
 ]

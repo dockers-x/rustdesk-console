@@ -1670,9 +1670,7 @@ async fn seed(
 /// Build the full application state from a parsed config.
 pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result<AppState> {
     let jwt = Jwt::try_new(&config.jwt.key, config.jwt.expire_duration())?;
-    let wake_on_lan = Arc::new(crate::support::wake_on_lan::WakeOnLan::new(
-        config.wake_on_lan.network()?,
-    ));
+    let wake_on_lan = Arc::new(crate::support::wake_on_lan::WakeOnLan::new());
     let i18n = I18n::load(&config.lang);
     let db = {
         let _lock = lock_sqlite_migration(&config).await?;

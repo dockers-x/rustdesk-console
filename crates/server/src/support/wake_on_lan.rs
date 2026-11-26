@@ -1,9 +1,14 @@
-//! Wake packet transport restricted to one operator-configured IPv4 subnet.
+//! Send magic packets over the Console's local IPv4 broadcast interfaces.
 
+use std::collections::HashSet;
+use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use if_addrs::{IfAddr, Interface};
+use socket2::{Domain, Protocol, Socket, Type};
 
 const WAKE_PORT: u16 = 9;
 const DEVICE_INTERVAL: Duration = Duration::from_secs(15);
@@ -58,53 +63,74 @@ impl FromStr for MacAddress {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Network {
+#[derive(Clone, Debug)]
+struct Network {
+    interface: Option<String>,
     source: SocketAddrV4,
     destination: SocketAddrV4,
 }
 
-impl FromStr for Network {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> anyhow::Result<Self> {
-        const INVALID: &str = "wake-on-lan.source-cidr must be a usable host IPv4 address with a subnet prefix between /1 and /30";
-        let (address, prefix) = value
-            .split_once('/')
-            .ok_or_else(|| anyhow::anyhow!(INVALID))?;
-        let (source, prefix): (Ipv4Addr, u32) = match (address.parse(), prefix.parse()) {
-            (Ok(source), Ok(prefix)) => (source, prefix),
-            _ => anyhow::bail!(INVALID),
+impl Network {
+    fn from_interface(interface: &Interface) -> Option<Self> {
+        if !interface.is_oper_up() || interface.is_loopback() || interface.is_p2p() {
+            return None;
+        }
+        let IfAddr::V4(address) = &interface.addr else {
+            return None;
         };
-        anyhow::ensure!(
-            (1..=30).contains(&prefix)
-                && (1..224).contains(&source.octets()[0])
-                && !source.is_loopback(),
-            INVALID
-        );
-        let host_mask = u32::MAX >> prefix;
-        let host_bits = u32::from(source) & host_mask;
-        anyhow::ensure!(host_bits != 0 && host_bits != host_mask, INVALID);
-        Ok(Self {
-            source: SocketAddrV4::new(source, 0),
-            destination: SocketAddrV4::new(
-                Ipv4Addr::from(u32::from(source) | host_mask),
-                WAKE_PORT,
-            ),
+        if !(1..=30).contains(&address.prefixlen) || address.ip.is_unspecified() {
+            return None;
+        }
+        let broadcast = address.broadcast?;
+        // Linux can pin a limited broadcast to the exact NIC, even if two NICs
+        // have addresses in the same subnet. Elsewhere use its directed broadcast.
+        let destination = if cfg!(any(target_os = "linux", target_os = "android")) {
+            Ipv4Addr::BROADCAST
+        } else {
+            broadcast
+        };
+        Some(Self {
+            interface: Some(interface.name.clone()),
+            source: SocketAddrV4::new(address.ip, 0),
+            destination: SocketAddrV4::new(destination, WAKE_PORT),
         })
     }
+
+    fn send(&self, packet: &wake_on_lan::MagicPacket) -> io::Result<()> {
+        let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Some(interface) = &self.interface {
+            socket.bind_device(Some(interface.as_bytes()))?;
+        }
+        socket.bind(&self.source.into())?;
+        socket.set_broadcast(true)?;
+        socket.send_to(packet.magic_bytes(), &self.destination.into())?;
+        Ok(())
+    }
+}
+
+fn broadcast_networks(interfaces: &[Interface]) -> Vec<Network> {
+    let mut names = HashSet::new();
+    interfaces
+        .iter()
+        .filter_map(|interface| {
+            let network = Network::from_interface(interface)?;
+            names.insert(interface.name.as_str()).then_some(network)
+        })
+        .collect()
 }
 
 #[derive(Debug)]
 pub(crate) struct WakeOnLan {
-    network: Option<Network>,
     attempts: Mutex<Vec<(Instant, i32)>>,
+    #[cfg(test)]
+    test_networks: Option<Vec<Network>>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SendError {
-    #[error("Wake-on-LAN is disabled")]
-    NotConfigured,
+    #[error("No local interface supports IPv4 broadcast")]
+    NoBroadcastInterface,
     #[error("Wake packet rate limit reached")]
     RateLimited,
     #[error(transparent)]
@@ -114,27 +140,63 @@ pub(crate) enum SendError {
 }
 
 impl WakeOnLan {
-    pub(crate) fn new(network: Option<Network>) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            network,
             attempts: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            test_networks: None,
         }
     }
 
-    pub(crate) fn configured(&self) -> bool {
-        self.network.is_some()
+    async fn networks(&self) -> Result<Vec<Network>, SendError> {
+        #[cfg(test)]
+        if let Some(networks) = &self.test_networks {
+            return Ok(networks.clone());
+        }
+        Ok(tokio::task::spawn_blocking(|| {
+            if_addrs::get_if_addrs().map(|interfaces| broadcast_networks(&interfaces))
+        })
+        .await??)
+    }
+
+    pub(crate) async fn available(&self) -> bool {
+        self.networks()
+            .await
+            .is_ok_and(|networks| !networks.is_empty())
     }
 
     pub(crate) async fn send(&self, row_id: i32, mac: MacAddress) -> Result<(), SendError> {
-        let network = self.network.ok_or(SendError::NotConfigured)?;
+        let networks = self.networks().await?;
+        if networks.is_empty() {
+            return Err(SendError::NoBroadcastInterface);
+        }
         if !self.reserve(row_id) {
             return Err(SendError::RateLimited);
         }
         tokio::task::spawn_blocking(move || {
-            wake_on_lan::MagicPacket::new(&mac.0).send_to(network.destination, network.source)
+            let packet = wake_on_lan::MagicPacket::new(&mac.0);
+            let mut sent = false;
+            let mut last_error = None;
+            for network in networks {
+                match network.send(&packet) {
+                    Ok(()) => sent = true,
+                    Err(error) => {
+                        tracing::debug!(
+                            interface = network.interface.as_deref(),
+                            %error,
+                            "Wake-on-LAN send failed on interface"
+                        );
+                        last_error = Some(error);
+                    }
+                }
+            }
+            if sent {
+                Ok(())
+            } else {
+                Err(last_error.map_or(SendError::NoBroadcastInterface, SendError::Io))
+            }
         })
-        .await??;
-        Ok(())
+        .await?
     }
 
     fn reserve(&self, row_id: i32) -> bool {
@@ -153,26 +215,38 @@ impl WakeOnLan {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_loopback_destination(port: u16) -> Self {
-        Self::new(Some(Network {
-            source: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
-            destination: SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
-        }))
+    pub(crate) fn with_loopback_destinations(ports: &[u16]) -> Self {
+        Self {
+            attempts: Mutex::new(Vec::new()),
+            test_networks: Some(
+                ports
+                    .iter()
+                    .map(|port| Network {
+                        interface: None,
+                        source: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
+                        destination: SocketAddrV4::new(Ipv4Addr::LOCALHOST, *port),
+                    })
+                    .collect(),
+            ),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use if_addrs::{IfOperStatus, Ifv4Addr};
 
     #[test]
     fn parses_only_complete_unicast_mac_addresses() {
         let globally_administered: MacAddress = " 00-1b-63-00-00-01 ".parse().unwrap();
         let canonical = globally_administered.to_string();
         assert_eq!(canonical, "00:1B:63:00:00:01");
-        assert!(globally_administered
-            .manufacturer()
-            .is_some_and(|name| name.contains("Apple")));
+        assert!(
+            globally_administered
+                .manufacturer()
+                .is_some_and(|name| name.contains("Apple"))
+        );
         let locally_administered: MacAddress = "02:1b:63:00:00:01".parse().unwrap();
         assert_eq!(locally_administered.manufacturer(), None,);
         let unknown: MacAddress = "FC:FF:FF:00:00:01".parse().unwrap();
@@ -191,28 +265,46 @@ mod tests {
     }
 
     #[test]
-    fn derives_the_destination_from_the_configured_local_subnet() {
-        let network: Network = "192.168.16.140/26".parse().unwrap();
-        assert_eq!(network.source, "192.168.16.140:0".parse().unwrap());
-        assert_eq!(network.destination, "192.168.16.191:9".parse().unwrap());
-        for invalid in [
-            "192.168.16.140",
-            "192.168.16.140/0",
-            "192.168.16.140/31",
-            "192.168.16.128/26",
-            "192.168.16.191/26",
-            "0.0.0.0/24",
-            "230.1.0.1/24",
-            "127.0.0.1/8",
-            "::1/64",
-        ] {
-            assert!(invalid.parse::<Network>().is_err(), "{invalid}");
+    fn selects_each_up_broadcast_interface_once() {
+        fn interface(name: &str, ip: &str, broadcast: Option<Ipv4Addr>) -> Interface {
+            Interface {
+                name: name.to_string(),
+                index: None,
+                addr: IfAddr::V4(Ifv4Addr {
+                    ip: ip.parse().unwrap(),
+                    netmask: Ipv4Addr::new(255, 255, 255, 0),
+                    prefixlen: 24,
+                    broadcast,
+                }),
+                oper_status: IfOperStatus::Up,
+                is_p2p: false,
+                #[cfg(windows)]
+                adapter_name: name.to_string(),
+            }
         }
+        let broadcast = Some(Ipv4Addr::new(192, 168, 16, 255));
+        let mut down = interface("down", "192.168.16.3", broadcast);
+        down.oper_status = IfOperStatus::Down;
+        let mut tunnel = interface("tunnel", "192.168.16.4", broadcast);
+        tunnel.is_p2p = true;
+        let networks = broadcast_networks(&[
+            interface("lo", "127.0.0.1", None),
+            interface("ethernet", "192.168.16.5", broadcast),
+            interface("ethernet", "192.168.16.6", broadcast),
+            interface("wifi", "192.168.16.7", broadcast),
+            interface("no-broadcast", "192.168.16.8", None),
+            down,
+            tunnel,
+        ]);
+        assert_eq!(networks.len(), 2);
+        assert_eq!(networks[0].source.ip(), &Ipv4Addr::new(192, 168, 16, 5));
+        assert_eq!(networks[1].source.ip(), &Ipv4Addr::new(192, 168, 16, 7));
+        assert_eq!(networks[1].destination.port(), WAKE_PORT);
     }
 
     #[test]
     fn bounds_each_device_and_total_attempts() {
-        let transport = WakeOnLan::new(None);
+        let transport = WakeOnLan::new();
         assert!(transport.reserve(1));
         assert!(!transport.reserve(1));
         for row in 2..=SERVER_BURST as i32 {
