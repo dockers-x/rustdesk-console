@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="referrer" content="no-referrer">
+  <base href="/webguest/">
+  <title>RustDesk guest session</title>
+  <link rel="stylesheet" href="guest.css">
+</head>
+<body>
+  <main id="guest-viewer">
+    <header class="guest-toolbar">
+      <div class="guest-session">
+        <h1><span class="guest-brand">RustDesk</span> <span data-guest-label="title">Guest session</span></h1>
+        <span id="guest-peer" class="guest-peer"></span>
+        <span id="guest-status" class="guest-status" role="status" data-tone="pending">Connecting…</span>
+      </div>
+      <div class="guest-controls">
+        <label id="guest-display-field" class="guest-display" hidden>
+          <span data-guest-label="display">Display</span>
+          <select id="guest-display"></select>
+        </label>
+        <button id="guest-fullscreen" type="button" data-guest-label="fullscreen">Fullscreen</button>
+        <button id="guest-disconnect" class="guest-disconnect" type="button" data-guest-label="disconnect">Disconnect</button>
+      </div>
+    </header>
+    <div class="guest-stage">
+      <canvas id="guest-canvas" width="1280" height="720" tabindex="0" aria-label="Remote screen" data-guest-label="canvas">Remote screen</canvas>
+      <form id="guest-password-form" class="guest-challenge" aria-labelledby="guest-password-label" method="post" autocomplete="off" hidden>
+        <label id="guest-password-label" for="guest-password" data-guest-label="password">Device password</label>
+        <input id="guest-password" name="password" type="password" autocomplete="off" required>
+        <button class="guest-submit" type="submit" data-guest-label="submit">Connect</button>
+      </form>
+    </div>
+    <div class="guest-mobile-input">
+      <label for="guest-text-input" data-guest-label="inputText">Send text</label>
+      <textarea id="guest-text-input" rows="1" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" hidden></textarea>
+    </div>
+  </main>
+  <script src="ogvjs-1.8.6/ogv.js"></script>
+  <script src="yuv-canvas-1.2.6.js"></script>
+  <script type="module" src="js/dist/index.js"></script>
+</body>
+</html>

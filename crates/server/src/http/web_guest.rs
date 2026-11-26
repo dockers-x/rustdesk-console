@@ -45,7 +45,7 @@ use super::{
     web_guest_protocol::{Envelope, Punch, Relay, RequestRelay},
 };
 use crate::{
-    services::{device_admission, peer as peers},
+    services::{blocklist, device_admission, peer as peers},
     state::AppState,
 };
 
@@ -246,7 +246,8 @@ async fn connect(
         Ok(_) => return denied(),
         Err(error) => return failed(error),
     };
-    match target_still_enabled(&state.db, &row).await {
+    let source = client_ip.parse().ok();
+    match target_still_enabled(&state.db, &row, source).await {
         Ok(true) => {}
         Ok(false) => return denied(),
         Err(error) => return failed(error),
@@ -265,7 +266,7 @@ async fn connect(
     let Some(port) = websocket_port(state.config.admin.id_server_port) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let reply = match timeout(SIGNAL_TIMEOUT, signal(port, punch, client_ip.parse().ok())).await {
+    let reply = match timeout(SIGNAL_TIMEOUT, signal(port, punch, source)).await {
         Ok(Ok(reply)) => reply,
         _ => {
             return resp::no_store(resp::fail(
@@ -373,7 +374,8 @@ async fn relay(
         Ok(None) => return denied(),
         Err(error) => return failed(error),
     };
-    let record = match active_grant(&state.db, row.grant_id).await {
+    let source = client_ip.parse().ok();
+    let record = match active_grant(&state.db, row.grant_id, source).await {
         Ok(Some(record)) => record,
         Ok(None) => return denied(),
         Err(error) => return failed(error),
@@ -383,14 +385,7 @@ async fn relay(
         .max_message_size(MAX_RELAY_MESSAGE)
         .on_upgrade(move |browser| async move {
             let _slot = slot;
-            proxy_relay(
-                browser,
-                state,
-                record,
-                row.relay_uuid,
-                client_ip.parse().ok(),
-            )
-            .await;
+            proxy_relay(browser, state, record, row.relay_uuid, source).await;
         })
 }
 
@@ -403,7 +398,11 @@ fn ticket_header(headers: &HeaderMap) -> Option<String> {
     valid_token_hash(protocols.next()?.strip_prefix("ticket.")?)
 }
 
-async fn active_grant(db: &DatabaseConnection, id: i32) -> Result<Option<grant::Model>, DbErr> {
+async fn active_grant(
+    db: &DatabaseConnection,
+    id: i32,
+    source: Option<IpAddr>,
+) -> Result<Option<grant::Model>, DbErr> {
     let Some(row) = grant::Entity::find_by_id(id)
         .filter(grant::Column::ExpiresAt.gt(Utc::now().timestamp()))
         .one(db)
@@ -411,10 +410,14 @@ async fn active_grant(db: &DatabaseConnection, id: i32) -> Result<Option<grant::
     else {
         return Ok(None);
     };
-    Ok(target_still_enabled(db, &row).await?.then_some(row))
+    Ok(target_still_enabled(db, &row, source).await?.then_some(row))
 }
 
-async fn target_still_enabled(db: &DatabaseConnection, row: &grant::Model) -> Result<bool, DbErr> {
+async fn target_still_enabled(
+    db: &DatabaseConnection,
+    row: &grant::Model,
+    source: Option<IpAddr>,
+) -> Result<bool, DbErr> {
     let device = peer::Entity::find_by_id(row.peer_row_id).one(db).await?;
     if !device.is_some_and(|device| {
         device.status == user::STATUS_ENABLE
@@ -422,6 +425,9 @@ async fn target_still_enabled(db: &DatabaseConnection, row: &grant::Model) -> Re
             && device.uuid == row.peer_uuid
             && device.pk == row.peer_key
     }) {
+        return Ok(false);
+    }
+    if blocklist::blocks_guest(db, &row.peer_id, source).await? {
         return Ok(false);
     }
     let key = device_admission::DeviceKey {
@@ -519,7 +525,7 @@ async fn proxy_relay(
         _ => return,
     };
     if !matches!(
-        timeout(WRITE_TIMEOUT, active_grant(&state.db, record.id)).await,
+        timeout(WRITE_TIMEOUT, active_grant(&state.db, record.id, source)).await,
         Ok(Ok(Some(_)))
     ) || !matches!(
         timeout(
@@ -574,7 +580,7 @@ async fn proxy_relay(
         loop {
             checks.tick().await;
             if !matches!(
-                timeout(WRITE_TIMEOUT, active_grant(&state.db, record.id)).await,
+                timeout(WRITE_TIMEOUT, active_grant(&state.db, record.id, source)).await,
                 Ok(Ok(Some(_)))
             ) {
                 break "authorization_ended";
@@ -734,6 +740,7 @@ mod tests {
         let schema = Schema::new(DbBackend::Sqlite);
         for table in [
             schema.create_table_from_entity(peer::Entity),
+            schema.create_table_from_entity(entity::blocklist_rule::Entity),
             schema.create_table_from_entity(entity::routing_settings::Entity),
             schema.create_table_from_entity(grant::Entity),
             schema.create_table_from_entity(ticket::Entity),
@@ -753,7 +760,7 @@ mod tests {
         target.insert(&db).await.unwrap();
         let row: grant::ActiveModel = fixture.clone().into();
         row.insert(&db).await.unwrap();
-        assert!(active_grant(&db, fixture.id).await.unwrap().is_some());
+        assert!(active_grant(&db, fixture.id, None).await.unwrap().is_some());
 
         let now = Utc::now().timestamp();
         let token = store_ticket(&db, fixture.id, "upstream-first", now)
@@ -772,7 +779,7 @@ mod tests {
             .exec(&db)
             .await
             .unwrap();
-        assert!(active_grant(&db, fixture.id).await.unwrap().is_none());
+        assert!(active_grant(&db, fixture.id, None).await.unwrap().is_none());
         assert!(!claim_use(&db, fixture.id, now).await.unwrap());
     }
 

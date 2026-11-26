@@ -5,6 +5,7 @@ import {checkIfRetry, version} from "./gen_js_from_hbb";
 import {initZstd, translate} from "./common";
 import PCMPlayer from "pcm-player";
 import {getServerConf} from "./ljw";
+import {guestMode} from "./guest";
 
 window.myconsole = (...args) => {
     console.log(args);
@@ -47,11 +48,11 @@ let gl;
 let pixels;
 let flipPixels;
 let oldSize;
-if (YUVCanvas.WebGLFrameSink.isAvailable()) {
+if (!guestMode && YUVCanvas.WebGLFrameSink.isAvailable()) {
     var canvas = document.createElement('canvas');
     yuvCanvas = YUVCanvas.attach(canvas, {webGL: true});
     gl = canvas.getContext("webgl");
-} else {
+} else if (!guestMode) {
     yuvWorker = new Worker("./yuv.js");
 }
 let testSpeed = [0, 0];

@@ -371,7 +371,7 @@ export default class Connection {
 
   draw(frame: any) {
     this._draw?.(frame);
-    globals.draw(frame);
+    if (!guestMode) globals.draw(frame);
   }
 
   close() {

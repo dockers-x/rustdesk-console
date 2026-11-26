@@ -104,6 +104,27 @@ pub(crate) async fn rules(db: &impl ConnectionTrait) -> Result<Vec<blocklist_rul
         .await
 }
 
+pub(crate) async fn blocks_guest(
+    db: &DatabaseConnection,
+    peer_id: &str,
+    source: Option<IpAddr>,
+) -> Result<bool, DbErr> {
+    let source = source.map(|ip| ip.to_canonical());
+    Ok(rules(db)
+        .await?
+        .iter()
+        .any(|rule| match rule.kind.as_str() {
+            "device" => rule.value == peer_id,
+            "ip" => source.is_some_and(|ip| rule.value.parse::<IpAddr>() == Ok(ip)),
+            "cidr" => source.is_some_and(|ip| {
+                rule.value
+                    .parse::<IpNetwork>()
+                    .is_ok_and(|network| network.contains(ip))
+            }),
+            _ => false,
+        }))
+}
+
 pub(crate) async fn save(
     db: &DatabaseConnection,
     actor_id: i32,
@@ -218,8 +239,14 @@ pub(crate) enum Agent {
     Hbbr,
 }
 
+#[derive(Debug)]
+struct AppliedRevision {
+    reported_at: Instant,
+    revision: Option<String>,
+}
+
 #[derive(Debug, Default)]
-pub(crate) struct Pairing(Mutex<[Option<(Instant, Option<String>)>; 2]>);
+pub(crate) struct Pairing(Mutex<[Option<AppliedRevision>; 2]>);
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -231,13 +258,16 @@ pub(crate) enum SyncState {
 
 impl Pairing {
     pub(crate) async fn received(&self, agent: Agent, applied: Option<String>) {
-        self.0.lock().await[agent as usize] = Some((Instant::now(), applied));
+        self.0.lock().await[agent as usize] = Some(AppliedRevision {
+            reported_at: Instant::now(),
+            revision: applied,
+        });
     }
 
     pub(crate) async fn status(&self, revision: &str) -> [SyncState; 2] {
         self.0.lock().await.each_ref().map(|report| match report {
-            Some((time, applied)) if time.elapsed() <= PAIRING_TIMEOUT => {
-                if applied.as_deref() == Some(revision) {
+            Some(report) if report.reported_at.elapsed() <= PAIRING_TIMEOUT => {
+                if report.revision.as_deref() == Some(revision) {
                     SyncState::Synced
                 } else {
                     SyncState::Updating

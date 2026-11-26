@@ -5,7 +5,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    #[sea_orm(unique_key)]
+    #[sea_orm(unique)]
     pub code_hash: String,
     #[sea_orm(default_value = "")]
     pub download_path: String,

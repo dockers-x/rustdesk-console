@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.60"
+version = "0.2.61"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/czyt/rustdesk-console"

@@ -6,7 +6,7 @@ use serde::Serialize;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    #[sea_orm(unique_key)]
+    #[sea_orm(unique)]
     #[serde(skip)]
     pub token_hash: String,
     #[serde(skip)]

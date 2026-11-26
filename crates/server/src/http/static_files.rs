@@ -601,17 +601,14 @@ pub(super) fn embedded_guest_asset(path: &str) -> Response {
             None => StatusCode::NOT_FOUND.into_response(),
         };
     }
-    let Some(html) = Resources::read("web/index.html")
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-    else {
+    let Some(html) = Resources::read_string("web/guest.html") else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let html = rewrite_webclient_index_html(html, WebClientVersion::V1)
-        .replace(r#"<base href="/webclient/">"#, r#"<base href="/webguest/">"#)
-        .replace(r#"<base href="/webclient/" />"#, r#"<base href="/webguest/" />"#)
-        .replace(r#"<script src="/webclient-config/index.js"></script>"#, "")
-        .replace("'serviceWorker' in navigator", "false");
-    super::response::no_store(respond_html(html))
+    let mut response = super::response::no_store(respond_html(html));
+    response
+        .headers_mut()
+        .insert(header::REFERRER_POLICY, axum::http::HeaderValue::from_static("no-referrer"));
+    response
 }
 
 pub async fn webclient_v1_index(State(state): State<AppState>) -> Response {

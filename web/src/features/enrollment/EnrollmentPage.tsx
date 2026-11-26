@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button, LinkButton } from "@cloudflare/kumo/components/button";
@@ -22,12 +22,24 @@ export function EnrollmentPage() {
   const [setup, setSetup] = useState<ClientSetup>();
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [copied, setCopied] = useState(false);
+  const pending = useRef<AbortController | undefined>(undefined);
 
   useEffect(() => {
-    if (params.has("code")) setParams({}, { replace: true });
+    const incoming = params.get("code");
+    if (incoming === null) return;
+    pending.current?.abort();
+    setCode(incoming.slice(0, 32));
+    setSetup(undefined);
+    setStatus("idle");
+    setCopied(false);
+    setParams({}, { replace: true });
   }, [params, setParams]);
 
+  useEffect(() => () => pending.current?.abort(), []);
+
   async function redeem() {
+    const request = new AbortController();
+    pending.current = request;
     setStatus("loading");
     try {
       const response = await fetch("/api/enrollment-invitations/redeem", {
@@ -36,21 +48,25 @@ export function EnrollmentPage() {
         body: JSON.stringify({ code }),
         credentials: "omit",
         cache: "no-store",
+        signal: request.signal,
       });
       if (!response.ok) throw new Error("Enrollment request failed");
       const result = await response.json() as { code: number; data?: ClientSetup };
       if (result.code !== 0 || !result.data) throw new Error("Invalid enrollment code");
+      if (request.signal.aborted) return;
       setSetup(result.data);
       setCode("");
       setStatus("idle");
     } catch {
-      setStatus("error");
+      if (!request.signal.aborted) setStatus("error");
+    } finally {
+      if (pending.current === request) pending.current = undefined;
     }
   }
 
   return (
     <main className="grid min-h-dvh place-items-center bg-kumo-base p-4 text-kumo-default">
-      <section className="w-full max-w-xl rounded-xl border border-kumo-line bg-kumo-elevated p-6 sm:p-8" aria-labelledby="enrollment-heading">
+      <section className="w-full min-w-0 max-w-xl rounded-xl border border-kumo-line bg-kumo-elevated p-6 sm:p-8" aria-labelledby="enrollment-heading">
         <div className="flex items-center gap-2 text-sm font-medium text-kumo-subtle">
           <img src={logoUrl} alt="" className="size-6 object-contain" />
           {title}

@@ -9,7 +9,7 @@ export function WebGuestPage() {
   const { t } = useTranslation();
   const { title, logoUrl } = useAppBranding();
   const [params, setParams] = useSearchParams();
-  const [guest] = useState(() => ({
+  const [guest, setGuest] = useState(() => ({
     token: params.get("token") ?? "",
     peer_id: params.get("peer") ?? "",
   }));
@@ -17,7 +17,11 @@ export function WebGuestPage() {
   const valid = /^[A-Za-z0-9_-]{43}$/.test(guest.token) && guest.peer_id.length > 0 && guest.peer_id.length <= 128;
 
   useEffect(() => {
-    if (params.has("token")) setParams({}, { replace: true });
+    const token = params.get("token");
+    if (token === null) return;
+    setGuest({ token, peer_id: params.get("peer") ?? "" });
+    setError(false);
+    setParams({}, { replace: true });
   }, [params, setParams]);
 
   function open() {
