@@ -222,9 +222,14 @@ export function BlocklistPage() {
             <DialogHeader title={t(draft.id ? "blocklistEdit" : "blocklistAdd")} />
             <DialogBody>
               <div className="grid gap-4">
-                <Select<Kind> label={t("blocklistType")} value={draft.kind} onValueChange={(kind) => {
-                  if (kind && kind !== draft.kind) { setInvalid(false); setDraft({ ...draft, kind, value: "" }); }
-                }}>
+                <Select<Kind>
+                  label={t("blocklistType")}
+                  value={draft.kind}
+                  items={kinds.map((kind) => ({ value: kind, label: t(kindLabels[kind]) }))}
+                  onValueChange={(kind) => {
+                    if (kind && kind !== draft.kind) { setInvalid(false); setDraft({ ...draft, kind, value: "" }); }
+                  }}
+                >
                   {kinds.map((kind) => <Select.Option key={kind} value={kind}>{t(kindLabels[kind])}</Select.Option>)}
                 </Select>
                 <DevicePicker key={draft.kind} kind={draft.kind} onSelect={(value) => {
