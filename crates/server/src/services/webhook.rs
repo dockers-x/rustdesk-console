@@ -745,6 +745,7 @@ mod tests {
                 alias: String::new(),
                 status: 1,
                 force_sysinfo_refresh: false,
+                wake_mac_address: None,
                 created_at: None,
                 updated_at: None,
             },

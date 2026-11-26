@@ -40,6 +40,9 @@ pub struct Model {
     pub status: i32,
     #[sea_orm(default_value = false)]
     pub force_sysinfo_refresh: bool,
+    #[sea_orm(column_type = "String(StringLen::N(17))")]
+    #[serde(skip)]
+    pub wake_mac_address: Option<String>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]
     pub created_at: Option<DateTime>,
     #[serde(serialize_with = "crate::datetime::serialize_opt", skip_deserializing)]

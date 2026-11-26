@@ -38,6 +38,12 @@ ClientDownloadsInvalidVersion = "请输入不超过 64 个字符的版本号，�
 ClientDownloadsInvalidPackages = "请添加 1 到 16 个安装包。"
 ClientDownloadsInvalidChecksum = "请为每个安装包输入恰好 64 个十六进制字符的 SHA-256 校验值。"
 ClientDownloadsInvalidUrl = "请输入公开的 HTTPS 安装包地址，地址不得包含凭据、查询参数或片段。"
+WakeOnLanInvalidMac = "请输入单播 MAC 地址，例如 00:1B:63:12:34:56。"
+WakeOnLanDeviceDisabled = "该设备已停用。"
+WakeOnLanMissingMac = "请先保存设备的 MAC 地址，再发送唤醒包。"
+WakeOnLanUnconfigured = "请在控制台服务器配置中指定用于网络唤醒的本地网络。"
+WakeOnLanRateLimited = "已达到唤醒包发送频率限制，请稍后重试。"
+WakeOnLanSendFailed = "无法发送唤醒包，请检查控制台服务器的网络配置。"
 
 [Test]
 description = "test"

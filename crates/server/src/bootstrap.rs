@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 20] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 21] {
     [
         SchemaMigration {
             version: 271,
@@ -149,6 +149,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 20] {
             version: 288,
             name: "client download portals",
             apply: migration_288,
+        },
+        SchemaMigration {
+            version: 289,
+            name: "device Wake-on-LAN MAC addresses",
+            apply: migration_289,
         },
         SchemaMigration {
             version: 290,
@@ -629,6 +634,20 @@ fn migration_288<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> Migra
             .if_not_exists()
             .to_owned();
         db.execute(backend.build(&statement)).await?;
+        Ok(())
+    })
+}
+
+fn migration_289<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        if !column_exists(db, "peers", "wake_mac_address").await? {
+            let statement = Table::alter()
+                .table(peer::Entity)
+                .add_column(ColumnDef::new(peer::Column::WakeMacAddress).string_len(17))
+                .to_owned();
+            db.execute(db.get_database_backend().build(&statement))
+                .await?;
+        }
         Ok(())
     })
 }
@@ -1634,6 +1653,9 @@ async fn seed(
 /// Build the full application state from a parsed config.
 pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result<AppState> {
     let jwt = Jwt::try_new(&config.jwt.key, config.jwt.expire_duration())?;
+    let wake_on_lan = Arc::new(crate::support::wake_on_lan::WakeOnLan::new(
+        config.wake_on_lan.network()?,
+    ));
     let i18n = I18n::load(&config.lang);
     let db = {
         let _lock = lock_sqlite_migration(&config).await?;
@@ -1679,6 +1701,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
         i18n: Arc::new(i18n),
         oauth_cache: Arc::new(crate::support::oauth_cache::OauthCache::new()),
         disconnect_store: Arc::new(crate::support::disconnect_store::DisconnectStore::new()),
+        wake_on_lan,
         external_webclient,
         start_time: Arc::new(start_time),
         version: Arc::new(version),
@@ -1970,6 +1993,35 @@ mod tests {
         assert_eq!(row.storage_key, "original/legacy.webm");
         assert!(row.storage_profile_id.is_none());
         assert_eq!(latest_schema_version(&db).await.unwrap(), Some(DATABASE_VERSION));
+    }
+
+    #[tokio::test]
+    async fn wake_on_lan_migration_preserves_the_existing_peer_and_is_idempotent() {
+        let db = memory_db().await;
+        let config = test_config("");
+        create_tables(&db).await.unwrap();
+        db.execute_unprepared("ALTER TABLE peers DROP COLUMN wake_mac_address")
+            .await
+            .unwrap();
+        db.execute_unprepared("INSERT INTO peers (row_id, id) VALUES (41, '123456789')")
+            .await
+            .unwrap();
+        record_schema_version(&db, 286).await.unwrap();
+
+        apply_schema(&db, &config).await.unwrap();
+        apply_schema(&db, &config).await.unwrap();
+
+        let peer = peer::Entity::find_by_id(41)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(peer.id, "123456789");
+        assert!(peer.wake_mac_address.is_none());
+        assert_eq!(
+            latest_schema_version(&db).await.unwrap(),
+            Some(DATABASE_VERSION)
+        );
     }
 
     #[tokio::test]

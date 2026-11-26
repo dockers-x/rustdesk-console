@@ -236,6 +236,8 @@ fn management_action(route: &str, method: &Method) -> Option<&'static str> {
         (Method::POST, "/api/admin/user/tfa/reset") => Some("login_security.reset_totp"),
         (Method::POST, "/api/admin/user/security") => Some("login_security.account"),
         (Method::POST, "/api/admin/peer/update") => Some("devices.update"),
+        (Method::PUT, "/api/admin/peer/wake-on-lan/:id") => Some("devices.wake_mac_update"),
+        (Method::POST, "/api/admin/peer/wake-on-lan/:id/send") => Some("devices.wake"),
         (Method::POST, "/api/admin/strategy/create") => Some("strategies.create"),
         (Method::POST, "/api/admin/strategy/update") => Some("strategies.update"),
         (Method::POST, "/api/admin/strategy/delete") => Some("strategies.delete"),

@@ -47,6 +47,8 @@ pub struct Config {
     pub ldap: Ldap,
     pub oidc: Oidc,
     pub security: Security,
+    #[serde(rename = "wake-on-lan")]
+    pub(crate) wake_on_lan: WakeOnLanConfig,
 }
 
 impl Config {
@@ -55,6 +57,24 @@ impl Config {
             return std::path::PathBuf::from("data/storage-profiles.json");
         }
         std::path::PathBuf::from(self.storage_profiles_file.trim())
+    }
+}
+
+/// The local IPv4 interface and subnet that may send wake broadcasts.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub(crate) struct WakeOnLanConfig {
+    #[serde(rename = "source-cidr")]
+    source_cidr: String,
+}
+
+impl WakeOnLanConfig {
+    pub(crate) fn network(&self) -> anyhow::Result<Option<crate::support::wake_on_lan::Network>> {
+        let source = self.source_cidr.trim();
+        if source.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(source.parse()?))
     }
 }
 
@@ -527,6 +547,7 @@ pub fn init(path: &str) -> anyhow::Result<Config> {
             .map_err(|_| anyhow::anyhow!("Invalid backup configuration file"))?;
     }
     cfg.backup.validate()?;
+    cfg.wake_on_lan.network()?;
     Ok(cfg)
 }
 

@@ -2834,10 +2834,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "regex-automata"
-version = "0.4.14"
+name = "regex"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2988,6 +3000,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsmanuf"
+version = "2026.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd6efd6e665b620aac0e9fc10d26de9a90aeeaad35aeaffad731df5540765d56"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "rust-embed"
 version = "8.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3104,6 +3125,7 @@ dependencies = [
  "reqwest",
  "ring 0.17.14",
  "rsa",
+ "rsmanuf",
  "rust-embed",
  "rustdesk-client-config",
  "rustdesk-server-control",
@@ -3130,6 +3152,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "wake-on-lan",
  "zip",
 ]
 
@@ -4638,6 +4661,10 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "wake-on-lan"
+version = "0.2.0"
 
 [[package]]
 name = "walkdir"

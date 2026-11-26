@@ -11,6 +11,7 @@ import { formatDateTime, formatUnixSeconds } from "../lib/dateFormat";
 import { usePublicAdminConfig } from "../lib/adminTitle";
 import { DeviceActivity } from "./DeviceActivity";
 import { TableState } from "./TableState";
+import { DeviceWakeControl } from "./DeviceWakeControl";
 
 const PEER_ONLINE_WINDOW_SECONDS = 90;
 const ACTIVE_CONNECTION_PAGE_SIZE = 50;
@@ -282,6 +283,13 @@ export function PeerInfoDrawer({
                   {t("standardClientMetricsHint")}
                 </p>
               </section>
+
+              {scope === "admin" && Number(row.row_id) > 0 && (
+                <DeviceWakeControl
+                  rowId={Number(row.row_id)}
+                  lastHeartbeat={numberValue(row.last_online_time)}
+                />
+              )}
 
               {scope === "admin" && (
                 <section className="mt-5 grid gap-3">

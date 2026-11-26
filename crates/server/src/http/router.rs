@@ -503,6 +503,16 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/admin/peer/effective-strategy/:id", get(admin::peer_effective_strategy))
         .route("/api/admin/peer/detail/:id", get(admin::peer_detail))
         .route("/api/admin/peer/activity/:id", get(admin::peer_activity))
+        .route(
+            "/api/admin/peer/wake-on-lan/:id",
+            get(super::wake_on_lan::settings)
+                .put(super::wake_on_lan::save)
+                .layer(DefaultBodyLimit::max(256)),
+        )
+        .route(
+            "/api/admin/peer/wake-on-lan/:id/send",
+            post(super::wake_on_lan::send).layer(DefaultBodyLimit::max(128)),
+        )
         .route("/api/admin/peer/create", post(admin::peer_create))
         .route("/api/admin/peer/update", post(admin::peer_update))
         .route("/api/admin/peer/delete", post(admin::peer_delete))

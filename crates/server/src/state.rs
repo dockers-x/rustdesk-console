@@ -26,6 +26,7 @@ pub struct AppState {
     pub i18n: Arc<I18n>,
     pub oauth_cache: Arc<OauthCache>,
     pub disconnect_store: Arc<DisconnectStore>,
+    pub(crate) wake_on_lan: Arc<crate::support::wake_on_lan::WakeOnLan>,
     pub external_webclient: Option<Arc<ExternalWebClient>>,
     pub admin_config: Arc<AdminConfigStore>,
     pub webclient_config: Arc<WebClientConfigStore>,

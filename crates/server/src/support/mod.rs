@@ -11,6 +11,7 @@ pub mod random;
 pub mod record_storage_config;
 pub(crate) mod storage_profiles;
 pub(crate) mod totp_vault;
+pub(crate) mod wake_on_lan;
 pub mod webclient_config;
 
 static CONFIG_PERSISTENCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

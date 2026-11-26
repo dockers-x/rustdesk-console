@@ -27,3 +27,4 @@ pub mod static_files;
 pub mod switch_grant;
 mod web_guest;
 mod web_guest_protocol;
+mod wake_on_lan;

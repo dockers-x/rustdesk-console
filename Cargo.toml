@@ -72,6 +72,10 @@ urlencoding = "2"
 url = "2"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "rustls-tls"] }
 
+# Use the upstream 0.2.0 crate with its undefined packet initialization fixed.
+[patch.crates-io]
+wake-on-lan = { path = "vendor/wake-on-lan" }
+
 [profile.release]
 opt-level = "z"
 lto = true

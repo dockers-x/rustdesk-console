@@ -138,6 +138,24 @@ zone, for example `TZ=Europe/Berlin`, if you do not want Asia/Shanghai local tim
 Business timestamps remain stored in UTC; `TZ` is used for server-local logs/start
 time and for the admin UI's local-time display.
 
+### Wake-on-LAN
+
+Leave `wake-on-lan.source-cidr` empty to disable sending. To enable it, set
+`RUSTDESK_API_WAKE_ON_LAN_SOURCE_CIDR` or the YAML setting to the Console
+server's IPv4 address and prefix on the device network, such as
+`192.168.1.10/24`, and restart the Console. The Console sends UDP port 9 from
+that local address to the subnet's broadcast address. The process must be able
+to reach that broadcast domain from its network namespace, including when the
+Console runs in a container.
+
+In **Devices**, open a device's details, save the MAC address of an adapter
+configured to allow Wake-on-LAN, and select **Send wake packet**. The Console
+reports packet dispatch and then reports a newer RustDesk heartbeat if one
+arrives. Only full Console administrators can save MAC addresses and send
+packets. Console audit records both actions. Each Console process allows one
+attempt per device every 15 seconds and up to 20 attempts per minute in total.
+When available, the adapter manufacturer comes from an offline MAC prefix lookup.
+
 ### Device notifications
 
 Notification Routing supports ntfy, Bark, Server Chan and Webhook. A device can trigger several rules, each with its own template and test action. See the [notification guide](docs/notification-routing.zh-CN.md).
