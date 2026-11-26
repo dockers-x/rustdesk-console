@@ -1,3 +1,6 @@
+BlocklistInvalid = "请输入符合所选类型的有效规则。"
+BlocklistDuplicate = "此规则已存在。"
+BlocklistFull = "阻止列表已满。"
 InvalidSiteLogo = "请选择不超过 512 × 512 像素和 256 KB 的有效静态 PNG。"
 AuditDateFormat = "请按 YYYY-MM-DD 格式输入日期。"
 AuditDateOrder = "结束日期不能早于开始日期。"

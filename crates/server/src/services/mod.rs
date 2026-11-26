@@ -4,6 +4,7 @@
 
 pub mod active_connection;
 pub mod address_book;
+pub(crate) mod blocklist;
 pub(crate) mod browser_trust;
 pub mod audit;
 pub mod audit_alarm;

@@ -20,6 +20,7 @@ use crate::support::webclient_config::WebClientConfigStore;
 pub struct AppState {
     pub features: Arc<crate::features::FeatureStore>,
     pub db: DatabaseConnection,
+    pub(crate) blocklist_pairing: Arc<crate::services::blocklist::Pairing>,
     pub config: Arc<Config>,
     pub jwt: Arc<Jwt>,
     pub limiter: Arc<LoginLimiter>,

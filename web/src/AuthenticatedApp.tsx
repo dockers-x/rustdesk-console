@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { AppShell } from "./components/AppShell";
 import { ConsoleAuditRetention } from "./pages/ConsoleAuditRetention";
 import { AddressBookPage } from "./pages/AddressBookPage";
+import { BlocklistPage } from "./pages/BlocklistPage";
 import { DeviceAdmissionPage } from "./pages/DeviceAdmissionPage";
 import { DelegatedAdminPage } from "./pages/DelegatedAdminPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
@@ -112,6 +113,7 @@ export default function AuthenticatedApp() {
       }>
         <Route path="/" element={<Navigate to={home} replace />} />
         <Route path="/overview" element={<OverviewPage />} />
+        <Route path="/blocklist" element={<BlocklistPage />} />
         <Route path="/device-admission" element={<DeviceAdmissionPage />} />
         <Route path="/delegated-admin" element={<DelegatedAdminPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />

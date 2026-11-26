@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 291;
+pub const DATABASE_VERSION: i32 = 292;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 21] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 22] {
     [
         SchemaMigration {
             version: 271,
@@ -164,6 +164,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 21] {
             version: 291,
             name: "scoped WebClient guest sessions",
             apply: migration_291,
+        },
+        SchemaMigration {
+            version: 292,
+            name: "paired Server blocklist",
+            apply: migration_292,
         },
     ]
 }
@@ -657,6 +662,18 @@ fn migration_290<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> Migra
         let backend = db.get_database_backend();
         let statement = Schema::new(backend)
             .create_table_from_entity(entity::enrollment_invitation::Entity)
+            .if_not_exists()
+            .to_owned();
+        db.execute(backend.build(&statement)).await?;
+        Ok(())
+    })
+}
+
+fn migration_292<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        let backend = db.get_database_backend();
+        let statement = Schema::new(backend)
+            .create_table_from_entity(entity::blocklist_rule::Entity)
             .if_not_exists()
             .to_owned();
         db.execute(backend.build(&statement)).await?;
@@ -1683,6 +1700,7 @@ pub async fn build_state(config: Config, config_path: PathBuf) -> anyhow::Result
     Ok(AppState {
         features: Arc::new(crate::features::FeatureStore::new(&config_path)),
         db,
+        blocklist_pairing: Arc::new(Default::default()),
         admin_config: Arc::new(AdminConfigStore::new(
             config_path.clone(),
             admin_panel_config,

@@ -51,6 +51,7 @@ toml = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
+ipnetwork = "0.21"
 maxminddb = { workspace = true }
 flate2 = "1"
 tar = { version = "0.4", default-features = false }

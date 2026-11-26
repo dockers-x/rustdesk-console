@@ -15,7 +15,7 @@ use crate::{
     state::AppState,
 };
 
-fn authenticated(state: &AppState, headers: &HeaderMap) -> bool {
+pub(super) fn authenticated(state: &AppState, headers: &HeaderMap) -> bool {
     let configured = &state.config.security.hbbs_admission_token;
     if !device_admission::token_is_configured(configured) {
         return false;

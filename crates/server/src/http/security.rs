@@ -192,6 +192,8 @@ mod tests {
             schema.create_table_from_entity(entity::totp_counter::Entity),
             schema.create_table_from_entity(entity::control_role::Entity),
             schema.create_table_from_entity(entity::device_admission::Entity),
+            schema.create_table_from_entity(entity::blocklist_rule::Entity),
+            schema.create_table_from_entity(entity::console_audit::Entity),
             schema.create_table_from_entity(entity::routing_settings::Entity),
             schema.create_table_from_entity(entity::strategy_delivery::Entity),
             schema.create_table_from_entity(entity::address_book_trash::Entity),
@@ -1076,6 +1078,139 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST);
         }
         assert!(!allowed(&state, "token-2", "device-1").await);
+    }
+
+    #[tokio::test]
+    async fn blocklist_crud_is_scoped_audited_and_canonical() {
+        use entity::{blocklist_rule, console_audit};
+
+        const TOKEN: &str = "paired-test-secret-at-least-thirty-two-characters";
+        const ADMIN: &str = "/api/admin/blocklist";
+        const SNAPSHOT: &str = "/api/server/blocklist?agent=hbbs";
+        let mut state = fixture().await;
+        Arc::make_mut(&mut state.config)
+            .security
+            .hbbs_admission_token = TOKEN.into();
+
+        let (status, _) = json_request(&state, "GET", SNAPSHOT, json!(null), Some("token-3")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (_, denied) = json_request(&state, "GET", ADMIN, json!(null), Some("token-1")).await;
+        assert_eq!(denied["code"], 401);
+        let (_, choices) = json_request(
+            &state,
+            "GET",
+            &format!("{ADMIN}/devices?q=device-"),
+            json!(null),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(choices["data"][0]["id"], "device-1");
+
+        let (_, device) = json_request(
+            &state,
+            "POST",
+            ADMIN,
+            json!({"kind":"device","value":"device-1","note":"private note"}),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(device["code"], 0, "{device}");
+        peer::Entity::delete_by_id(1).exec(&state.db).await.unwrap();
+        assert!(
+            blocklist_rule::Entity::find_by_id(1)
+                .one(&state.db)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let (_, network) = json_request(
+            &state,
+            "POST",
+            ADMIN,
+            json!({"kind":"cidr","value":"::ffff:192.0.2.18/120"}),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(network["data"]["value"], "192.0.2.0/24", "{network}");
+        let (_, duplicate) = json_request(
+            &state,
+            "POST",
+            ADMIN,
+            json!({"kind":"cidr","value":"192.0.2.234/24"}),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(duplicate["code"], 101);
+        let (_, invalid) = json_request(
+            &state,
+            "POST",
+            ADMIN,
+            json!({"kind":"ip","value":"192.0.2.234/24"}),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(invalid["code"], 101);
+
+        let (_, snapshot) = json_request(&state, "GET", SNAPSHOT, json!(null), Some(TOKEN)).await;
+        assert_eq!(snapshot["version"], 1);
+        assert_eq!(
+            snapshot["rules"],
+            json!([
+                {"kind":"device","value":"device-1"}, {"kind":"cidr","value":"192.0.2.0/24"}
+            ])
+        );
+        let revision = snapshot["revision"].as_str().unwrap();
+        let (_, _) = json_request(
+            &state,
+            "GET",
+            &format!("{SNAPSHOT}&applied_revision={revision}"),
+            json!(null),
+            Some(TOKEN),
+        )
+        .await;
+        let (_, status) = json_request(&state, "GET", ADMIN, json!(null), Some("token-3")).await;
+        assert_eq!(status["data"]["hbbs"], "synced");
+        assert_eq!(status["data"]["hbbr"], "waiting");
+
+        let (_, edited) = json_request(
+            &state,
+            "PUT",
+            &format!("{ADMIN}/2"),
+            json!({"kind":"ip","value":"2001:0DB8:0:0::7"}),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(edited["data"]["value"], "2001:db8::7");
+        let (_, status) = json_request(&state, "GET", ADMIN, json!(null), Some("token-3")).await;
+        assert_eq!(status["data"]["hbbs"], "updating");
+        let (_, deleted) = json_request(
+            &state,
+            "DELETE",
+            &format!("{ADMIN}/1"),
+            json!(null),
+            Some("token-3"),
+        )
+        .await;
+        assert_eq!(deleted["code"], 0);
+
+        use sea_orm::QueryOrder;
+        let actions = console_audit::Entity::find()
+            .order_by_asc(console_audit::Column::Id)
+            .all(&state.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| (entry.action, entry.actor_id, entry.subject_id))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actions,
+            [
+                ("blocklist.create".into(), 3, Some(1)),
+                ("blocklist.create".into(), 3, Some(2)),
+                ("blocklist.update".into(), 3, Some(2)),
+                ("blocklist.delete".into(), 3, Some(1)),
+            ]
+        );
     }
 
     #[tokio::test]

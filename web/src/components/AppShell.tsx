@@ -153,6 +153,7 @@ const NAV_SECTIONS: { key: string; items: NavItem[] }[] = [
       adminItem("devices"),
       adminItem("deviceGroups"),
       { to: "/device-admission", key: "deviceAdmission" },
+      { to: "/blocklist", key: "blocklistTitle" },
       adminItem("addressBook"),
       adminItem("collections"),
       adminItem("shareRules"),

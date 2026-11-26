@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod api;
+mod blocklist;
 mod browser_trust;
 mod client_download;
 mod console_audit;

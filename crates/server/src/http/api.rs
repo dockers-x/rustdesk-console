@@ -3465,6 +3465,7 @@ pub(crate) mod deployment_tests {
         AppState {
             features: Arc::new(crate::features::FeatureStore::new(&PathBuf::from("/tmp/rustdesk-console-test-config.yaml"))),
             db,
+            blocklist_pairing: Arc::new(Default::default()),
             config: Arc::new(config.clone()),
             jwt: Arc::new(Jwt::new("test", StdDuration::from_secs(3600))),
             limiter: Arc::new(LoginLimiter::new(SecurityPolicy {
