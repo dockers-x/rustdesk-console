@@ -39,7 +39,7 @@ use crate::support::webclient_config::{WebClientConfig, WebClientConfigStore};
 use crate::support::{external_webclient::ExternalWebClient, password};
 
 /// The schema version the binary expects (mirrors Go `DatabaseVersion`).
-pub const DATABASE_VERSION: i32 = 292;
+pub const DATABASE_VERSION: i32 = 293;
 
 type MigrationFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 // SeaORM entity methods require a sized connection type, so instantiate the
@@ -58,7 +58,7 @@ impl<C> fmt::Display for SchemaMigration<C> {
     }
 }
 
-fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 22] {
+fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 23] {
     [
         SchemaMigration {
             version: 271,
@@ -169,6 +169,11 @@ fn schema_migrations<C: ConnectionTrait>() -> [SchemaMigration<C>; 22] {
             version: 292,
             name: "paired Server blocklist",
             apply: migration_292,
+        },
+        SchemaMigration {
+            version: 293,
+            name: "login verification indexes",
+            apply: migration_293,
         },
     ]
 }
@@ -678,6 +683,32 @@ fn migration_292<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> Migra
             .to_owned();
         db.execute(backend.build(&statement)).await?;
         Ok(())
+    })
+}
+
+fn migration_293<'a>(db: &'a impl ConnectionTrait, _config: &'a Config) -> MigrationFuture<'a> {
+    Box::pin(async move {
+        create_index(
+            db,
+            "login_verifications",
+            "idx_login_verification_quota",
+            &["user_id", "kind", "expires_at"],
+        )
+        .await?;
+        create_index(
+            db,
+            "login_verifications",
+            "idx_login_verification_secret",
+            &["secret"],
+        )
+        .await?;
+        create_index(
+            db,
+            "login_verifications",
+            "idx_login_verification_expiry",
+            &["expires_at", "id"],
+        )
+        .await
     })
 }
 
@@ -2038,6 +2069,60 @@ mod tests {
             latest_schema_version(&db).await.unwrap(),
             Some(DATABASE_VERSION)
         );
+    }
+
+    #[tokio::test]
+    async fn schema_292_gains_login_verification_indexes_without_rewriting_challenges() {
+        let db = memory_db().await;
+        let config = test_config("");
+        create_tables(&db).await.unwrap();
+        db.execute_unprepared(
+            "INSERT INTO login_verifications (user_id, secret, kind, expires_at, verified_at) \
+             VALUES (42, 'legacy', 'totp', 2000, 0), (42, 'legacy', 'totp', 2000, 1000)",
+        )
+        .await
+        .unwrap();
+        record_schema_version(&db, 292).await.unwrap();
+
+        for _ in 0..2 {
+            apply_schema(&db, &config).await.unwrap();
+            assert_eq!(latest_schema_version(&db).await.unwrap(), Some(293));
+            assert_eq!(
+                login_verification::Entity::find().count(&db).await.unwrap(),
+                2
+            );
+        }
+        // Rerunning the migration must also work after a partial or repeated DDL run.
+        migration_293(&db, &config).await.unwrap();
+
+        for (sql, index) in [
+            (
+                "SELECT COUNT(*) FROM login_verifications \
+                 WHERE user_id = 42 AND kind IN ('email', 'totp') AND expires_at > 1000",
+                "idx_login_verification_quota",
+            ),
+            (
+                "SELECT * FROM login_verifications \
+                 WHERE secret = 'legacy' AND kind = 'totp' AND verified_at = 0 LIMIT 1",
+                "idx_login_verification_secret",
+            ),
+            (
+                "SELECT id FROM login_verifications \
+                 WHERE expires_at < 1000 ORDER BY expires_at ASC, id ASC LIMIT 500",
+                "idx_login_verification_expiry",
+            ),
+        ] {
+            let plan = db
+                .query_one(Statement::from_string(
+                    db.get_database_backend(),
+                    format!("EXPLAIN QUERY PLAN {sql}"),
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            let detail: String = plan.try_get("", "detail").unwrap();
+            assert!(detail.contains(index), "{detail}");
+        }
     }
 
     #[tokio::test]

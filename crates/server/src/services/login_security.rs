@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use lettre::message::{Mailbox, MultiPart, SinglePart};
@@ -20,6 +22,8 @@ const TOTP_PERIOD: i64 = 30;
 const TOTP_DIGITS: u32 = 6;
 const CHALLENGE_TTL_SECS: i64 = 10 * 60;
 const PASSWORD_RESET_TTL_SECS: i64 = 15 * 60;
+const PRUNE_BATCH_SIZE: u64 = 500;
+const PRUNE_BATCHES_PER_TICK: usize = 8;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoginSecuritySettings {
@@ -584,6 +588,52 @@ async fn create_challenge(
         send_email(&settings, &u.email, message).await?;
     }
     Ok(LoginChallenge { kind, secret })
+}
+
+async fn prune_expired_batch(db: &DatabaseConnection, cutoff: i64) -> Result<bool, DbErr> {
+    use login_verification::{Column, Entity};
+
+    // Consumed challenges still count toward the account quota until they expire.
+    let expired = Entity::find()
+        .select_only()
+        .column(Column::Id)
+        .filter(Column::ExpiresAt.lt(cutoff))
+        .order_by_asc(Column::ExpiresAt)
+        .order_by_asc(Column::Id)
+        .limit(PRUNE_BATCH_SIZE)
+        .into_tuple::<i32>()
+        .all(db)
+        .await?;
+    let full_batch = expired.len() as u64 == PRUNE_BATCH_SIZE;
+    if !expired.is_empty() {
+        Entity::delete_many()
+            .filter(Column::Id.is_in(expired))
+            .filter(Column::ExpiresAt.lt(cutoff))
+            .exec(db)
+            .await?;
+    }
+    Ok(full_batch)
+}
+
+pub(crate) fn spawn_retention_worker(db: DatabaseConnection) {
+    tokio::spawn(async move {
+        let mut timer = tokio::time::interval(Duration::from_secs(60));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            timer.tick().await;
+            let cutoff = Utc::now().timestamp();
+            for _ in 0..PRUNE_BATCHES_PER_TICK {
+                match prune_expired_batch(&db, cutoff).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(error) => {
+                        tracing::warn!(%error, "Could not prune expired login verifications");
+                        break;
+                    }
+                }
+            }
+        }
+    });
 }
 
 const PASSWORD_RESET_KINDS: [&str; 2] = [
@@ -1561,6 +1611,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verification_cleanup_preserves_active_and_just_expiring_challenges() {
+        use login_verification::{Column, Entity};
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let backend = db.get_database_backend();
+        let table = Schema::new(backend).create_table_from_entity(Entity);
+        db.execute(backend.build(&table)).await.unwrap();
+
+        let cutoff = 1_000;
+        for (kind, expires_at, verified_at) in [
+            (login_verification::KIND_TOTP, cutoff + 1, cutoff - 1),
+            (login_verification::KIND_EMAIL, cutoff, 0),
+        ] {
+            login_verification::ActiveModel {
+                kind: Set(kind.into()),
+                expires_at: Set(expires_at),
+                verified_at: Set(verified_at),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        for _ in 0..=PRUNE_BATCH_SIZE {
+            login_verification::ActiveModel {
+                kind: Set(login_verification::KIND_PASSWORD_RESET.into()),
+                expires_at: Set(cutoff - 1),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+
+        assert!(prune_expired_batch(&db, cutoff).await.unwrap());
+        assert_eq!(Entity::find().count(&db).await.unwrap(), 3);
+        assert!(!prune_expired_batch(&db, cutoff).await.unwrap());
+        assert!(!prune_expired_batch(&db, cutoff).await.unwrap());
+        let remaining = Entity::find()
+            .order_by_asc(Column::Id)
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].verified_at, cutoff - 1);
+        assert_eq!(remaining[1].expires_at, cutoff);
+    }
+
+    #[tokio::test]
     async fn fresh_login_challenges_share_a_persistent_account_quota() {
         let db = smtp_test_db().await;
         let schema = Schema::new(db.get_database_backend());
@@ -1606,6 +1705,9 @@ mod tests {
             .await
             .is_err());
         }
+        assert!(!prune_expired_batch(&db, Utc::now().timestamp())
+            .await
+            .unwrap());
         assert!(
             create_login_challenge(&db, &account, &device, VerificationKind::Totp, "en")
                 .await
