@@ -1748,21 +1748,35 @@ mod tests {
                 .unwrap()
                 .require_admin_totp
         );
-        let code = json!({"code": services::login_security::test_totp_code(&secret, 0)});
-        let disable = || {
+        let step = chrono::Utc::now().timestamp() / 30;
+        let code = json!({"code": services::login_security::test_totp_code_at(&secret, step)});
+        ::entity::totp_counter::ActiveModel {
+            user_id: Set(3),
+            last_step: Set(step),
+        }
+        .insert(&state.db)
+        .await
+        .unwrap();
+        let disable = |code: serde_json::Value| {
             json_request(
                 &state,
                 "POST",
                 "/api/admin/user/myTfaDisable",
-                code.clone(),
+                code,
                 Some("token-3"),
             )
         };
-        assert_ne!(disable().await.1["code"], 0);
+        let enforced = state.tr("", "TotpPolicyRequired");
+        assert_eq!(disable(code.clone()).await.1["message"], enforced);
         set_policy(false, true).await.unwrap();
-        assert_ne!(disable().await.1["code"], 0);
+        assert_eq!(disable(code.clone()).await.1["message"], enforced);
         set_policy(false, false).await.unwrap();
-        assert_eq!(disable().await.1["code"], 0);
+        assert_eq!(
+            disable(code).await.1["message"],
+            state.tr("", "TotpCodeAlreadyUsed")
+        );
+        let fresh = json!({"code": services::login_security::test_totp_code_at(&secret, step + 1)});
+        assert_eq!(disable(fresh).await.1["code"], 0);
         let account = user::Entity::find_by_id(3)
             .one(&state.db)
             .await

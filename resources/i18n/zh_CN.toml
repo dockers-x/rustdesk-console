@@ -311,7 +311,14 @@ description = "Register success, wait for admin confirm."
 one = "注册成功，请等待管理员审核。"
 other = "注册成功，请等待管理员审核。"
 
-TotpCodeInvalidOrUsed = "验证码错误、已过期或已使用，请输入新的验证器验证码。"
+[TotpCodeInvalid]
+other = "验证码无效或已过期。请核对验证器中的账号和时间，然后重新发起操作。"
+
+[TotpCodeAlreadyUsed]
+other = "这组验证码已使用或比上次使用的更早。请等验证器刷新后再试。"
+
+[TotpPolicyRequired]
+other = "当前账号受强制双重认证策略保护，无法关闭双重认证。"
 
 [OauthBindingRequired]
 other = "此账号尚未绑定。请先通过已有方式登录 Console，再到「个人中心 → 登录方式」绑定。"

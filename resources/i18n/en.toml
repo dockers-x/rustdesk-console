@@ -309,7 +309,14 @@ description = "Register success, wait admin confirm."
 one = "Register success, wait admin confirm."
 other = "Register success, wait admin confirm."
 
-TotpCodeInvalidOrUsed = "The authenticator code is incorrect, expired, or already used. Enter a new code."
+[TotpCodeInvalid]
+other = "The authenticator code is invalid or has expired. Check the account and time in your authenticator, then start again."
+
+[TotpCodeAlreadyUsed]
+other = "This authenticator code has already been used or is older than the last one used. Wait for a new code and try again."
+
+[TotpPolicyRequired]
+other = "Two-factor authentication is required by the policy for this account."
 
 [OauthBindingRequired]
 other = "This account is not linked. Sign in to Console using an existing method, then link it under Personal Center → Sign-in methods."

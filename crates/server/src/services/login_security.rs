@@ -845,30 +845,14 @@ pub async fn verify_login_challenge(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "UserNotFound".to_string())?;
-    let claimed = login_verification::Entity::update_many()
-        .col_expr(
-            login_verification::Column::VerifiedAt,
-            sea_orm::sea_query::Expr::value(now_ts),
-        )
-        .filter(login_verification::Column::Id.eq(challenge.id))
-        .filter(login_verification::Column::VerifiedAt.eq(0))
-        .exec(db)
-        .await
-        .map_err(|e| e.to_string())?;
-    if claimed.rows_affected != 1 {
-        return Err("The verification code is incorrect or has expired".to_string());
-    }
-
     let kind = match challenge.kind.as_str() {
         login_verification::KIND_TOTP => {
-            let code = totp_code
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| "The verification code is incorrect or has expired".to_string())?;
-            consume_totp(db, config, &u, code).await?;
+            verify_totp_challenge(db, config, &u, challenge.id, totp_code.unwrap_or_default())
+                .await?;
             VerificationKind::Totp
         }
         login_verification::KIND_EMAIL => {
+            claim_login_challenge(db, challenge.id).await?;
             let code = email_code
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
@@ -903,6 +887,22 @@ pub async fn verify_login_challenge(
     })
 }
 
+async fn claim_login_challenge(db: &impl ConnectionTrait, id: i32) -> Result<(), String> {
+    let now = Utc::now().timestamp();
+    let claimed = login_verification::Entity::update_many()
+        .col_expr(login_verification::Column::VerifiedAt, Expr::value(now))
+        .filter(login_verification::Column::Id.eq(id))
+        .filter(login_verification::Column::VerifiedAt.eq(0))
+        .filter(login_verification::Column::ExpiresAt.gte(now))
+        .exec(db)
+        .await
+        .map_err(|error| error.to_string())?;
+    if claimed.rows_affected != 1 {
+        return Err("The verification code is incorrect or has expired".into());
+    }
+    Ok(())
+}
+
 pub fn generate_totp_secret() -> String {
     let mut bytes = [0u8; 20];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -917,7 +917,7 @@ pub fn totp_uri(username: &str, secret: &str, issuer: &str) -> String {
     format!("otpauth://totp/{label}?secret={secret}&issuer={issuer}&digits=6&period=30")
 }
 
-const INVALID_TOTP: &str = "TotpCodeInvalidOrUsed";
+const INVALID_TOTP: &str = "TotpCodeInvalid";
 
 fn totp_step(secret: &str, code: &str) -> Option<i64> {
     let code = code.trim();
@@ -933,26 +933,61 @@ fn totp_step(secret: &str, code: &str) -> Option<i64> {
 
 #[cfg(test)]
 pub(crate) fn test_totp_code(secret: &str, offset: i64) -> String {
-    totp_at(
-        &base32_decode(secret).unwrap(),
-        Utc::now().timestamp() / TOTP_PERIOD + offset,
-    )
+    test_totp_code_at(secret, Utc::now().timestamp() / TOTP_PERIOD + offset)
 }
 
-async fn consume_totp(
+#[cfg(test)]
+pub(crate) fn test_totp_code_at(secret: &str, step: i64) -> String {
+    totp_at(&base32_decode(secret).unwrap(), step)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TotpUse {
+    Consumed,
+    Invalid,
+    AlreadyUsed,
+}
+
+impl TotpUse {
+    fn require_consumed(self) -> Result<(), String> {
+        match self {
+            Self::Consumed => Ok(()),
+            Self::Invalid => Err(INVALID_TOTP.into()),
+            Self::AlreadyUsed => Err("TotpCodeAlreadyUsed".into()),
+        }
+    }
+}
+
+async fn verify_totp_challenge(
     db: &DatabaseConnection,
     config: &crate::config::Config,
     account: &user::Model,
+    challenge_id: i32,
     code: &str,
 ) -> Result<(), String> {
     let transaction = db.begin().await.map_err(|error| error.to_string())?;
-    let current = super::user::lock_account(&transaction, account.id).await
+    let current = super::user::lock_account(&transaction, account.id)
+        .await
         .map_err(|error| error.to_string())?
-        .filter(|current| current.is_enabled() && current.tfa_enabled
-            && current.tfa_secret == account.tfa_secret && current.updated_at == account.updated_at)
+        .filter(|current| {
+            current.is_enabled()
+                && current.tfa_enabled
+                && current.tfa_secret == account.tfa_secret
+                && current.updated_at == account.updated_at
+        })
         .ok_or(INVALID_TOTP)?;
-    consume_totp_in_transaction(&transaction, config, &current, code).await?;
-    transaction.commit().await.map_err(|error| error.to_string())
+    claim_login_challenge(&transaction, challenge_id).await?;
+    let result = consume_totp_in_transaction(&transaction, config, &current, code)
+        .await
+        .map_err(|error| error.to_string())?;
+    // A matching but spent code grants no login. Keep the challenge available
+    // for the next code without refunding guesses of invalid codes.
+    if result == TotpUse::AlreadyUsed {
+        transaction.rollback().await.map_err(|error| error.to_string())?;
+    } else {
+        transaction.commit().await.map_err(|error| error.to_string())?;
+    }
+    result.require_consumed()
 }
 
 /// Call while holding the account write lock. All consumers share one counter.
@@ -961,21 +996,26 @@ async fn consume_totp_in_transaction(
     config: &crate::config::Config,
     account: &user::Model,
     code: &str,
-) -> Result<(), String> {
+) -> Result<TotpUse, DbErr> {
     use ::entity::totp_counter;
-    let seed = crate::support::totp_vault::TotpVault::load(config, false)
+    let seed = match crate::support::totp_vault::TotpVault::load(config, false)
         .and_then(|vault| vault.open(account.id, &account.tfa_secret))
-        .map_err(|error| {
+    {
+        Ok(seed) => seed,
+        Err(error) => {
             tracing::warn!(%error, user_id = account.id, "Could not read TOTP seed");
-            INVALID_TOTP
-        })?;
-    let step = totp_step(&seed, code).ok_or(INVALID_TOTP)?;
-    let row = totp_counter::Entity::find_by_id(account.id).one(transaction).await
-        .map_err(|error| error.to_string())?;
+            return Ok(TotpUse::Invalid);
+        }
+    };
+    let Some(step) = totp_step(&seed, code) else {
+        return Ok(TotpUse::Invalid);
+    };
+    let row = totp_counter::Entity::find_by_id(account.id).one(transaction).await?;
     if row.is_some_and(|row| row.last_step >= step) {
-        return Err(INVALID_TOTP.to_string());
+        return Ok(TotpUse::AlreadyUsed);
     }
-    set_totp_step(transaction, account.id, step).await.map_err(|error| error.to_string())
+    set_totp_step(transaction, account.id, step).await?;
+    Ok(TotpUse::Consumed)
 }
 
 async fn set_totp_step(db: &impl sea_orm::ConnectionTrait, user_id: i32, step: i64) -> Result<(), sea_orm::DbErr> {
@@ -1035,10 +1075,13 @@ pub async fn disable_user_totp(
         .ok_or(INVALID_TOTP)?;
     let settings = login_settings(&transaction).await.map_err(|e| e.to_string())?;
     if totp_enforced(&current, &settings) {
-        return Err("Two-factor authentication is enforced for this user".to_string());
+        return Err("TotpPolicyRequired".into());
     }
     if current.tfa_enabled {
-        consume_totp_in_transaction(&transaction, config, &current, code.unwrap_or_default()).await?;
+        consume_totp_in_transaction(&transaction, config, &current, code.unwrap_or_default())
+            .await
+            .map_err(|error| error.to_string())?
+            .require_consumed()?;
     }
     clear_totp(&transaction, current).await?;
     transaction.commit().await.map_err(|e| e.to_string())
@@ -1380,13 +1423,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_counter_accepts_only_one_use_of_each_totp_step() {
+    async fn totp_challenge_accepts_a_new_code_after_a_used_one_but_rejects_replays() {
         let db = smtp_test_db().await;
         let backend = db.get_database_backend();
         let schema = Schema::new(backend);
         for table in [
             schema.create_table_from_entity(user::Entity),
             schema.create_table_from_entity(::entity::totp_counter::Entity),
+            schema.create_table_from_entity(login_verification::Entity),
+            schema.create_table_from_entity(system_setting::Entity),
         ] {
             db.execute(backend.build(&table)).await.unwrap();
         }
@@ -1404,20 +1449,62 @@ mod tests {
             ..Default::default()
         }.insert(&db).await.unwrap();
 
+        let device = DeviceLoginInfo {
+            id: "device".into(),
+            uuid: "uuid".into(),
+            name: String::new(),
+            os: String::new(),
+            client_type: "app".into(),
+            ip: "192.0.2.1".into(),
+            auto_login: false,
+        };
+        let reserve =
+            || create_login_challenge(&db, &account, &device, VerificationKind::Totp, "en");
+        let verify = |challenge, code| {
+            verify_login_challenge(&db, &config, challenge, None, Some(code), ChallengeSources::All)
+        };
+        let first = reserve().await.unwrap();
+        let second = reserve().await.unwrap();
+        let wrong = reserve().await.unwrap();
         let step = Utc::now().timestamp() / TOTP_PERIOD;
         let bytes = base32_decode(&seed).unwrap();
-        let previous = totp_at(&bytes, step - 1);
         let current = totp_at(&bytes, step);
+        let next = totp_at(&bytes, step + 1);
+        let surrounding_codes = [
+            totp_at(&bytes, step - 1),
+            current.clone(),
+            next.clone(),
+            totp_at(&bytes, step + 2),
+        ];
+        let invalid = (0..5)
+            .map(|value| format!("{value:06}"))
+            .find(|code| !surrounding_codes.contains(code))
+            .unwrap();
         let (a, b) = tokio::join!(
-            consume_totp(&db, &config, &account, &previous),
-            consume_totp(&db, &config, &account, &previous),
+            verify(&first.secret, &current),
+            verify(&second.secret, &current),
         );
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
-        consume_totp(&db, &config, &account, &current).await.unwrap();
-        assert!(consume_totp(&db, &config, &account, &previous).await.is_err());
-        assert!(consume_totp(&db, &config, &account, &current).await.is_err());
+        let (pending, error) = if a.is_ok() {
+            (&second.secret, b.err())
+        } else {
+            (&first.secret, a.err())
+        };
+        assert_eq!(error.as_deref(), Some("TotpCodeAlreadyUsed"));
+        assert_eq!(
+            verify(&wrong.secret, &invalid).await.err().as_deref(),
+            Some(INVALID_TOTP)
+        );
+        assert!(verify(&wrong.secret, &next).await.is_err());
+        let (a, b) = tokio::join!(verify(pending, &next), verify(pending, &next));
+        assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+        let later = reserve().await.unwrap();
+        assert_eq!(
+            verify(&later.secret, &current).await.err().as_deref(),
+            Some("TotpCodeAlreadyUsed")
+        );
         let last = ::entity::totp_counter::Entity::find_by_id(42).one(&db).await.unwrap().unwrap();
-        assert_eq!(last.last_step, step);
+        assert_eq!(last.last_step, step + 1);
     }
 
     #[tokio::test]

@@ -21,6 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import { AvatarPreview } from "../components/AvatarPreview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DisableTotpDialog } from "../components/DisableTotpDialog";
 import {
   DialogBody,
   compactDialogPanelClass,
@@ -141,7 +142,6 @@ export function MyProfilePage() {
   const [tfaQrDataUrl, setTfaQrDataUrl] = useState("");
   const [tfaQrError, setTfaQrError] = useState("");
   const [tfaCode, setTfaCode] = useState("");
-  const [tfaDisableCode, setTfaDisableCode] = useState("");
   const [trustedDeleteTarget, setTrustedDeleteTarget] =
     useState<TrustedLoginDevice | null>(null);
 
@@ -273,22 +273,6 @@ export function MyProfilePage() {
       setSecurityError(ae.message || t("operationFailed"));
     },
   });
-  const disableTfa = useMutation({
-    mutationFn: () =>
-      apiPost("/api/admin/user/myTfaDisable", {
-        code: tfaDisableCode.trim(),
-      }),
-    onSuccess: () => {
-      setTfaDisableCode("");
-      clearToken();
-      qc.clear();
-      navigate("/login", { replace: true, state: { message: t("totpDisabled") } });
-    },
-    onError: (err) => {
-      const ae = err as ApiError;
-      setSecurityError(ae.message || t("operationFailed"));
-    },
-  });
   const deleteTrustedDevice = useMutation({
     mutationFn: (id: number) =>
       apiPost("/api/admin/user/myTrustedLoginDevice/delete", { id }),
@@ -406,7 +390,7 @@ export function MyProfilePage() {
       ? t("enabled")
       : t("disabled");
   const totpVerificationLabel = securityData?.tfa_enabled
-    ? securityData.effective_tfa_required
+    ? securityData.tfa_enforced_for_account
       ? t("enforced")
       : t("enabled")
     : t("disabled");
@@ -615,7 +599,16 @@ export function MyProfilePage() {
                           : t("totpSetupHint")}
                       </p>
                     </div>
-                    {!security.data.tfa_enabled && (
+                    {security.data.tfa_enabled ? (
+                      <DisableTotpDialog
+                        enforced={Boolean(security.data.tfa_enforced_for_account)}
+                        onDisabled={() => {
+                          clearToken();
+                          qc.clear();
+                          navigate("/login", { replace: true, state: { message: t("totpDisabled") } });
+                        }}
+                      />
+                    ) : (
                       <Button
                         size="sm"
                         variant="secondary"
@@ -711,41 +704,10 @@ export function MyProfilePage() {
                     </div>
                   )}
 
-                  {security.data.tfa_enabled && (
-                    <div className="mt-4 space-y-3">
-                      {security.data.tfa_enforced_for_account && (
-                        <p className="rounded-md border border-kumo-line bg-kumo-elevated px-3 py-2 text-sm leading-6 text-kumo-subtle">
-                          {t("totpEnforcedSelfHint")}
-                        </p>
-                      )}
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-medium">
-                          {t("verificationCode")}
-                        </span>
-                        <Input
-                          aria-label={t("verificationCode")}
-                          value={tfaDisableCode}
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          disabled={security.data.tfa_enforced_for_account}
-                          onChange={(e) => {
-                            setTfaDisableCode(e.target.value);
-                            setSecurityError("");
-                          }}
-                        />
-                      </label>
-                      <Button
-                        size="sm"
-                        variant="secondary-destructive"
-                        loading={disableTfa.isPending}
-                        disabled={
-                          security.data.tfa_enforced_for_account || !tfaDisableCode.trim()
-                        }
-                        onClick={() => disableTfa.mutate()}
-                      >
-                        {t("disableTotp")}
-                      </Button>
-                    </div>
+                  {security.data.tfa_enabled && security.data.tfa_enforced_for_account && (
+                    <p className="mt-4 text-sm leading-6 text-kumo-subtle">
+                      {t("totpEnforcedSelfHint")}
+                    </p>
                   )}
                 </div>
 

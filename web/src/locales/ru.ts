@@ -931,6 +931,7 @@ export const ru: Record<string, string> = {
   setupTotp: "Настроить 2FA",
   enableTotp: "Включить 2FA",
   disableTotp: "Отключить 2FA",
+  totpDisableHint: "Введите текущий шестизначный код из приложения-аутентификатора. После отключения 2FA сеанс завершится.",
   resetTotp: "Сбросить 2FA",
   totpSecret: "Секрет аутентификатора",
   totpQrCode: "QR-код аутентификатора",
