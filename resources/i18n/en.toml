@@ -309,6 +309,12 @@ description = "Register success, wait admin confirm."
 one = "Register success, wait admin confirm."
 other = "Register success, wait admin confirm."
 
+[TotpLoginRetry]
+other = "Invalid or expired code. Check the account and automatic time on your authenticator, then enter the next code here."
+
+[LoginVerificationLimit]
+other = "Too many verification attempts. Wait 10 minutes and sign in again."
+
 [TotpCodeInvalid]
 other = "The authenticator code is invalid or has expired. Check the account and time in your authenticator, then start again."
 

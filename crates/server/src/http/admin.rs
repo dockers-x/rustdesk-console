@@ -268,7 +268,7 @@ pub async fn login(
                 Ok(challenge) => challenge,
                 Err(e) => {
                     audit.decision("password", "rejected", "challenge_unavailable");
-                    return resp::fail(101, e);
+                    return resp::fail(101, state.tr(&lang, &e));
                 }
             };
             audit.decision("password", "pending", "challenge_issued");

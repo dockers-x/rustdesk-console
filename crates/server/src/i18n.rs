@@ -235,7 +235,7 @@ mod tests {
     fn totp_feedback_is_present_in_each_language_bundle() {
         let i18n = I18n::load("zh-CN");
         for language in ["zh-CN", "en", "ru"] {
-            for key in ["TotpCodeInvalid", "TotpCodeAlreadyUsed", "TotpPolicyRequired"] {
+            for key in ["TotpLoginRetry", "LoginVerificationLimit", "TotpCodeInvalid", "TotpCodeAlreadyUsed", "TotpPolicyRequired"] {
                 let message = i18n.lang(language).and_then(|bundle| bundle.get(key));
                 assert!(message.is_some_and(|text| !text.is_empty()), "{language}: {key}");
             }

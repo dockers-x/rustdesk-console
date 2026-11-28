@@ -528,14 +528,7 @@ async fn create_challenge(
     // The quota counts consumed as well as outstanding challenges, so changing
     // IP or requesting a fresh secret cannot reset the guessing budget.
     let transaction = db.begin().await.map_err(|e| e.to_string())?;
-    user::Entity::update_many()
-        .col_expr(user::Column::Id, Expr::col(user::Column::Id).into())
-        .filter(user::Column::Id.eq(u.id))
-        .exec(&transaction)
-        .await
-        .map_err(|e| e.to_string())?;
-    let current = user::Entity::find_by_id(u.id)
-        .one(&transaction)
+    let current = super::user::lock_account(&transaction, u.id)
         .await
         .map_err(|e| e.to_string())?;
     if !current.is_some_and(|current| {
@@ -546,18 +539,11 @@ async fn create_challenge(
     }) {
         return Err("account changed during authentication".into());
     }
-    let recent = login_verification::Entity::find()
-        .filter(login_verification::Column::UserId.eq(u.id))
-        .filter(login_verification::Column::Kind.is_in([
-            login_verification::KIND_EMAIL,
-            login_verification::KIND_TOTP,
-        ]))
-        .filter(login_verification::Column::ExpiresAt.gt(Utc::now().timestamp()))
-        .count(&transaction)
+    if !has_login_attempt_slot(&transaction, u.id)
         .await
-        .map_err(|e| e.to_string())?;
-    if recent >= 5 {
-        return Err("Too many verification attempts; try again in 10 minutes".to_string());
+        .map_err(|e| e.to_string())?
+    {
+        return Err(LOGIN_ATTEMPTS_EXHAUSTED.into());
     }
 
     login_verification::ActiveModel {
@@ -588,6 +574,19 @@ async fn create_challenge(
         send_email(&settings, &u.email, message).await?;
     }
     Ok(LoginChallenge { kind, secret })
+}
+
+// Call with the account write lock held. Each live row reserves one attempt,
+// including retries in the same dialog and challenges that have already closed.
+async fn has_login_attempt_slot(db: &DatabaseTransaction, user_id: i32) -> Result<bool, DbErr> {
+    use login_verification::{Column, Entity, KIND_EMAIL, KIND_TOTP};
+    let reservations = Entity::find()
+        .filter(Column::UserId.eq(user_id))
+        .filter(Column::Kind.is_in([KIND_EMAIL, KIND_TOTP]))
+        .filter(Column::ExpiresAt.gte(Utc::now().timestamp()))
+        .count(db)
+        .await?;
+    Ok(reservations < 5)
 }
 
 async fn prune_expired_batch(db: &DatabaseConnection, cutoff: i64) -> Result<bool, DbErr> {
@@ -967,6 +966,8 @@ pub fn totp_uri(username: &str, secret: &str, issuer: &str) -> String {
     format!("otpauth://totp/{label}?secret={secret}&issuer={issuer}&digits=6&period=30")
 }
 
+const LOGIN_ATTEMPTS_EXHAUSTED: &str = "LoginVerificationLimit";
+const RETRY_TOTP: &str = "TotpLoginRetry";
 const INVALID_TOTP: &str = "TotpCodeInvalid";
 
 fn totp_step(secret: &str, code: &str) -> Option<i64> {
@@ -1030,14 +1031,43 @@ async fn verify_totp_challenge(
     let result = consume_totp_in_transaction(&transaction, config, &current, code)
         .await
         .map_err(|error| error.to_string())?;
-    // A matching but spent code grants no login. Keep the challenge available
-    // for the next code without refunding guesses of invalid codes.
-    if result == TotpUse::AlreadyUsed {
-        transaction.rollback().await.map_err(|error| error.to_string())?;
-    } else {
-        transaction.commit().await.map_err(|error| error.to_string())?;
+    match result {
+        TotpUse::Consumed => transaction.commit().await.map_err(|error| error.to_string()),
+        TotpUse::AlreadyUsed => {
+            transaction.rollback().await.map_err(|error| error.to_string())?;
+            result.require_consumed()
+        }
+        TotpUse::Invalid => {
+            let retry = has_login_attempt_slot(&transaction, account.id)
+                .await
+                .map_err(|error| error.to_string())?;
+            if retry {
+                // Reserve the next guess just like issuing a fresh challenge. The
+                // reservation cannot be redeemed and the original expiry stays fixed.
+                let timestamp = Utc::now().timestamp();
+                login_verification::ActiveModel {
+                    user_id: Set(account.id),
+                    kind: Set(login_verification::KIND_TOTP.into()),
+                    created_at: Set(now()),
+                    updated_at: Set(now()),
+                    verified_at: Set(timestamp),
+                    expires_at: Set(timestamp + CHALLENGE_TTL_SECS),
+                    ..Default::default()
+                }
+                .insert(&transaction)
+                .await
+                .map_err(|error| error.to_string())?;
+                login_verification::Entity::update_many()
+                    .col_expr(login_verification::Column::VerifiedAt, Expr::value(0))
+                    .filter(login_verification::Column::Id.eq(challenge_id))
+                    .exec(&transaction)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            transaction.commit().await.map_err(|error| error.to_string())?;
+            Err(if retry { RETRY_TOTP } else { LOGIN_ATTEMPTS_EXHAUSTED }.into())
+        }
     }
-    result.require_consumed()
 }
 
 /// Call while holding the account write lock. All consumers share one counter.
@@ -1535,18 +1565,17 @@ mod tests {
             verify(&second.secret, &current),
         );
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
-        let (pending, error) = if a.is_ok() {
-            (&second.secret, b.err())
-        } else {
-            (&first.secret, a.err())
-        };
+        let error = if a.is_ok() { b.err() } else { a.err() };
         assert_eq!(error.as_deref(), Some("TotpCodeAlreadyUsed"));
         assert_eq!(
             verify(&wrong.secret, &invalid).await.err().as_deref(),
-            Some(INVALID_TOTP)
+            Some(RETRY_TOTP)
         );
-        assert!(verify(&wrong.secret, &next).await.is_err());
-        let (a, b) = tokio::join!(verify(pending, &next), verify(pending, &next));
+        assert_eq!(
+            verify(&wrong.secret, &current).await.err().as_deref(),
+            Some("TotpCodeAlreadyUsed")
+        );
+        let (a, b) = tokio::join!(verify(&wrong.secret, &next), verify(&wrong.secret, &next));
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
         let later = reserve().await.unwrap();
         assert_eq!(
@@ -1555,6 +1584,17 @@ mod tests {
         );
         let last = ::entity::totp_counter::Entity::find_by_id(42).one(&db).await.unwrap().unwrap();
         assert_eq!(last.last_step, step + 1);
+        // Three original challenges, one retry and one later challenge fill the
+        // shared budget. Its last reserved guess closes the later challenge.
+        assert_eq!(
+            verify(&later.secret, &invalid).await.err().as_deref(),
+            Some(LOGIN_ATTEMPTS_EXHAUSTED)
+        );
+        assert!(verify(&later.secret, &next).await.is_err());
+        assert_eq!(
+            reserve().await.err().as_deref(),
+            Some(LOGIN_ATTEMPTS_EXHAUSTED)
+        );
     }
 
     #[tokio::test]

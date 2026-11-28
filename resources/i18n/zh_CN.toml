@@ -311,6 +311,12 @@ description = "Register success, wait for admin confirm."
 one = "注册成功，请等待管理员审核。"
 other = "注册成功，请等待管理员审核。"
 
+[TotpLoginRetry]
+other = "验证码无效或已过期。请核对验证器中的账号，确认已开启自动校时，然后在此输入下一组验证码。"
+
+[LoginVerificationLimit]
+other = "验证次数已达上限，请在 10 分钟后重新登录。"
+
 [TotpCodeInvalid]
 other = "验证码无效或已过期。请核对验证器中的账号和时间，然后重新发起操作。"
 
